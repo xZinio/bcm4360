@@ -2615,6 +2615,7 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
 	struct channel_info channel_inform;
 	struct wl_scan_results *bss_list;
 	u32 buflen;
+	int bcmerr;
 	s32 err = 0;
 
 	WL_DBG(("\n"));
@@ -2639,13 +2640,22 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
 			goto scan_done_out;
 		}
 		bss_list->buflen = htod32(buflen);
-		err = wl_dev_ioctl(ndev, WLC_SCAN_RESULTS, bss_list, buflen);
+		err = wl_dev_ioctl_bcmerr(ndev, WLC_SCAN_RESULTS, bss_list, buflen, &bcmerr);
 		if (!err)
 			break;
 		kvfree(bss_list);
 		/* grow on "buffer too short", but not without bound */
 		if (err != -E2BIG || buflen >= WL_SCAN_BUF_MAX) {
-			WL_ERR(("%s Scan_results error (%d)\n", ndev->name, err));
+			/*
+			 * A scan cut short, e.g. by NetworkManager disconnecting
+			 * before suspend, has no results (BCME_NOTFOUND).
+			 */
+			if (wl_bcmerr_is_transient(bcmerr) || bcmerr == BCME_NOTFOUND)
+				WL_INF(("%s scan aborted, results unavailable (bcmerror %d)\n",
+					ndev->name, bcmerr));
+			else
+				WL_ERR(("%s Scan_results error (%d, bcmerror %d)\n",
+					ndev->name, err, bcmerr));
 			goto scan_done_out;
 		}
 		buflen *= 2;

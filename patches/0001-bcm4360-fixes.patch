@@ -28,8 +28,9 @@ Changes, all in the open (ISC) wrapper; Broadcom's binary core is untouched:
    (it carried the previous connection's IEs) and free the old IE buffers
    (leaked once per roam). Clamp firmware-reported IE lengths to the buffer.
  * Scan: map transient firmware refusals (busy/not ready/rejected) to -EBUSY
-   instead of -EINVAL, report a failed result fetch as an aborted scan, and
-   bound the result buffer growth.
+   instead of -EINVAL, report a failed result fetch as an aborted scan (at
+   info level when the scan was merely cut short, e.g. by the disconnect
+   before suspend), and bound the result buffer growth.
  * cfg80211 ops no longer re-check CAP_NET_ADMIN (nl80211 already enforces
    its permission model), so read-only queries by normal users (iw dev,
    station info) stop failing with -EPERM. The raw SIOCDEVPRIVATE firmware
@@ -44,7 +45,7 @@ Changes, all in the open (ISC) wrapper; Broadcom's binary core is untouched:
    other" PCI device of any vendor), module and PCI driver named bcm4360.
 
 diff --git a/src/wl/sys/wl_cfg80211_hybrid.c b/src/wl/sys/wl_cfg80211_hybrid.c
-index a70d888..30fa01c 100644
+index a70d888..ade02e3 100644
 --- a/src/wl/sys/wl_cfg80211_hybrid.c
 +++ b/src/wl/sys/wl_cfg80211_hybrid.c
 @@ -87,6 +87,13 @@ static s32 wl_cfg80211_get_station(struct wiphy *wiphy,
@@ -845,7 +846,15 @@ index a70d888..30fa01c 100644
  		WL_DBG(("Connection %s\n", completed ? "Succeeded" : "FAILed"));
  	}
  
-@@ -2605,45 +2632,42 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2588,6 +2615,7 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+ 	struct channel_info channel_inform;
+ 	struct wl_scan_results *bss_list;
+ 	u32 buflen;
++	int bcmerr;
+ 	s32 err = 0;
+ 
+ 	WL_DBG(("\n"));
+@@ -2605,45 +2633,51 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  	}
  
  	for (buflen = WL_SCAN_BUF_BASE; ; ) {
@@ -859,8 +868,9 @@ index a70d888..30fa01c 100644
  		}
 -		memset(bss_list, 0, buflen);
  		bss_list->buflen = htod32(buflen);
- 		err = wl_dev_ioctl(ndev, WLC_SCAN_RESULTS, bss_list, buflen);
+-		err = wl_dev_ioctl(ndev, WLC_SCAN_RESULTS, bss_list, buflen);
 -		if (!err) {
++		err = wl_dev_ioctl_bcmerr(ndev, WLC_SCAN_RESULTS, bss_list, buflen, &bcmerr);
 +		if (!err)
  			break;
 -		}
@@ -869,12 +879,22 @@ index a70d888..30fa01c 100644
 -			buflen *= 2;
 -		}
 -		else {
+-			WL_ERR(("%s Scan_results error (%d)\n", ndev->name, err));
+-			kfree(bss_list);
+-			err = -EINVAL;
 +		kvfree(bss_list);
 +		/* grow on "buffer too short", but not without bound */
 +		if (err != -E2BIG || buflen >= WL_SCAN_BUF_MAX) {
- 			WL_ERR(("%s Scan_results error (%d)\n", ndev->name, err));
--			kfree(bss_list);
--			err = -EINVAL;
++			/*
++			 * A scan cut short, e.g. by NetworkManager disconnecting
++			 * before suspend, has no results (BCME_NOTFOUND).
++			 */
++			if (wl_bcmerr_is_transient(bcmerr) || bcmerr == BCME_NOTFOUND)
++				WL_INF(("%s scan aborted, results unavailable (bcmerror %d)\n",
++					ndev->name, bcmerr));
++			else
++				WL_ERR(("%s Scan_results error (%d, bcmerror %d)\n",
++					ndev->name, err, bcmerr));
  			goto scan_done_out;
  		}
 +		buflen *= 2;
@@ -904,7 +924,7 @@ index a70d888..30fa01c 100644
  #endif
  		wl->scan_request = NULL;
  	}
-@@ -3088,13 +3112,6 @@ static bool wl_is_ibssmode(struct wl_cfg80211_priv *wl)
+@@ -3088,13 +3122,6 @@ static bool wl_is_ibssmode(struct wl_cfg80211_priv *wl)
  	return wl->conf->mode == WL_MODE_IBSS;
  }
  
@@ -918,7 +938,7 @@ index a70d888..30fa01c 100644
  static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
  {
  	struct wl_cfg80211_ie *ie = wl_to_ie(wl);
-@@ -3112,41 +3129,6 @@ static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
+@@ -3112,41 +3139,6 @@ static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
  	return err;
  }
  

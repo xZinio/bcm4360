@@ -1,0 +1,15 @@
+# Broadcom's proprietary core and its license: fetched at install time, never committed
+/lib/
+
+# kernel build output
+*.o
+*.ko
+*.ko.*
+*.mod
+*.mod.c
+.*.cmd
+.*.d
+Module.symvers
+modules.order
+.tmp_versions/
+build.log

@@ -1,0 +1,32 @@
+bcm4360 — Broadcom BCM4360 Wi-Fi driver for Linux
+
+Everything in this repository is distributed under the ISC license below.
+
+src/ derives from the Linux portion of Broadcom's 802.11 Linux STA hybrid
+driver 6.30.223.271, which Broadcom released under this same license, with
+kernel-compatibility changes by the broadcom-wl contributors (as packaged by
+Arch Linux) and further changes by the bcm4360 contributors.
+
+  Copyright (C) 2015, Broadcom Corporation
+  Copyright (C) the broadcom-wl contributors
+  Copyright (C) 2026, the bcm4360 contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
+OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+-------------------------------------------------------------------------------
+
+NOT covered by this license: Broadcom's proprietary 802.11 core,
+lib/wlc_hybrid.o_shipped. It is not part of this repository. It is
+downloaded from Broadcom by scripts/fetch-blob.sh, used unmodified, and
+governed by Broadcom's Software License Agreement, saved next to it as
+lib/LICENSE.txt. Do not commit lib/ to a public repository.
