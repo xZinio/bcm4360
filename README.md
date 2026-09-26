@@ -42,12 +42,14 @@ which was already running on the test machine:
 
 | Symptom with the stock driver | Cause | Fix |
 |---|---|---|
-| `WARNING … net/wireless/sme.c:845 … bss_not_found`; cfg80211 then **discards the connection result** (roams: `sme.c:1201`, roam dropped) | The driver's own AP lookup passed capability bits where `cfg80211_get_bss()` has taken enums since Linux 4.1 (it searched for a 60 GHz PBSS) and never matched; connect/roam reports then depended on cfg80211 finding scan entries that expire after 30 s | Correct lookup, fresh entry from the firmware, BSSID-only fallback for hidden networks, and the referenced entry handed to `cfg80211_connect_bss()` / `cfg80211_roamed()` |
+| `WARNING … net/wireless/sme.c:845 … bss_not_found`; cfg80211 then **discards the connection result** | The driver's own AP lookup passed capability bits where `cfg80211_get_bss()` has taken enums since Linux 4.1 (it searched for a 60 GHz PBSS) and never matched, leaving the lookup to cfg80211, whose scan entries expire after 30 s | Correct lookup, fresh entry from the firmware, BSSID-only fallback for hidden networks, and the referenced entry handed to `cfg80211_connect_bss()` |
+| **Roaming between access points was never reported** to the kernel or wpa_supplicant, on every roam since Linux 4.1 | The same failing lookup made the roam handler return before calling `cfg80211_roamed()` | Roams are always reported, with the new AP's entry (not exercised in testing: the test network has a single access point) |
 | `memcpy: detected field-spanning write … wl_cfg80211_hybrid.c:3139` at every boot | Scan results were copied into a fake beacon through a zero-length array | IEs passed straight to `cfg80211_inform_bss()`; this also removes a 1 KiB IE limit, and one bad scan entry no longer hides every network after it |
 | `ERROR @wl_cfg80211_get_tx_power: error (-1)` whenever a normal user runs `iw dev` | Every firmware call re-checked `CAP_NET_ADMIN`, although nl80211 already allows read-only queries for everyone | cfg80211 ops rely on nl80211's permission checks; the raw firmware ioctl (`SIOCDEVPRIVATE`) stays root-only |
+| **NetworkManager could not connect to eduroam** and other WPA2/WPA3 transition-mode networks (a hand-written wpa_supplicant config could) | NetworkManager's profiles allow the SHA-256 variants of 802.1X/PSK, wpa_supplicant prefers them when the AP offers them, and the driver rejected them because the 2015 core lacks them | Associate with classic 802.1X/PSK instead; wpa_supplicant adopts the AKM from the association request, as it does for all drivers that associate on their own (not yet tested on an actual eduroam network) |
 | `iw` showed milliwatts as dBm; `iw … set txpower` took mBm as milliwatts | Wrong unit conversions | Quarter-dBm conversion, as in the in-kernel `brcmfmac` driver |
 | `WLC_SCAN error (-22)` while joining a network | Firmware "busy" came back as `-EINVAL` | `-EBUSY`, so NetworkManager simply retries; a scan whose results can't be fetched is reported as aborted (quietly when it was just cut short, e.g. before suspend) |
-| Roams reported the previous AP's association IEs and leaked memory | `roam_info` was filled before the IEs were fetched; old IEs never freed | Filled after fetching; old IEs freed; firmware-reported lengths clamped |
+| Every roam leaked the association IEs | Old IEs never freed before fetching new ones (and `roam_info` was filled before the fetch) | Old IEs freed, `roam_info` filled after fetching, firmware-reported lengths clamped |
 | `iw dev wlan0 station dump` showed nothing | `dump_station` not implemented | Added; `get_station` no longer reports the AP's figures under other addresses |
 | Every driver message split over two log lines; blank line after the banner | Two `printk()` calls per message | One record per message, proper log levels |
 | Module loaded for any vendor's "network, other" PCI device | Catch-all PCI ID table | BCM4360 IDs only; module named `bcm4360`, so it coexists with the distro's `wl` |
@@ -131,9 +133,13 @@ yields exactly `src/`. Both were checked on the test machine.
 - **CPUs with Intel CET/IBT** (11th gen and later) are not supported by the core,
   same as the stock `wl`. The MacBook Air's Haswell/Broadwell CPUs don't have it.
 - **Modes:** client (managed) and IBSS only; no access point, monitor or P2P.
-- **Security:** WPA/WPA2 (personal and enterprise). The 2015 core predates
-  WPA3; WPA3-only (SAE) networks are not supported, WPA2/WPA3 transition
-  networks connect via WPA2.
+- **Security:** open, WPA/WPA2-Personal and WPA/WPA2-Enterprise (802.1X, as
+  used by eduroam); WPA2-Personal is tested, eduroam not yet. The core only
+  does classic 802.1X and PSK key management: where an access point also
+  offers the SHA-256 variants (WPA2/WPA3 transition mode) the driver uses the
+  classic one, and wpa_supplicant leaves out WPA3 (SAE) and 802.11r (fast
+  transition) for this driver by itself. Networks that accept *only* WPA3 or
+  that *require* management frame protection (PMF) do not work.
 - **Roaming aids:** no signal-quality (CQM) events, so wpa_supplicant logs
   `bgscan simple: Failed to enable signal strength monitoring` and uses
   periodic background scans instead.

@@ -957,6 +957,7 @@ static s32
 wl_set_key_mgmt(struct net_device *dev, struct cfg80211_connect_params *sme)
 {
 	struct wl_cfg80211_priv *wl = ndev_to_wl(dev);
+	u32 akm = sme->crypto.akm_suites[0];
 	s32 val = 0;
 	s32 err = 0;
 
@@ -967,7 +968,7 @@ wl_set_key_mgmt(struct net_device *dev, struct cfg80211_connect_params *sme)
 			return err;
 		}
 		if (val & (WPA_AUTH_PSK | WPA_AUTH_UNSPECIFIED)) {
-			switch (sme->crypto.akm_suites[0]) {
+			switch (akm) {
 			case WLAN_AKM_SUITE_8021X:
 				val = WPA_AUTH_UNSPECIFIED;
 				break;
@@ -975,19 +976,43 @@ wl_set_key_mgmt(struct net_device *dev, struct cfg80211_connect_params *sme)
 				val = WPA_AUTH_PSK;
 				break;
 			default:
-				WL_ERR(("invalid cipher group (%d)\n", sme->crypto.cipher_group));
+				WL_ERR(("unsupported AKM suite 0x%08x\n", akm));
 				return -EINVAL;
 			}
 		} else if (val & (WPA2_AUTH_PSK | WPA2_AUTH_UNSPECIFIED)) {
-			switch (sme->crypto.akm_suites[0]) {
+			switch (akm) {
+			/*
+			 * Transition-mode networks (WPA2/WPA3-Enterprise, e.g.
+			 * eduroam) offer the SHA-256 AKMs next to the classic
+			 * ones, and wpa_supplicant picks SHA-256 whenever its
+			 * profile allows it, which NetworkManager always does.
+			 * This core only does the classic AKMs, and rejecting the
+			 * request meant such networks never connected under
+			 * NetworkManager. Associate with the classic AKM instead:
+			 * the firmware writes the RSN element of the association
+			 * request itself (sme->ie is not used), and for drivers
+			 * doing their own association wpa_supplicant takes the
+			 * AKM from that element, disconnecting if its profile
+			 * does not allow it.
+			 */
+			case WLAN_AKM_SUITE_8021X_SHA256:
+				printk(KERN_INFO KBUILD_MODNAME ": %s: AP offers 802.1X-SHA256, "
+					"which this core lacks; associating with 802.1X\n", dev->name);
+				akm = WLAN_AKM_SUITE_8021X;
+				fallthrough;
 			case WLAN_AKM_SUITE_8021X:
 				val = WPA2_AUTH_UNSPECIFIED;
 				break;
+			case WLAN_AKM_SUITE_PSK_SHA256:
+				printk(KERN_INFO KBUILD_MODNAME ": %s: AP offers PSK-SHA256, "
+					"which this core lacks; associating with PSK\n", dev->name);
+				akm = WLAN_AKM_SUITE_PSK;
+				fallthrough;
 			case WLAN_AKM_SUITE_PSK:
 				val = WPA2_AUTH_PSK;
 				break;
 			default:
-				WL_ERR(("invalid cipher group (%d)\n", sme->crypto.cipher_group));
+				WL_ERR(("unsupported AKM suite 0x%08x\n", akm));
 				return -EINVAL;
 			}
 		}
@@ -1000,7 +1025,7 @@ wl_set_key_mgmt(struct net_device *dev, struct cfg80211_connect_params *sme)
 		}
 	}
 
-	wl->profile->sec.wpa_auth = sme->crypto.akm_suites[0];
+	wl->profile->sec.wpa_auth = akm;
 
 	return err;
 }

@@ -18,7 +18,8 @@ Changes, all in the open (ISC) wrapper; Broadcom's binary core is untouched:
    a BSSID-only match for hidden networks, and hand the referenced entry to
    cfg80211_connect_bss()/cfg80211_roamed(). Fixes the "bss_not_found"
    WARNING in __cfg80211_connect_result() after which cfg80211 discarded the
-   connection (or roam) result.
+   connection result. Roams were never reported at all: the failing lookup
+   made wl_bss_roaming_done() return before cfg80211_roamed().
  * Report scan entries to cfg80211 directly instead of via a synthetic beacon
    built through a 1 KiB staging buffer and a zero-length array. Fixes the
    FORTIFY_SOURCE "field-spanning write" WARNING, drops the 1 KiB IE limit,
