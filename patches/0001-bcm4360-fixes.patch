@@ -44,9 +44,17 @@ Changes, all in the open (ISC) wrapper; Broadcom's binary core is untouched:
    and the probe banner no longer leaves an empty line in the kernel log.
  * Linux glue: PCI table limited to the BCM4360 family (was every "network,
    other" PCI device of any vendor), module and PCI driver named bcm4360.
+ * Key management: the 802.1X-SHA256 and PSK-SHA256 AKMs join with classic
+   802.1X/PSK (logged at info level) instead of failing with -EINVAL.
+   wpa_supplicant picks the SHA-256 AKMs whenever an AP offers them, which
+   NetworkManager always allows, but the 2015 core lacks them, so eduroam
+   and other WPA2/WPA3 transition-mode networks never connected. The core
+   writes the RSNE itself and wpa_supplicant adopts the AKM from the
+   reported AssocReq IEs. An unknown AKM is now logged as such instead of
+   as an invalid group cipher.
 
 diff --git a/src/wl/sys/wl_cfg80211_hybrid.c b/src/wl/sys/wl_cfg80211_hybrid.c
-index a70d888..ade02e3 100644
+index a70d888..fea3ede 100644
 --- a/src/wl/sys/wl_cfg80211_hybrid.c
 +++ b/src/wl/sys/wl_cfg80211_hybrid.c
 @@ -87,6 +87,13 @@ static s32 wl_cfg80211_get_station(struct wiphy *wiphy,
@@ -165,7 +173,80 @@ index a70d888..ade02e3 100644
  		}
  		goto scan_out;
  	}
-@@ -1120,28 +1156,34 @@ wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev, u16 reason_c
+@@ -921,6 +957,7 @@ static s32
+ wl_set_key_mgmt(struct net_device *dev, struct cfg80211_connect_params *sme)
+ {
+ 	struct wl_cfg80211_priv *wl = ndev_to_wl(dev);
++	u32 akm = sme->crypto.akm_suites[0];
+ 	s32 val = 0;
+ 	s32 err = 0;
+ 
+@@ -931,7 +968,7 @@ wl_set_key_mgmt(struct net_device *dev, struct cfg80211_connect_params *sme)
+ 			return err;
+ 		}
+ 		if (val & (WPA_AUTH_PSK | WPA_AUTH_UNSPECIFIED)) {
+-			switch (sme->crypto.akm_suites[0]) {
++			switch (akm) {
+ 			case WLAN_AKM_SUITE_8021X:
+ 				val = WPA_AUTH_UNSPECIFIED;
+ 				break;
+@@ -939,19 +976,43 @@ wl_set_key_mgmt(struct net_device *dev, struct cfg80211_connect_params *sme)
+ 				val = WPA_AUTH_PSK;
+ 				break;
+ 			default:
+-				WL_ERR(("invalid cipher group (%d)\n", sme->crypto.cipher_group));
++				WL_ERR(("unsupported AKM suite 0x%08x\n", akm));
+ 				return -EINVAL;
+ 			}
+ 		} else if (val & (WPA2_AUTH_PSK | WPA2_AUTH_UNSPECIFIED)) {
+-			switch (sme->crypto.akm_suites[0]) {
++			switch (akm) {
++			/*
++			 * Transition-mode networks (WPA2/WPA3-Enterprise, e.g.
++			 * eduroam) offer the SHA-256 AKMs next to the classic
++			 * ones, and wpa_supplicant picks SHA-256 whenever its
++			 * profile allows it, which NetworkManager always does.
++			 * This core only does the classic AKMs, and rejecting the
++			 * request meant such networks never connected under
++			 * NetworkManager. Associate with the classic AKM instead:
++			 * the firmware writes the RSN element of the association
++			 * request itself (sme->ie is not used), and for drivers
++			 * doing their own association wpa_supplicant takes the
++			 * AKM from that element, disconnecting if its profile
++			 * does not allow it.
++			 */
++			case WLAN_AKM_SUITE_8021X_SHA256:
++				printk(KERN_INFO KBUILD_MODNAME ": %s: AP offers 802.1X-SHA256, "
++					"which this core lacks; associating with 802.1X\n", dev->name);
++				akm = WLAN_AKM_SUITE_8021X;
++				fallthrough;
+ 			case WLAN_AKM_SUITE_8021X:
+ 				val = WPA2_AUTH_UNSPECIFIED;
+ 				break;
++			case WLAN_AKM_SUITE_PSK_SHA256:
++				printk(KERN_INFO KBUILD_MODNAME ": %s: AP offers PSK-SHA256, "
++					"which this core lacks; associating with PSK\n", dev->name);
++				akm = WLAN_AKM_SUITE_PSK;
++				fallthrough;
+ 			case WLAN_AKM_SUITE_PSK:
+ 				val = WPA2_AUTH_PSK;
+ 				break;
+ 			default:
+-				WL_ERR(("invalid cipher group (%d)\n", sme->crypto.cipher_group));
++				WL_ERR(("unsupported AKM suite 0x%08x\n", akm));
+ 				return -EINVAL;
+ 			}
+ 		}
+@@ -964,7 +1025,7 @@ wl_set_key_mgmt(struct net_device *dev, struct cfg80211_connect_params *sme)
+ 		}
+ 	}
+ 
+-	wl->profile->sec.wpa_auth = sme->crypto.akm_suites[0];
++	wl->profile->sec.wpa_auth = akm;
+ 
+ 	return err;
+ }
+@@ -1120,28 +1181,34 @@ wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev, u16 reason_c
  	return err;
  }
  
@@ -205,7 +286,7 @@ index a70d888..ade02e3 100644
  	s32 err = 0;
  	s32 disable = 0;
  
-@@ -1149,16 +1191,12 @@ wl_cfg80211_set_tx_power(struct wiphy *wiphy, enum tx_power_setting type, s32 db
+@@ -1149,16 +1216,12 @@ wl_cfg80211_set_tx_power(struct wiphy *wiphy, enum tx_power_setting type, s32 db
  	case NL80211_TX_POWER_AUTOMATIC:
  		break;
  	case NL80211_TX_POWER_LIMITED:
@@ -225,7 +306,7 @@ index a70d888..ade02e3 100644
  		break;
  	}
  
-@@ -1170,16 +1208,12 @@ wl_cfg80211_set_tx_power(struct wiphy *wiphy, enum tx_power_setting type, s32 db
+@@ -1170,16 +1233,12 @@ wl_cfg80211_set_tx_power(struct wiphy *wiphy, enum tx_power_setting type, s32 db
  		return err;
  	}
  
@@ -244,7 +325,7 @@ index a70d888..ade02e3 100644
  
  	return err;
  }
-@@ -1197,17 +1231,16 @@ static s32 wl_cfg80211_get_tx_power(struct wiphy *wiphy, s32 *dbm)
+@@ -1197,17 +1256,16 @@ static s32 wl_cfg80211_get_tx_power(struct wiphy *wiphy, s32 *dbm)
  {
  	struct wl_cfg80211_priv *wl = wiphy_to_wl(wiphy);
  	struct net_device *ndev = wl_to_ndev(wl);
@@ -266,7 +347,7 @@ index a70d888..ade02e3 100644
  
  	return err;
  }
-@@ -1535,8 +1568,10 @@ wl_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
+@@ -1535,8 +1593,10 @@ wl_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
  	s32 rate;
  	s32 err = 0;
  
@@ -278,7 +359,7 @@ index a70d888..ade02e3 100644
  	}
  
  	err = wl_dev_ioctl(dev, WLC_GET_RATE, &rate, sizeof(rate));
-@@ -1573,6 +1608,33 @@ wl_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
+@@ -1573,6 +1633,33 @@ wl_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
  	return err;
  }
  
@@ -312,7 +393,7 @@ index a70d888..ade02e3 100644
  static s32
  wl_cfg80211_set_power_mgmt(struct wiphy *wiphy, struct net_device *dev,
                             bool enabled, s32 timeout)
-@@ -1887,6 +1949,7 @@ static struct cfg80211_ops wl_cfg80211_ops = {
+@@ -1887,6 +1974,7 @@ static struct cfg80211_ops wl_cfg80211_ops = {
  	.join_ibss = wl_cfg80211_join_ibss,
  	.leave_ibss = wl_cfg80211_leave_ibss,
  	.get_station = wl_cfg80211_get_station,
@@ -320,7 +401,7 @@ index a70d888..ade02e3 100644
  	.set_tx_power = wl_cfg80211_set_tx_power,
  	.get_tx_power = wl_cfg80211_get_tx_power,
  	.add_key = wl_cfg80211_add_key,
-@@ -2020,9 +2083,13 @@ static void wl_free_wdev(struct wl_cfg80211_priv *wl)
+@@ -2020,9 +2108,13 @@ static void wl_free_wdev(struct wl_cfg80211_priv *wl)
  	wl_to_wdev(wl) = NULL;
  }
  
@@ -336,7 +417,7 @@ index a70d888..ade02e3 100644
  	s32 err = 0;
  	int i;
  
-@@ -2033,132 +2100,86 @@ static s32 wl_inform_bss(struct wl_cfg80211_priv *wl, struct wl_scan_results *bs
+@@ -2033,132 +2125,86 @@ static s32 wl_inform_bss(struct wl_cfg80211_priv *wl, struct wl_scan_results *bs
  	WL_DBG(("scanned AP count (%d)\n", bss_list->count));
  	bi = next_bss(bss_list, bi);
  	for_each_bss(bss_list, bi, i) {
@@ -532,7 +613,7 @@ index a70d888..ade02e3 100644
  }
  
  static s32
-@@ -2213,7 +2234,7 @@ wl_notify_connect_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2213,7 +2259,7 @@ wl_notify_connect_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  			wl_link_up(wl);
  			wl_get_assoc_ies(wl);
  			memcpy(&wl->bssid, &e->addr, ETHER_ADDR_LEN);
@@ -541,7 +622,7 @@ index a70d888..ade02e3 100644
  #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 15, 0)
  			wiphy = wl_to_wiphy(wl);
  			err = wl_dev_intvar_get(ndev, "chanspec", &chanspec);
-@@ -2312,33 +2333,38 @@ static s32 wl_get_assoc_ies(struct wl_cfg80211_priv *wl)
+@@ -2312,33 +2358,38 @@ static s32 wl_get_assoc_ies(struct wl_cfg80211_priv *wl)
  		return err;
  	}
  	assoc_info = (struct wl_cfg80211_assoc_ielen *)wl->extra_buf;
@@ -596,7 +677,7 @@ index a70d888..ade02e3 100644
  	}
  	WL_DBG(("req len (%d) resp len (%d)\n", conn_info->req_ie_len,
  		conn_info->resp_ie_len));
-@@ -2385,88 +2411,67 @@ static void wl_ch_to_chanspec(struct ieee80211_channel *chan, struct wl_join_par
+@@ -2385,88 +2436,67 @@ static void wl_ch_to_chanspec(struct ieee80211_channel *chan, struct wl_join_par
  	}
  }
  
@@ -734,7 +815,7 @@ index a70d888..ade02e3 100644
  }
  
  static s32
-@@ -2474,19 +2479,7 @@ wl_bss_roaming_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2474,19 +2504,7 @@ wl_bss_roaming_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
                      const wl_event_msg_t *e, void *data)
  {
  	struct wl_cfg80211_connect_info *conn_info = wl_to_conn(wl);
@@ -755,7 +836,7 @@ index a70d888..ade02e3 100644
  	s32 err = 0;
  
  	err = wl_get_assoc_ies(wl);
-@@ -2496,22 +2489,44 @@ wl_bss_roaming_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2496,22 +2514,44 @@ wl_bss_roaming_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  	memcpy(wl->profile->bssid, &e->addr, ETHER_ADDR_LEN);
  	memcpy(&wl->bssid, &e->addr, ETHER_ADDR_LEN);
  
@@ -807,7 +888,7 @@ index a70d888..ade02e3 100644
  	WL_DBG(("Report roaming result\n"));
  
  	set_bit(WL_STATUS_CONNECTED, &wl->status);
-@@ -2535,25 +2550,37 @@ wl_bss_connect_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2535,25 +2575,37 @@ wl_bss_connect_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  		cfg80211_scan_done(wl->scan_request, &info);
  #else
  		WL_DBG(("%s: Aborting scan\n", __FUNCTION__));
@@ -847,7 +928,7 @@ index a70d888..ade02e3 100644
  		WL_DBG(("Connection %s\n", completed ? "Succeeded" : "FAILed"));
  	}
  
-@@ -2588,6 +2615,7 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2588,6 +2640,7 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  	struct channel_info channel_inform;
  	struct wl_scan_results *bss_list;
  	u32 buflen;
@@ -855,7 +936,7 @@ index a70d888..ade02e3 100644
  	s32 err = 0;
  
  	WL_DBG(("\n"));
-@@ -2605,45 +2633,51 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2605,45 +2658,51 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  	}
  
  	for (buflen = WL_SCAN_BUF_BASE; ; ) {
@@ -925,7 +1006,7 @@ index a70d888..ade02e3 100644
  #endif
  		wl->scan_request = NULL;
  	}
-@@ -3088,13 +3122,6 @@ static bool wl_is_ibssmode(struct wl_cfg80211_priv *wl)
+@@ -3088,13 +3147,6 @@ static bool wl_is_ibssmode(struct wl_cfg80211_priv *wl)
  	return wl->conf->mode == WL_MODE_IBSS;
  }
  
@@ -939,7 +1020,7 @@ index a70d888..ade02e3 100644
  static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
  {
  	struct wl_cfg80211_ie *ie = wl_to_ie(wl);
-@@ -3112,41 +3139,6 @@ static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
+@@ -3112,41 +3164,6 @@ static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
  	return err;
  }
  

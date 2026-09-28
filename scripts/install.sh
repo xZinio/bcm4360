@@ -27,6 +27,13 @@ find "$dest/src" \( -name '*.o' -o -name '.*.cmd' -o -name '*.mod' -o -name '*.m
 
 dkms add -m "$name" -v "$ver"
 dkms build -m "$name" -v "$ver"
+# Only now that this version has built, drop any other installed version:
+# both install to the same module path.
+for old in $(dkms status -m "$name" 2>/dev/null | sed -n "s|^$name/\([^,:]*\)[,:].*|\1|p" | sort -u); do
+	[ "$old" = "$ver" ] && continue
+	dkms remove -m "$name" -v "$old" --all
+	rm -rf "/usr/src/$name-$old"
+done
 dkms install -m "$name" -v "$ver"
 
 install -Dm644 modprobe.d/bcm4360.conf /etc/modprobe.d/bcm4360.conf

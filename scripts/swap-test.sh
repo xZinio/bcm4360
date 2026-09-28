@@ -96,8 +96,11 @@ check_link() {
 	else
 		say "FAIL: gateway ${gw:-(none)} does not answer"; ok=1
 	fi
+	# Hotspots and campus networks often drop ICMP, so fall back to HTTPS.
 	if ping -I "$iface" -c 3 -W 2 -q 1.1.1.1 >/dev/null; then
 		say "internet (1.1.1.1) answers"
+	elif curl -s -o /dev/null --max-time 10 --interface "$iface" https://archlinux.org; then
+		say "internet reachable over HTTPS (1.1.1.1 does not answer ping here)"
 	else
 		say "FAIL: internet unreachable"; ok=1
 	fi

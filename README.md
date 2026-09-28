@@ -20,7 +20,8 @@ implementation of this radio exists, so Broadcom's core still does the actual
 
 Tested on the target machine: MacBookAir7,2, BCM4360 `14e4:43a0` rev 03 (Apple
 subsystem `106b:0117`), Arch Linux, kernel 7.2.7‑arch1‑1, GCC 16.2.1,
-NetworkManager 1.58.1, wpa_supplicant 2.12, WPA2‑PSK on 5 GHz (channel 36).
+NetworkManager 1.58.1, wpa_supplicant 2.12, WPA2‑PSK on 5 GHz (channel 36), and
+eduroam (WPA2‑Enterprise, PEAP/MSCHAPv2) at DTU.
 
 | Test | Result |
 |---|---|
@@ -34,6 +35,7 @@ NetworkManager 1.58.1, wpa_supplicant 2.12, WPA2‑PSK on 5 GHz (channel 36).
 | Suspend to RAM through logind (3×) | Wi‑Fi back 4 s after resume |
 | Throughput vs stock `wl`, same minute, 3 × 30 MB each | `wl` 72.0–74.1 Mbit/s, bcm4360 75.7–80.7 Mbit/s (both at the internet line's limit) |
 | Link rate | up to 866.5 Mbit/s (VHT80, 2 streams) |
+| eduroam through NetworkManager (APs also offer 802.1X‑SHA256) | connects: associates with classic 802.1X, EAP and 4-way handshake complete, 22 s from `nmcli con up` (the stock `wl` and bcm4360 1.0.0 never got past association) |
 
 ## What is fixed
 
@@ -46,7 +48,7 @@ which was already running on the test machine:
 | **Roaming between access points was never reported** to the kernel or wpa_supplicant, on every roam since Linux 4.1 | The same failing lookup made the roam handler return before calling `cfg80211_roamed()` | Roams are always reported, with the new AP's entry (not exercised in testing: the test network has a single access point) |
 | `memcpy: detected field-spanning write … wl_cfg80211_hybrid.c:3139` at every boot | Scan results were copied into a fake beacon through a zero-length array | IEs passed straight to `cfg80211_inform_bss()`; this also removes a 1 KiB IE limit, and one bad scan entry no longer hides every network after it |
 | `ERROR @wl_cfg80211_get_tx_power: error (-1)` whenever a normal user runs `iw dev` | Every firmware call re-checked `CAP_NET_ADMIN`, although nl80211 already allows read-only queries for everyone | cfg80211 ops rely on nl80211's permission checks; the raw firmware ioctl (`SIOCDEVPRIVATE`) stays root-only |
-| **NetworkManager could not connect to eduroam** and other WPA2/WPA3 transition-mode networks (a hand-written wpa_supplicant config could) | NetworkManager's profiles allow the SHA-256 variants of 802.1X/PSK, wpa_supplicant prefers them when the AP offers them, and the driver rejected them because the 2015 core lacks them | Associate with classic 802.1X/PSK instead; wpa_supplicant adopts the AKM from the association request, as it does for all drivers that associate on their own (not yet tested on an actual eduroam network) |
+| **NetworkManager could not connect to eduroam** and other WPA2/WPA3 transition-mode networks (a hand-written wpa_supplicant config could) | NetworkManager's profiles allow the SHA-256 variants of 802.1X/PSK, wpa_supplicant prefers them when the AP offers them, and the driver rejected them because the 2015 core lacks them | Associate with classic 802.1X/PSK instead; wpa_supplicant adopts the AKM from the association request, as it does for all drivers that associate on their own (tested on eduroam) |
 | `iw` showed milliwatts as dBm; `iw … set txpower` took mBm as milliwatts | Wrong unit conversions | Quarter-dBm conversion, as in the in-kernel `brcmfmac` driver |
 | `WLC_SCAN error (-22)` while joining a network | Firmware "busy" came back as `-EINVAL` | `-EBUSY`, so NetworkManager simply retries; a scan whose results can't be fetched is reported as aborted (quietly when it was just cut short, e.g. before suspend) |
 | Every roam leaked the association IEs | Old IEs never freed before fetching new ones (and `roam_info` was filled before the fetch) | Old IEs freed, `roam_info` filled after fetching, firmware-reported lengths clamped |
@@ -85,7 +87,9 @@ Check the result at any time (as root it also runs a scan and the non-root queri
 sudo bash scripts/verify.sh
 ```
 
-DKMS rebuilds the module automatically for new kernels.
+DKMS rebuilds the module automatically for new kernels. To upgrade, run
+`install.sh` from the newer version: it replaces the installed one once the
+new one has built.
 
 ### Uninstall
 
@@ -98,7 +102,7 @@ sudo reboot                    # the distro's wl (if installed) takes over again
 
 ```
 Makefile                  Kbuild + `make`, `make fetch`, `make install`
-dkms.conf                 DKMS package bcm4360 1.0.0
+dkms.conf                 DKMS package bcm4360 1.0.1
 src/                      Linux/cfg80211 driver code (ISC)
 modprobe.d/bcm4360.conf   blacklist of drivers that would grab the card first
 patches/                  our changes as one patch against the provenance baseline
@@ -134,7 +138,7 @@ yields exactly `src/`. Both were checked on the test machine.
   same as the stock `wl`. The MacBook Air's Haswell/Broadwell CPUs don't have it.
 - **Modes:** client (managed) and IBSS only; no access point, monitor or P2P.
 - **Security:** open, WPA/WPA2-Personal and WPA/WPA2-Enterprise (802.1X, as
-  used by eduroam); WPA2-Personal is tested, eduroam not yet. The core only
+  used by eduroam); both are tested. The core only
   does classic 802.1X and PSK key management: where an access point also
   offers the SHA-256 variants (WPA2/WPA3 transition mode) the driver uses the
   classic one, and wpa_supplicant leaves out WPA3 (SAE) and 802.11r (fast
