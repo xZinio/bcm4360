@@ -36,6 +36,10 @@ eduroam (WPA2‑Enterprise, PEAP/MSCHAPv2) at DTU.
 | Throughput vs stock `wl`, same minute, 3 × 30 MB each | `wl` 72.0–74.1 Mbit/s, bcm4360 75.7–80.7 Mbit/s (both at the internet line's limit) |
 | Link rate | up to 866.5 Mbit/s (VHT80, 2 streams) |
 | eduroam through NetworkManager (APs also offer 802.1X‑SHA256) | connects: associates with classic 802.1X, EAP and 4-way handshake complete, 22 s from `nmcli con up` (the stock `wl` and bcm4360 1.0.0 never got past association) |
+| 1.0.2 installed, eduroam at DTU (many APs), 5 min with a scan every 30 s | 1 link drop, online again after 47 s without help from the watchdog; kernel log clean |
+| Forced joins while connected (`wpa_cli reassociate` ×3, `roam` to a weak 2.4 GHz AP) | online again after 0–3 s; 32 s once (EAP restarted by a duplicate roam event, see limitations) |
+| Disconnect/reconnect, eduroam → hotspot → eduroam, Wi‑Fi off/on | online again after 0–8 s |
+| Real reboot with 1.0.2 | bcm4360 loads by itself, eduroam up 4 s after NetworkManager started; the fallback service leaves `wl` alone |
 
 ## What is fixed
 
@@ -55,6 +59,10 @@ which was already running on the test machine:
 | `iw dev wlan0 station dump` showed nothing | `dump_station` not implemented | Added; `get_station` no longer reports the AP's figures under other addresses |
 | Every driver message split over two log lines; blank line after the banner | Two `printk()` calls per message | One record per message, proper log levels |
 | Module loaded for any vendor's "network, other" PCI device | Catch-all PCI ID table | BCM4360 IDs only; module named `bcm4360`, so it coexists with the distro's `wl` |
+| **All Wi‑Fi dead until a reboot** after a failed roam between access points: every connection refused (`Association request to the driver failed`), nothing in the kernel log | A join that failed while connected was reported only as "connect failed", so cfg80211 stayed connected to the old AP, refused every new connection with `-EALREADY` and never passed a disconnect down | cfg80211 is told about every change exactly once, as in brcmfmac: a failed join while connected also reports the old link lost, the disconnect op reports the disconnection itself, a lost link is never taken as a new join's result, every failed join status counts (but not the ABORT of a join a newer one replaced). wpa_supplicant leaves roaming to the core (`WIPHY_FLAG_SUPPORTS_FW_ROAM`), which roams by itself |
+| After a link loss, no network found for a minute or more (`CTRL-EVENT-SCAN-FAILED ret=-16`, NetworkManager: `ssid-not-found`) | The core drops a scan in progress with the link and never completes it; cfg80211 refused every further scan with `-EBUSY` | The scan is reported aborted on link loss, and after 15 s in any case |
+| `WARNING … net/wireless/sme.c:1094 … __cfg80211_roamed` (`!wdev->connected`) | The core also "roams" on its own after a link loss that was already reported | As in brcmfmac, such a roam completes a join in progress; with none, the core is taken off the AP again |
+| wpa_supplicant blocked the working AP and kept retrying the failing one | A failed join was reported with the previous AP's BSSID | The AP that was tried is reported, and the core's failure status is logged |
 
 ## Install
 
@@ -91,10 +99,29 @@ DKMS rebuilds the module automatically for new kernels. To upgrade, run
 `install.sh` from the newer version: it replaces the installed one once the
 new one has built.
 
+`install.sh` also sets up two safety nets:
+
+- `bcm4360-fallback.service` loads the stock `wl` at boot if bcm4360 is not
+  built for the running kernel (e.g. its DKMS build failed after a kernel
+  update), since the blacklist would otherwise leave the card without a driver.
+  Keep `broadcom-wl-dkms` (or `broadcom-wl`) installed for this.
+- `bcm4360-watchdog.timer` checks every 30 s and reloads bcm4360 once Wi‑Fi has
+  been without a connection for 150 s after having had one in the last 30
+  minutes: the last resort for core states the driver cannot get out of. It
+  does nothing while connected, with the radio off, after a deliberate
+  disconnect or right after suspend, and reloads at most once every 10 minutes.
+  `sh scripts/test-watchdog.sh` checks its decisions on simulated timelines.
+
+If Wi‑Fi is ever unusable anyway, this brings back the stock driver at once:
+
+```sh
+sudo modprobe -r bcm4360; sudo modprobe wl
+```
+
 ### Uninstall
 
 ```sh
-sudo sh scripts/uninstall.sh   # removes the DKMS module and the blacklist
+sudo sh scripts/uninstall.sh   # removes the DKMS module, the blacklist, the fallback service and the watchdog
 sudo reboot                    # the distro's wl (if installed) takes over again
 ```
 
@@ -107,10 +134,12 @@ src/                      Linux/cfg80211 driver code (ISC)
 modprobe.d/bcm4360.conf   blacklist of drivers that would grab the card first
 patches/                  our changes as one patch against the provenance baseline
 scripts/fetch-blob.sh     download + verify Broadcom's core into lib/
-scripts/install.sh        DKMS build/install
-scripts/uninstall.sh      DKMS removal
+scripts/install.sh        DKMS build/install, blacklist, fallback service, watchdog
+scripts/uninstall.sh      removes all of it
 scripts/swap-test.sh      live driver swap with end-to-end checks and rollback
 scripts/verify.sh         health check
+scripts/test-watchdog.sh  checks the watchdog's decisions on simulated timelines
+systemd/                  bcm4360-fallback.service, bcm4360-watchdog (+ .service, .timer)
 ```
 
 ## Provenance
@@ -144,9 +173,15 @@ yields exactly `src/`. Both were checked on the test machine.
   classic one, and wpa_supplicant leaves out WPA3 (SAE) and 802.11r (fast
   transition) for this driver by itself. Networks that accept *only* WPA3 or
   that *require* management frame protection (PMF) do not work.
-- **Roaming aids:** no signal-quality (CQM) events, so wpa_supplicant logs
-  `bgscan simple: Failed to enable signal strength monitoring` and uses
-  periodic background scans instead.
+- **Roaming** is done by the core; wpa_supplicant only picks the network. The
+  core reports some joins twice (as a connection and then as a roam to the same
+  AP), which restarts EAP once; the retry succeeds (the 32 s above).
+- **2.4 GHz at a busy enterprise network:** on DTU's eduroam every link to a
+  2.4 GHz AP dropped within about a minute, while 5 GHz links held for half an
+  hour (the chip shares 2.4 GHz with Bluetooth). The drops recover by
+  themselves, but the core picks the AP by signal strength, which often favours
+  2.4 GHz; the band-preference controls of Broadcom's core are not defined in
+  the headers of this release.
 - **Future kernels** can change cfg80211 interfaces; DKMS rebuilds on every
   kernel update, but a major kernel release may need a source update, as for
   any out-of-tree driver.
