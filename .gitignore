@@ -1,6 +1,11 @@
 # Broadcom's proprietary core and its license: fetched at install time, never committed
 /lib/
 
+# reverse-engineering scratch (disassembly/decompilation of Broadcom's core,
+# extracted firmware and tables): derived from Broadcom's code, never committed
+/re-out/
+__pycache__/
+
 # kernel build output
 *.o
 *.ko

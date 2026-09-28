@@ -1,0 +1,109 @@
+# Source file -> first function in link order (name, or 0x<.text offset> for
+# functions whose symbol was stripped).  Read by modmap.py.
+#
+# The blob is an `ld -r` of 111 objects in alphabetical order.  GCC 4.4 -Os
+# does not align functions, so padding in .text only occurs where the linker
+# aligned the next object's section to 4 bytes: 65 of the boundaries below are
+# proven by such padding.  The others were placed with the cross references:
+# a stripped (static) function is only reachable from its own file.
+#
+# Files of the link that contribute no code are listed at the end.
+
+aes.c                   0x000000
+aeskeywrap.c            aes_unwrap
+aiutils.c               ai_numaddrspaces
+bcm_mpool.c             bcm_mpm_dump
+bcm_notif.c             bcm_notif_signal
+bcm_ol_msg.c            bcm_olmsg_create
+bcmotp.c                0x003244
+bcmsrom.c               srom_otp_write_region_crc
+bcmutils.c              pktpool_avail
+bcmwifi_channels.c      0x00c6c8
+bcmwpa.c                bcm_wps_find_at
+hmac.c                  hmac_md5
+hnddma.c                0x00dcf8
+hndpmu.c                0x0108d4
+md5.c                   MD5Init
+nicpci.c                pcie_power_save_enable
+nvram_ro.c              nvram_get_global_vars
+passhash.c              get_passhash
+prf.c                   fPRF
+qmath.c                 qm_sat32
+rc4.c                   prepare_key
+rijndael-alg-fst.c      rijndaelKeySetupEnc
+sbutils.c               sb_base
+sflash.c                0x01ced4
+sha1.c                  SHA1Reset
+siutils.c               si_cc_get_reg16
+tkhash.c                tkhash_phase1
+tkmic.c                 tkip_mic
+wep.c                   wep_decrypt
+wlc.c                   0x024acc
+wlc_11d.c               wlc_11d_reset_all
+wlc_11h.c               0x04dc60
+wlc_airtime.c           0x04e61c
+wlc_alloc.c             wlc_tunables_override
+wlc_ampdu.c             0x04f090
+wlc_ampdu_cmn.c         wlc_ampdu_agg_state_override
+wlc_ampdu_rx.c          wlc_ampdu_agg_state_rxaggr_override
+wlc_amsdu.c             wlc_amsdu_mtu_get
+wlc_antsel.c            wlc_antsel_antseltype_get
+wlc_assoc.c             0x059b7c
+wlc_bmac.c              wlc_bmac_rpc_agg_watchdog
+wlc_bsscfg.c            wlc_bsscfg_cubby_reserve
+wlc_cac.c               wlc_cac_update_used_time
+wlc_cca.c               wlc_cca_get_chanspec
+wlc_channel.c           wlc_channel_country_abbrev
+wlc_clm.c               0x07425c
+wlc_cntry.c             wlc_cntry_set_default
+wlc_csa.c               wlc_csa_state_active
+wlc_event.c             wlc_eventq_deq
+wlc_hrt.c               wlc_hrt_hai_register
+wlc_hw.c                wlc_hw_set_piomode
+wlc_interfere.c         wlc_itfr_detach
+wlc_intr.c              wlc_intrsrestore
+wlc_key.c               wlc_key_lookup
+wlc_led.c               0x07cdac
+wlc_lq.c                wlc_lq_rssi_init
+wlc_offloads.c          wlc_ol_is_rx_deferred
+wlc_olpc_engine.c       0x083678
+wlc_phy_abg.c           wlc_get_a_band_range
+wlc_phy_ac.c            wlc_phy_ac_caps
+wlc_phy_cmn.c           wlc_phy_get_phyversion
+wlc_phy_extended_n.c    wlc_phy_chan2freq_nphy
+wlc_phy_ht.c            wlc_phy_rfseqtbl_valid_addr_htphy
+wlc_phy_iovar.c         wlc_phy_iovar_detach
+wlc_phy_lcn.c           0x0e188c
+wlc_phy_lcn40.c         0x0f5898
+wlc_phy_lp.c            wlc_phy_cal_init_lpphy
+wlc_phy_n.c             wlc_set_uninitted_nphy
+wlc_phy_radio_n.c       wlc_20671_vco_cal
+wlc_phy_shim.c          wlapi_get_wlc_info
+wlc_phy_ssn.c           wlc_sslpnphy_tssi2dbm
+wlc_ppr.c               0x164690
+wlc_prot.c              0x166188
+wlc_prot_g.c            wlc_prot_g_cfg_set
+wlc_prot_n.c            wlc_prot_n_cfg_set
+wlc_quiet.c             wlc_quiet_write_ie
+wlc_rate.c              wlc_ratespec_mcs
+wlc_rate_sel.c          wlc_ratesel_rssi_attach
+wlc_rm.c                wlc_rm_rpi_sample
+wlc_scan.c              wlc_scan_inprog
+wlc_scb.c               wlc_scb_iterinit
+wlc_scb_ratesel.c       wlc_scb_ratesel_rssi_enable
+wlc_security.c          wlc_wsec_rxiv_update
+wlc_stf.c               wlc_stf_spatial_policy_ismin
+wlc_sup.c               wlc_find_sup_auth_ies
+wlc_tpc.c               0x178a9c
+wlc_tso.c               wlc_tso_hdr_length
+wlc_txbf.c              wlc_txbf_clear_init_pending
+wlc_utils.c             wlc_uint64_add
+wlc_vht.c               0x17ad24
+wlc_vndr_ie_list.c      wlc_vndr_ie_list_getlen_ext
+wlc_wowl.c              wlc_wowl_enable_completed
+
+# data only (no code): bcmevent.c d11ucode_2w.c d11ucode_ge24.c d11ucode_ge40.c
+# d11ucode_gt15.c d11ucode_le15.c d11ucode_wowl.c wlc_clm_data.c wlc_dfs.c
+# wlc_phytbl_ac.c wlc_phytbl_acdc.c wlc_phytbl_ht.c wlc_phytbl_lcn.c
+# wlc_phytbl_lcn40.c wlc_phytbl_lp.c wlc_phytbl_n.c wlc_phytbl_ssn.c
+# wlc_rate_def.c wowlaestbls.c
