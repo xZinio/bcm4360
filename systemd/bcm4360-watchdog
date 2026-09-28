@@ -1,0 +1,83 @@
+#!/bin/sh
+# SPDX-License-Identifier: ISC
+#
+# Installed by the bcm4360 driver (scripts/install.sh), run every 30 s by
+# bcm4360-watchdog.timer. Last resort for states of Broadcom's firmware that
+# the driver cannot get out of by itself (it stops seeing or joining any
+# network): once Wi-Fi has been without a connection for 150 s after having
+# had one in the last 30 minutes, reload bcm4360, which has always brought
+# the card back. It leaves things alone while connected, with the radio off,
+# after a deliberate disconnect ("nmcli device disconnect", autoconnect off),
+# right after suspend, and reloads at most once every 10 minutes.
+#
+# BCM4360_WD_TEST=1 replaces the observations and the reload with the
+# BCM4360_WD_* variables below and a message (scripts/test-watchdog.sh).
+set -u
+
+window=150	# seconds without a connection before reloading
+recent=1800	# ... provided there was one within this many seconds
+cooldown=600	# seconds between reloads
+max_gap=120	# a longer gap between two runs means a suspend: start over
+
+dir=${BCM4360_WD_DIR:-/run/bcm4360-watchdog}
+mkdir -p "$dir"
+get() { cat "$dir/$1" 2>/dev/null; }
+put() { echo "$2" >"$dir/$1"; }
+
+if [ -n "${BCM4360_WD_TEST:-}" ]; then
+	now=$BCM4360_WD_NOW loaded=$BCM4360_WD_LOADED wifi=$BCM4360_WD_WIFI
+	state=$BCM4360_WD_STATE autoconnect=$BCM4360_WD_AUTOCONNECT
+else
+	now=$(date +%s)
+	loaded=no wifi= state= autoconnect=
+	if lsmod | grep -q '^bcm4360 '; then
+		loaded=yes
+		for d in /sys/class/net/*; do
+			[ -e "$d/phy80211" ] || continue
+			iface=${d##*/}
+			wifi=$(nmcli -g WIFI general 2>/dev/null)
+			state=$(nmcli -g GENERAL.STATE device show "$iface" 2>/dev/null)
+			autoconnect=$(nmcli -g GENERAL.AUTOCONNECT device show "$iface" 2>/dev/null)
+			break
+		done
+	fi
+fi
+
+last_run=$(get last_run)
+put last_run "$now"
+if [ -z "$last_run" ] || [ $((now - last_run)) -gt "$max_gap" ]; then
+	rm -f "$dir/down_since"
+fi
+
+if [ "$loaded" != yes ] || [ "$wifi" != enabled ] || [ "$autoconnect" != yes ]; then
+	rm -f "$dir/down_since"
+	exit 0
+fi
+case $state in
+100*)
+	put connected "$now"
+	rm -f "$dir/down_since"
+	exit 0
+	;;
+esac
+
+connected=$(get connected)
+[ -n "$connected" ] && [ $((now - connected)) -le "$recent" ] || exit 0
+down=$(get down_since)
+if [ -z "$down" ]; then
+	put down_since "$now"
+	exit 0
+fi
+[ $((now - down)) -ge "$window" ] || exit 0
+reloaded=$(get reloaded)
+[ -z "$reloaded" ] || [ $((now - reloaded)) -ge "$cooldown" ] || exit 0
+
+put reloaded "$now"
+rm -f "$dir/down_since"
+echo "no Wi-Fi connection for $((now - down)) s (state: $state); reloading bcm4360"
+if [ -n "${BCM4360_WD_TEST:-}" ]; then
+	echo RELOAD
+	exit 0
+fi
+modprobe -r bcm4360
+modprobe bcm4360 || { echo "bcm4360 did not load, falling back to wl"; modprobe wl; }

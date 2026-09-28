@@ -22,6 +22,7 @@
 #ifndef _wl_cfg80211_h_
 #define _wl_cfg80211_h_
 
+#include <linux/workqueue.h>
 #include <net/cfg80211.h>
 #include <wlioctl.h>
 
@@ -182,8 +183,9 @@ struct wl_cfg80211_priv {
 	struct wl_cfg80211_profile *profile;	
 	struct wl_cfg80211_connect_info conn_info;	
 	struct wl_cfg80211_pmk_list *pmk_list;	
-	struct task_struct *event_tsk;	
-	unsigned long status;		
+	struct task_struct *event_tsk;
+	struct delayed_work scan_timeout;	/* ends a scan the firmware never completes */
+	unsigned long status;
 	bool active_scan;	
 	bool passive;	
 	bool offloads;	

@@ -1,0 +1,9 @@
+# Installed by the bcm4360 driver (scripts/install.sh); started by
+# bcm4360-watchdog.timer. See /usr/local/lib/bcm4360/bcm4360-watchdog.
+[Unit]
+Description=Reload bcm4360 if Wi-Fi keeps failing to join
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/bcm4360/bcm4360-watchdog

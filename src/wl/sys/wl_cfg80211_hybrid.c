@@ -258,6 +258,12 @@ static bool wl_is_ibssmode(struct wl_cfg80211_priv *wl);
 
 static void wl_link_up(struct wl_cfg80211_priv *wl);
 static void wl_link_down(struct wl_cfg80211_priv *wl);
+static void wl_report_disconnected(struct net_device *ndev, u16 reason, bool locally_generated);
+static void wl_scan_done(struct wl_cfg80211_priv *wl, bool aborted);
+static void wl_scan_timeout(struct work_struct *work);
+
+/* brcmfmac allows 10 s; scans while associated take longer on this core */
+#define WL_SCAN_TIMEOUT_MS	15000
 static s32 wl_set_mode(struct net_device *ndev, s32 iftype);
 
 static void wl_init_conf(struct wl_cfg80211_conf *conf);
@@ -633,6 +639,9 @@ wl_cfg80211_scan(struct wiphy *wiphy,
 		goto scan_out;
 	}
 
+	/* (re)start the timeout; mod_delayed_work() is GPL-only */
+	cancel_delayed_work(&wl->scan_timeout);
+	schedule_delayed_work(&wl->scan_timeout, msecs_to_jiffies(WL_SCAN_TIMEOUT_MS));
 	return 0;
 
 scan_out:
@@ -1122,9 +1131,15 @@ wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	valc = 1;
 	wl_dev_bufvar_set(dev, "wsec_restrict", &valc, 1);
 
+	/* Remembered to name the right AP if the join fails. */
 	if (sme->bssid) {
 		memcpy(wl->profile->bssid, sme->bssid, ETHER_ADDR_LEN);
 	}
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 0, 0)
+	else if (sme->bssid_hint) {
+		memcpy(wl->profile->bssid, sme->bssid_hint, ETHER_ADDR_LEN);
+	}
+#endif
 	else {
 		memset(wl->profile->bssid, 0, ETHER_ADDR_LEN);
 	}
@@ -1163,11 +1178,25 @@ wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev, u16 reason_c
 {
 	struct wl_cfg80211_priv *wl = wiphy_to_wl(wiphy);
 	scb_val_t scbval;
+	bool connecting, connected;
 	s32 err = 0;
 
 	WL_DBG(("Reason %d\n", reason_code));
 
-	if (wl->profile->active) {
+	/*
+	 * Report the disconnection right away, as brcmfmac does, instead of
+	 * relying on a link-down event: when the firmware is no longer on the
+	 * AP (e.g. after a failed roam) none comes, and cfg80211 would stay
+	 * connected and refuse every new connection with -EALREADY. A join
+	 * still in progress is aborted as well. Clearing the flags first keeps
+	 * wl_notify_connect_status() from reporting any of this a second time.
+	 */
+	connecting = test_and_clear_bit(WL_STATUS_CONNECTING, &wl->status);
+	connected = test_and_clear_bit(WL_STATUS_CONNECTED, &wl->status);
+	if (connected)
+		wl_report_disconnected(dev, reason_code, true);
+
+	if (connected || connecting || wl->profile->active) {
 		scbval.val = reason_code;
 		memcpy(&scbval.ea, &wl->bssid, ETHER_ADDR_LEN);
 		scbval.val = htod32(scbval.val);
@@ -1176,6 +1205,7 @@ wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev, u16 reason_c
 			WL_ERR(("error (%d)\n", err));
 			return err;
 		}
+		wl->profile->active = false;
 	}
 
 	return err;
@@ -2062,6 +2092,14 @@ static s32 wl_alloc_wdev(struct device *dev, struct wireless_dev **rwdev)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 33)
 
 	wdev->wiphy->flags &= ~WIPHY_FLAG_PS_ON_BY_DEFAULT;
+	/*
+	 * The core roams by itself (roam_off stays 0) and reports it with
+	 * WLC_E_ROAM. Saying so makes wpa_supplicant leave AP selection and
+	 * roaming to it ("driver-based roaming") instead of asking for a join
+	 * to another AP while connected: this core handles that badly, and a
+	 * failed one left it unable to join anything until it was reloaded.
+	 */
+	wdev->wiphy->flags |= WIPHY_FLAG_SUPPORTS_FW_ROAM;
 #endif
 
 #ifdef CONFIG_PM
@@ -2232,16 +2270,37 @@ wl_notify_connect_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
 		}
 		else if ((event == WLC_E_LINK && ~(flags & WLC_EVENT_MSG_LINK)) ||
 			event == WLC_E_DEAUTH_IND || event == WLC_E_DISASSOC_IND) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
-			cfg80211_disconnected(ndev, 0, NULL, 0, GFP_KERNEL);
-#else
-			cfg80211_disconnected(ndev, 0, NULL, 0, false, GFP_KERNEL);
-#endif
-			clear_bit(WL_STATUS_CONNECTED, &wl->status);
-			wl_link_down(wl);
-			wl_init_prof(wl->profile);
+			/*
+			 * The firmware drops a scan in progress with the link and
+			 * never completes it (see wl_scan_timeout()); end it now
+			 * so the reconnect can scan right away.
+			 */
+			rtnl_lock();
+			cancel_delayed_work(&wl->scan_timeout);
+			if (wl->scan_request)
+				wl_scan_done(wl, true);
+			rtnl_unlock();
+			/*
+			 * Report an established link lost, once: not if the
+			 * disconnect op already did (it clears the flag). A join
+			 * in progress is left to its own result, as this event
+			 * can still be about the previous link.
+			 */
+			if (test_and_clear_bit(WL_STATUS_CONNECTED, &wl->status))
+				wl_report_disconnected(ndev, 0, false);
+			if (!test_bit(WL_STATUS_CONNECTING, &wl->status)) {
+				wl_link_down(wl);
+				wl_init_prof(wl->profile);
+			}
 		}
-		else if (event == WLC_E_SET_SSID && status == WLC_E_STATUS_NO_NETWORKS) {
+		else if (event == WLC_E_SET_SSID &&
+			(status == WLC_E_STATUS_FAIL || status == WLC_E_STATUS_TIMEOUT ||
+			 status == WLC_E_STATUS_NO_NETWORKS || status == WLC_E_STATUS_NO_ACK)) {
+			/*
+			 * The join failed (not only "no networks"). An ABORT is
+			 * left out: it ends a join that a newer one replaced,
+			 * and must not be taken as that newer join's result.
+			 */
 			wl_bss_connect_done(wl, ndev, e, data, false);
 		}
 		else {
@@ -2304,9 +2363,32 @@ wl_notify_roaming_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
 
 	WL_DBG(("\n"));
 
-	if (status == WLC_E_STATUS_SUCCESS) {
+	if (status != WLC_E_STATUS_SUCCESS)
+		return err;
+
+	/*
+	 * cfg80211 takes a roam only on an established connection (else it
+	 * WARNs and drops it), but the firmware also "roams" after it lost
+	 * the link, when that loss has already been reported. As in
+	 * brcmfmac, such a roam completes a join in progress. With none in
+	 * progress, cfg80211 and wpa_supplicant consider the card
+	 * disconnected: take the firmware off the AP again to match, so
+	 * that the next join starts from a clean state.
+	 */
+	if (test_bit(WL_STATUS_CONNECTED, &wl->status)) {
 		err = wl_bss_roaming_done(wl, ndev, e, data);
 		wl->profile->active = true;
+	} else if (test_bit(WL_STATUS_CONNECTING, &wl->status)) {
+		wl_bss_connect_done(wl, ndev, e, data, true);
+		wl->profile->active = true;
+	} else {
+		scb_val_t scbval;
+
+		printk(KERN_INFO KBUILD_MODNAME ": %s: firmware rejoined an AP on its own "
+			"while disconnected, leaving it\n", ndev->name);
+		scbval.val = htod32(WLAN_REASON_DEAUTH_LEAVING);
+		memcpy(&scbval.ea, &e->addr, ETHER_ADDR_LEN);
+		err = wl_dev_ioctl(ndev, WLC_DISASSOC, &scbval, sizeof(scb_val_t));
 	}
 
 	return err;
@@ -2566,22 +2648,17 @@ wl_bss_connect_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
 	struct wl_cfg80211_connect_info *conn_info = wl_to_conn(wl);
 	s32 err = 0;
 
+	rtnl_lock();
+	cancel_delayed_work(&wl->scan_timeout);
 	if (wl->scan_request) {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
-		struct cfg80211_scan_info info = {
-			.aborted = true,
-		};
 		WL_DBG(("%s: Aborting scan\n", __FUNCTION__));
-		cfg80211_scan_done(wl->scan_request, &info);
-#else
-		WL_DBG(("%s: Aborting scan\n", __FUNCTION__));
-		cfg80211_scan_done(wl->scan_request, true);
-#endif
-		wl->scan_request = NULL;
+		wl_scan_done(wl, true);
 	}
+	rtnl_unlock();
 
 	if (test_and_clear_bit(WL_STATUS_CONNECTING, &wl->status)) {
 		struct cfg80211_bss *bss = NULL;
+		const u8 *bssid;
 
 		if (completed) {
 			wl_get_assoc_ies(wl);
@@ -2589,24 +2666,51 @@ wl_bss_connect_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
 			memcpy(wl->profile->bssid, &e->addr, ETHER_ADDR_LEN);
 			wl_update_bss_info(wl, &bss);
 			set_bit(WL_STATUS_CONNECTED, &wl->status);
+			bssid = (u8 *)&wl->bssid;
+		} else {
+			/*
+			 * Name the AP that was being joined, not wl->bssid (the
+			 * previous AP): wpa_supplicant puts the reported AP on
+			 * its ignore list, and blocking the working AP while
+			 * retrying the failing one dragged out every outage.
+			 */
+			bssid = is_zero_ether_addr(wl->profile->bssid) ? NULL : wl->profile->bssid;
+			printk(KERN_INFO KBUILD_MODNAME ": %s: join failed (event %u, status %u, reason %u)\n",
+				ndev->name, EVENT_TYPE(e), EVENT_STATUS(e), dtoh32(e->reason));
 		}
 
 		WL_DBG(("Reporting BSS network join result \"%s\"\n",
 			wl->profile->ssid.SSID));
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
 		/* Hand over the entry (and our reference) instead of a bare BSSID. */
-		cfg80211_connect_bss(ndev, (u8 *)&wl->bssid, bss, conn_info->req_ie,
+		cfg80211_connect_bss(ndev, bssid, bss, conn_info->req_ie,
 		    conn_info->req_ie_len, conn_info->resp_ie, conn_info->resp_ie_len,
 		    completed ? WLAN_STATUS_SUCCESS : WLAN_STATUS_AUTH_TIMEOUT, GFP_KERNEL,
 		    NL80211_TIMEOUT_UNSPECIFIED);
 #else
 		if (bss)
 			cfg80211_put_bss(wl_to_wiphy(wl), bss);
-		cfg80211_connect_result(ndev, (u8 *)&wl->bssid,	conn_info->req_ie,
+		cfg80211_connect_result(ndev, bssid, conn_info->req_ie,
 		    conn_info->req_ie_len, conn_info->resp_ie, conn_info->resp_ie_len,
 		    completed ? WLAN_STATUS_SUCCESS : WLAN_STATUS_AUTH_TIMEOUT,	GFP_KERNEL);
 #endif
 		WL_DBG(("Connection %s\n", completed ? "Succeeded" : "FAILed"));
+
+		/*
+		 * A join that failed while still connected (wpa_supplicant
+		 * roaming to another AP) has taken the firmware off the old AP
+		 * too, but a failed connect result leaves cfg80211 connected to
+		 * it. cfg80211 then refuses every new connection with -EALREADY
+		 * and never passes a disconnect request down, so Wi-Fi would be
+		 * dead until the module is reloaded. Report the old link lost.
+		 */
+		if (!completed && test_and_clear_bit(WL_STATUS_CONNECTED, &wl->status)) {
+			printk(KERN_INFO KBUILD_MODNAME ": %s: joining another AP failed, "
+				"reporting the previous one as lost\n", ndev->name);
+			wl_report_disconnected(ndev, WLAN_REASON_UNSPECIFIED, true);
+			wl_link_down(wl);
+			wl_init_prof(wl->profile);
+		}
 	}
 
 	return err;
@@ -2694,18 +2798,10 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
 	kvfree(bss_list);
 
 scan_done_out:
-	if (wl->scan_request) {
-		/* Results that never reached cfg80211 make this an aborted scan. */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
-		struct cfg80211_scan_info info = {
-			.aborted = err != 0,
-		};
-		cfg80211_scan_done(wl->scan_request, &info);
-#else
-		cfg80211_scan_done(wl->scan_request, err != 0);
-#endif
-		wl->scan_request = NULL;
-	}
+	cancel_delayed_work(&wl->scan_timeout);
+	/* Results that never reached cfg80211 make this an aborted scan. */
+	if (wl->scan_request)
+		wl_scan_done(wl, err != 0);
 	rtnl_unlock();
 	return err;
 }
@@ -2827,6 +2923,7 @@ static s32 wl_init_cfg80211_priv(struct wl_cfg80211_priv *wl, struct wireless_de
 
 	wl->scan_request = NULL;
 	wl->active_scan = true;
+	INIT_DELAYED_WORK(&wl->scan_timeout, wl_scan_timeout);
 	wl_init_eq(wl);
 	err = wl_init_priv_mem(wl);
 	if (err)
@@ -2849,6 +2946,8 @@ static s32 wl_init_cfg80211_priv(struct wl_cfg80211_priv *wl, struct wireless_de
 
 static void wl_deinit_cfg80211_priv(struct wl_cfg80211_priv *wl)
 {
+	/* not under the RTNL (the netdev is already unregistered) */
+	cancel_delayed_work_sync(&wl->scan_timeout);
 	wl_destroy_event_handler(wl);
 	wl_flush_eq(wl);
 	wl_link_down(wl);
@@ -3127,17 +3226,10 @@ s32 wl_cfg80211_down(struct net_device *ndev)
 	struct wl_cfg80211_priv *wl = ndev_to_wl(ndev);
 	s32 err = 0;
 
-	if (wl->scan_request) {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
-		struct cfg80211_scan_info info = {
-			.aborted = true,
-		};
-		cfg80211_scan_done(wl->scan_request, &info);
-#else
-		cfg80211_scan_done(wl->scan_request, true);	
-#endif
-		wl->scan_request = NULL;
-	}
+	/* under the RTNL (ndo_stop) */
+	cancel_delayed_work(&wl->scan_timeout);
+	if (wl->scan_request)
+		wl_scan_done(wl, true);
 
 	return err;
 }
@@ -3168,6 +3260,48 @@ static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
 static void wl_link_up(struct wl_cfg80211_priv *wl)
 {
 	WL_DBG(("\n"));
+}
+
+/* Hand the pending scan back to cfg80211. Callers hold the RTNL. */
+static void wl_scan_done(struct wl_cfg80211_priv *wl, bool aborted)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
+	struct cfg80211_scan_info info = {
+		.aborted = aborted,
+	};
+	cfg80211_scan_done(wl->scan_request, &info);
+#else
+	cfg80211_scan_done(wl->scan_request, aborted);
+#endif
+	wl->scan_request = NULL;
+}
+
+/*
+ * The firmware does not always complete a scan: it drops one in progress
+ * when the link goes, for one. cfg80211 then refuses every further scan
+ * with -EBUSY until the scan is done, so no network is found or joined.
+ */
+static void wl_scan_timeout(struct work_struct *work)
+{
+	struct wl_cfg80211_priv *wl = container_of(to_delayed_work(work),
+		struct wl_cfg80211_priv, scan_timeout);
+
+	rtnl_lock();
+	if (wl->scan_request) {
+		printk(KERN_INFO KBUILD_MODNAME ": %s: scan not completed after %d s, "
+			"reporting it aborted\n", wl_to_ndev(wl)->name, WL_SCAN_TIMEOUT_MS / 1000);
+		wl_scan_done(wl, true);
+	}
+	rtnl_unlock();
+}
+
+static void wl_report_disconnected(struct net_device *ndev, u16 reason, bool locally_generated)
+{
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 2, 0)
+	cfg80211_disconnected(ndev, reason, NULL, 0, GFP_KERNEL);
+#else
+	cfg80211_disconnected(ndev, reason, NULL, 0, locally_generated, GFP_KERNEL);
+#endif
 }
 
 static void wl_link_down(struct wl_cfg80211_priv *wl)

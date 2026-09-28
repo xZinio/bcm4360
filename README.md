@@ -102,7 +102,7 @@ sudo reboot                    # the distro's wl (if installed) takes over again
 
 ```
 Makefile                  Kbuild + `make`, `make fetch`, `make install`
-dkms.conf                 DKMS package bcm4360 1.0.1
+dkms.conf                 DKMS package bcm4360 1.0.2
 src/                      Linux/cfg80211 driver code (ISC)
 modprobe.d/bcm4360.conf   blacklist of drivers that would grab the card first
 patches/                  our changes as one patch against the provenance baseline

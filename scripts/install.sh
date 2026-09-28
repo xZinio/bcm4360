@@ -37,6 +37,13 @@ done
 dkms install -m "$name" -v "$ver"
 
 install -Dm644 modprobe.d/bcm4360.conf /etc/modprobe.d/bcm4360.conf
+install -Dm644 systemd/bcm4360-fallback.service /etc/systemd/system/bcm4360-fallback.service
+install -Dm755 systemd/bcm4360-watchdog /usr/local/lib/bcm4360/bcm4360-watchdog
+install -Dm644 systemd/bcm4360-watchdog.service /etc/systemd/system/bcm4360-watchdog.service
+install -Dm644 systemd/bcm4360-watchdog.timer /etc/systemd/system/bcm4360-watchdog.timer
+systemctl daemon-reload
+systemctl enable bcm4360-fallback.service
+systemctl enable --now bcm4360-watchdog.timer
 install -Dm644 lib/LICENSE.txt "/usr/share/licenses/$name/BROADCOM-LICENSE.txt"
 depmod -a
 

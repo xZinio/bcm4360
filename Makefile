@@ -7,7 +7,7 @@
 # is NOT part of this tree: `make fetch` downloads Broadcom's original release
 # and verifies its checksums before unpacking it into lib/.
 
-BCM4360_VERSION := 1.0.1
+BCM4360_VERSION := 1.0.2
 
 ifneq ($(KERNELRELEASE),)
 # ---- Kbuild -----------------------------------------------------------------

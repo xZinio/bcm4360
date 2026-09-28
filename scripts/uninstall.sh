@@ -16,6 +16,12 @@ if dkms status -m "$name" -v "$ver" 2>/dev/null | grep -q .; then
 fi
 rm -rf "/usr/src/$name-$ver" "/usr/share/licenses/$name"
 rm -f /etc/modprobe.d/bcm4360.conf
+systemctl disable bcm4360-fallback.service 2>/dev/null || true
+systemctl disable --now bcm4360-watchdog.timer 2>/dev/null || true
+rm -f /etc/systemd/system/bcm4360-fallback.service \
+	/etc/systemd/system/bcm4360-watchdog.service /etc/systemd/system/bcm4360-watchdog.timer
+rm -rf /usr/local/lib/bcm4360
+systemctl daemon-reload
 depmod -a
 
 echo "bcm4360 removed. The previous driver takes over at the next boot;"

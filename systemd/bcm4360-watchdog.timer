@@ -1,0 +1,11 @@
+# Installed by the bcm4360 driver (scripts/install.sh).
+[Unit]
+Description=Check every 30 s whether bcm4360 is stuck
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
