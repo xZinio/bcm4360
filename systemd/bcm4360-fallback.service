@@ -1,0 +1,15 @@
+# Installed by the bcm4360 driver (scripts/install.sh).
+#
+# bcm4360.conf blacklists Broadcom's stock wl so that bcm4360 gets the card.
+# If bcm4360 is missing for the running kernel (e.g. its DKMS build failed
+# after a kernel update), nothing would drive the card at all: load wl then.
+[Unit]
+Description=Load Broadcom's stock wl if bcm4360 is not built for this kernel
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'modinfo bcm4360 >/dev/null 2>&1 && exit 0; echo "bcm4360 is not available for kernel $$(uname -r), loading wl instead"; exec modprobe wl'
+
+[Install]
+WantedBy=multi-user.target

@@ -44,9 +44,37 @@ Changes, all in the open (ISC) wrapper; Broadcom's binary core is untouched:
    and the probe banner no longer leaves an empty line in the kernel log.
  * Linux glue: PCI table limited to the BCM4360 family (was every "network,
    other" PCI device of any vendor), module and PCI driver named bcm4360.
+ * Key management: the 802.1X-SHA256 and PSK-SHA256 AKMs join with classic
+   802.1X/PSK (logged at info level) instead of failing with -EINVAL.
+   wpa_supplicant picks the SHA-256 AKMs whenever an AP offers them, which
+   NetworkManager always allows, but the 2015 core lacks them, so eduroam
+   and other WPA2/WPA3 transition-mode networks never connected. The core
+   writes the RSNE itself and wpa_supplicant adopts the AKM from the
+   reported AssocReq IEs. An unknown AKM is now logged as such instead of
+   as an invalid group cipher.
+ * Connection state: cfg80211 is told about every change exactly once, as in
+   brcmfmac. A join that failed while connected (a roam) was reported only
+   as a failed connect, so cfg80211 stayed connected to the old AP, refused
+   every new connection with -EALREADY and never passed a disconnect down:
+   Wi-Fi was dead until the module was reloaded. Now such a failure also
+   reports the old link lost; the disconnect op reports the disconnection
+   itself and aborts a join in progress; a lost link is reported once and
+   never taken as the result of a join in progress; every failed join
+   status counts except the ABORT of a join that a newer one replaced; and
+   a failed join names the AP that was tried, not the previous one.
+ * Roaming: set WIPHY_FLAG_SUPPORTS_FW_ROAM, so wpa_supplicant leaves AP
+   selection and roaming to the core, which roams by itself, instead of
+   asking for joins to other APs while connected. A roam event while not
+   connected (the core rejoining after a reported link loss) completes a
+   join in progress or, with none, takes the core off the AP again;
+   cfg80211 used to WARN and drop it.
+ * Scans: the core drops a scan in progress with the link and never
+   completes it, after which cfg80211 refused every scan with -EBUSY and
+   no network was found. Report the scan aborted on link loss, and after
+   15 s in any case.
 
 diff --git a/src/wl/sys/wl_cfg80211_hybrid.c b/src/wl/sys/wl_cfg80211_hybrid.c
-index a70d888..ade02e3 100644
+index a70d888..99f22a3 100644
 --- a/src/wl/sys/wl_cfg80211_hybrid.c
 +++ b/src/wl/sys/wl_cfg80211_hybrid.c
 @@ -87,6 +87,13 @@ static s32 wl_cfg80211_get_station(struct wiphy *wiphy,
@@ -98,7 +126,20 @@ index a70d888..ade02e3 100644
  
  static void key_endian_to_device(struct wl_wsec_key *key);
  static void key_endian_to_host(struct wl_wsec_key *key);
-@@ -480,10 +487,31 @@ static void key_endian_to_host(struct wl_wsec_key *key)
+@@ -251,6 +258,12 @@ static bool wl_is_ibssmode(struct wl_cfg80211_priv *wl);
+ 
+ static void wl_link_up(struct wl_cfg80211_priv *wl);
+ static void wl_link_down(struct wl_cfg80211_priv *wl);
++static void wl_report_disconnected(struct net_device *ndev, u16 reason, bool locally_generated);
++static void wl_scan_done(struct wl_cfg80211_priv *wl, bool aborted);
++static void wl_scan_timeout(struct work_struct *work);
++
++/* brcmfmac allows 10 s; scans while associated take longer on this core */
++#define WL_SCAN_TIMEOUT_MS	15000
+ static s32 wl_set_mode(struct net_device *ndev, s32 iftype);
+ 
+ static void wl_init_conf(struct wl_cfg80211_conf *conf);
+@@ -480,10 +493,31 @@ static void key_endian_to_host(struct wl_wsec_key *key)
  	key->iv_initialized = dtoh32(key->iv_initialized);
  }
  
@@ -131,7 +172,7 @@ index a70d888..ade02e3 100644
  }
  
  static s32
-@@ -554,6 +582,7 @@ wl_cfg80211_scan(struct wiphy *wiphy,
+@@ -554,6 +588,7 @@ wl_cfg80211_scan(struct wiphy *wiphy,
  	struct cfg80211_ssid *ssids;
  	struct wl_cfg80211_scan_req *sr = wl_to_sr(wl);
  	s32 passive_scan;
@@ -139,7 +180,7 @@ index a70d888..ade02e3 100644
  	s32 err = 0;
  
  	if (request) {		
-@@ -586,13 +615,20 @@ wl_cfg80211_scan(struct wiphy *wiphy,
+@@ -586,17 +621,27 @@ wl_cfg80211_scan(struct wiphy *wiphy,
  		WL_ERR(("WLC_SET_PASSIVE_SCAN error (%d)\n", err));
  		goto scan_out;
  	}
@@ -165,7 +206,136 @@ index a70d888..ade02e3 100644
  		}
  		goto scan_out;
  	}
-@@ -1120,28 +1156,34 @@ wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev, u16 reason_c
+ 
++	/* (re)start the timeout; mod_delayed_work() is GPL-only */
++	cancel_delayed_work(&wl->scan_timeout);
++	schedule_delayed_work(&wl->scan_timeout, msecs_to_jiffies(WL_SCAN_TIMEOUT_MS));
+ 	return 0;
+ 
+ scan_out:
+@@ -921,6 +966,7 @@ static s32
+ wl_set_key_mgmt(struct net_device *dev, struct cfg80211_connect_params *sme)
+ {
+ 	struct wl_cfg80211_priv *wl = ndev_to_wl(dev);
++	u32 akm = sme->crypto.akm_suites[0];
+ 	s32 val = 0;
+ 	s32 err = 0;
+ 
+@@ -931,7 +977,7 @@ wl_set_key_mgmt(struct net_device *dev, struct cfg80211_connect_params *sme)
+ 			return err;
+ 		}
+ 		if (val & (WPA_AUTH_PSK | WPA_AUTH_UNSPECIFIED)) {
+-			switch (sme->crypto.akm_suites[0]) {
++			switch (akm) {
+ 			case WLAN_AKM_SUITE_8021X:
+ 				val = WPA_AUTH_UNSPECIFIED;
+ 				break;
+@@ -939,19 +985,43 @@ wl_set_key_mgmt(struct net_device *dev, struct cfg80211_connect_params *sme)
+ 				val = WPA_AUTH_PSK;
+ 				break;
+ 			default:
+-				WL_ERR(("invalid cipher group (%d)\n", sme->crypto.cipher_group));
++				WL_ERR(("unsupported AKM suite 0x%08x\n", akm));
+ 				return -EINVAL;
+ 			}
+ 		} else if (val & (WPA2_AUTH_PSK | WPA2_AUTH_UNSPECIFIED)) {
+-			switch (sme->crypto.akm_suites[0]) {
++			switch (akm) {
++			/*
++			 * Transition-mode networks (WPA2/WPA3-Enterprise, e.g.
++			 * eduroam) offer the SHA-256 AKMs next to the classic
++			 * ones, and wpa_supplicant picks SHA-256 whenever its
++			 * profile allows it, which NetworkManager always does.
++			 * This core only does the classic AKMs, and rejecting the
++			 * request meant such networks never connected under
++			 * NetworkManager. Associate with the classic AKM instead:
++			 * the firmware writes the RSN element of the association
++			 * request itself (sme->ie is not used), and for drivers
++			 * doing their own association wpa_supplicant takes the
++			 * AKM from that element, disconnecting if its profile
++			 * does not allow it.
++			 */
++			case WLAN_AKM_SUITE_8021X_SHA256:
++				printk(KERN_INFO KBUILD_MODNAME ": %s: AP offers 802.1X-SHA256, "
++					"which this core lacks; associating with 802.1X\n", dev->name);
++				akm = WLAN_AKM_SUITE_8021X;
++				fallthrough;
+ 			case WLAN_AKM_SUITE_8021X:
+ 				val = WPA2_AUTH_UNSPECIFIED;
+ 				break;
++			case WLAN_AKM_SUITE_PSK_SHA256:
++				printk(KERN_INFO KBUILD_MODNAME ": %s: AP offers PSK-SHA256, "
++					"which this core lacks; associating with PSK\n", dev->name);
++				akm = WLAN_AKM_SUITE_PSK;
++				fallthrough;
+ 			case WLAN_AKM_SUITE_PSK:
+ 				val = WPA2_AUTH_PSK;
+ 				break;
+ 			default:
+-				WL_ERR(("invalid cipher group (%d)\n", sme->crypto.cipher_group));
++				WL_ERR(("unsupported AKM suite 0x%08x\n", akm));
+ 				return -EINVAL;
+ 			}
+ 		}
+@@ -964,7 +1034,7 @@ wl_set_key_mgmt(struct net_device *dev, struct cfg80211_connect_params *sme)
+ 		}
+ 	}
+ 
+-	wl->profile->sec.wpa_auth = sme->crypto.akm_suites[0];
++	wl->profile->sec.wpa_auth = akm;
+ 
+ 	return err;
+ }
+@@ -1061,9 +1131,15 @@ wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
+ 	valc = 1;
+ 	wl_dev_bufvar_set(dev, "wsec_restrict", &valc, 1);
+ 
++	/* Remembered to name the right AP if the join fails. */
+ 	if (sme->bssid) {
+ 		memcpy(wl->profile->bssid, sme->bssid, ETHER_ADDR_LEN);
+ 	}
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 0, 0)
++	else if (sme->bssid_hint) {
++		memcpy(wl->profile->bssid, sme->bssid_hint, ETHER_ADDR_LEN);
++	}
++#endif
+ 	else {
+ 		memset(wl->profile->bssid, 0, ETHER_ADDR_LEN);
+ 	}
+@@ -1102,11 +1178,25 @@ wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev, u16 reason_c
+ {
+ 	struct wl_cfg80211_priv *wl = wiphy_to_wl(wiphy);
+ 	scb_val_t scbval;
++	bool connecting, connected;
+ 	s32 err = 0;
+ 
+ 	WL_DBG(("Reason %d\n", reason_code));
+ 
+-	if (wl->profile->active) {
++	/*
++	 * Report the disconnection right away, as brcmfmac does, instead of
++	 * relying on a link-down event: when the firmware is no longer on the
++	 * AP (e.g. after a failed roam) none comes, and cfg80211 would stay
++	 * connected and refuse every new connection with -EALREADY. A join
++	 * still in progress is aborted as well. Clearing the flags first keeps
++	 * wl_notify_connect_status() from reporting any of this a second time.
++	 */
++	connecting = test_and_clear_bit(WL_STATUS_CONNECTING, &wl->status);
++	connected = test_and_clear_bit(WL_STATUS_CONNECTED, &wl->status);
++	if (connected)
++		wl_report_disconnected(dev, reason_code, true);
++
++	if (connected || connecting || wl->profile->active) {
+ 		scbval.val = reason_code;
+ 		memcpy(&scbval.ea, &wl->bssid, ETHER_ADDR_LEN);
+ 		scbval.val = htod32(scbval.val);
+@@ -1115,33 +1205,40 @@ wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev, u16 reason_c
+ 			WL_ERR(("error (%d)\n", err));
+ 			return err;
+ 		}
++		wl->profile->active = false;
+ 	}
+ 
  	return err;
  }
  
@@ -205,7 +375,7 @@ index a70d888..ade02e3 100644
  	s32 err = 0;
  	s32 disable = 0;
  
-@@ -1149,16 +1191,12 @@ wl_cfg80211_set_tx_power(struct wiphy *wiphy, enum tx_power_setting type, s32 db
+@@ -1149,16 +1246,12 @@ wl_cfg80211_set_tx_power(struct wiphy *wiphy, enum tx_power_setting type, s32 db
  	case NL80211_TX_POWER_AUTOMATIC:
  		break;
  	case NL80211_TX_POWER_LIMITED:
@@ -225,7 +395,7 @@ index a70d888..ade02e3 100644
  		break;
  	}
  
-@@ -1170,16 +1208,12 @@ wl_cfg80211_set_tx_power(struct wiphy *wiphy, enum tx_power_setting type, s32 db
+@@ -1170,16 +1263,12 @@ wl_cfg80211_set_tx_power(struct wiphy *wiphy, enum tx_power_setting type, s32 db
  		return err;
  	}
  
@@ -244,7 +414,7 @@ index a70d888..ade02e3 100644
  
  	return err;
  }
-@@ -1197,17 +1231,16 @@ static s32 wl_cfg80211_get_tx_power(struct wiphy *wiphy, s32 *dbm)
+@@ -1197,17 +1286,16 @@ static s32 wl_cfg80211_get_tx_power(struct wiphy *wiphy, s32 *dbm)
  {
  	struct wl_cfg80211_priv *wl = wiphy_to_wl(wiphy);
  	struct net_device *ndev = wl_to_ndev(wl);
@@ -266,7 +436,7 @@ index a70d888..ade02e3 100644
  
  	return err;
  }
-@@ -1535,8 +1568,10 @@ wl_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
+@@ -1535,8 +1623,10 @@ wl_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
  	s32 rate;
  	s32 err = 0;
  
@@ -278,7 +448,7 @@ index a70d888..ade02e3 100644
  	}
  
  	err = wl_dev_ioctl(dev, WLC_GET_RATE, &rate, sizeof(rate));
-@@ -1573,6 +1608,33 @@ wl_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
+@@ -1573,6 +1663,33 @@ wl_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
  	return err;
  }
  
@@ -312,7 +482,7 @@ index a70d888..ade02e3 100644
  static s32
  wl_cfg80211_set_power_mgmt(struct wiphy *wiphy, struct net_device *dev,
                             bool enabled, s32 timeout)
-@@ -1887,6 +1949,7 @@ static struct cfg80211_ops wl_cfg80211_ops = {
+@@ -1887,6 +2004,7 @@ static struct cfg80211_ops wl_cfg80211_ops = {
  	.join_ibss = wl_cfg80211_join_ibss,
  	.leave_ibss = wl_cfg80211_leave_ibss,
  	.get_station = wl_cfg80211_get_station,
@@ -320,7 +490,22 @@ index a70d888..ade02e3 100644
  	.set_tx_power = wl_cfg80211_set_tx_power,
  	.get_tx_power = wl_cfg80211_get_tx_power,
  	.add_key = wl_cfg80211_add_key,
-@@ -2020,9 +2083,13 @@ static void wl_free_wdev(struct wl_cfg80211_priv *wl)
+@@ -1974,6 +2092,14 @@ static s32 wl_alloc_wdev(struct device *dev, struct wireless_dev **rwdev)
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 33)
+ 
+ 	wdev->wiphy->flags &= ~WIPHY_FLAG_PS_ON_BY_DEFAULT;
++	/*
++	 * The core roams by itself (roam_off stays 0) and reports it with
++	 * WLC_E_ROAM. Saying so makes wpa_supplicant leave AP selection and
++	 * roaming to it ("driver-based roaming") instead of asking for a join
++	 * to another AP while connected: this core handles that badly, and a
++	 * failed one left it unable to join anything until it was reloaded.
++	 */
++	wdev->wiphy->flags |= WIPHY_FLAG_SUPPORTS_FW_ROAM;
+ #endif
+ 
+ #ifdef CONFIG_PM
+@@ -2020,9 +2146,13 @@ static void wl_free_wdev(struct wl_cfg80211_priv *wl)
  	wl_to_wdev(wl) = NULL;
  }
  
@@ -336,7 +521,7 @@ index a70d888..ade02e3 100644
  	s32 err = 0;
  	int i;
  
-@@ -2033,132 +2100,86 @@ static s32 wl_inform_bss(struct wl_cfg80211_priv *wl, struct wl_scan_results *bs
+@@ -2033,132 +2163,86 @@ static s32 wl_inform_bss(struct wl_cfg80211_priv *wl, struct wl_scan_results *bs
  	WL_DBG(("scanned AP count (%d)\n", bss_list->count));
  	bi = next_bss(bss_list, bi);
  	for_each_bss(bss_list, bi, i) {
@@ -346,11 +531,11 @@ index a70d888..ade02e3 100644
 +		u32 len;
 +
 +		if (off + offsetof(struct wl_bss_info, BSSID) > buflen)
- 			break;
++			break;
 +		len = dtoh32(bi->length);
 +		if (len < WL_BSS_INFO_MIN_LEN || len > buflen - off) {
 +			WL_ERR(("scan entry %d has bad length %u, dropping the rest\n", i, len));
-+			break;
+ 			break;
 +		}
 +		/*
 +		 * One odd entry must not hide every network after it: the old
@@ -428,11 +613,11 @@ index a70d888..ade02e3 100644
 -	beacon_proberesp->beacon_int = cpu_to_le16(bi->beacon_period);
 -	beacon_proberesp->capab_info = cpu_to_le16(bi->capability);
 -	wl_rst_ie(wl);
- 
+-
 -	err = wl_mrg_ie(wl, ((u8 *) bi) + bi->ie_offset, bi->ie_length);
 -	if (err)
 -		goto inform_single_bss_out;
--
+ 
 -	err = wl_cp_ie(wl, beacon_proberesp->variable, WL_BSS_INFO_MAX -
 -	         offsetof(struct wl_cfg80211_bss_info, frame_buf));
 -	if (err)
@@ -532,7 +717,54 @@ index a70d888..ade02e3 100644
  }
  
  static s32
-@@ -2213,7 +2234,7 @@ wl_notify_connect_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2186,16 +2270,37 @@ wl_notify_connect_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+ 		}
+ 		else if ((event == WLC_E_LINK && ~(flags & WLC_EVENT_MSG_LINK)) ||
+ 			event == WLC_E_DEAUTH_IND || event == WLC_E_DISASSOC_IND) {
+-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
+-			cfg80211_disconnected(ndev, 0, NULL, 0, GFP_KERNEL);
+-#else
+-			cfg80211_disconnected(ndev, 0, NULL, 0, false, GFP_KERNEL);
+-#endif
+-			clear_bit(WL_STATUS_CONNECTED, &wl->status);
+-			wl_link_down(wl);
+-			wl_init_prof(wl->profile);
++			/*
++			 * The firmware drops a scan in progress with the link and
++			 * never completes it (see wl_scan_timeout()); end it now
++			 * so the reconnect can scan right away.
++			 */
++			rtnl_lock();
++			cancel_delayed_work(&wl->scan_timeout);
++			if (wl->scan_request)
++				wl_scan_done(wl, true);
++			rtnl_unlock();
++			/*
++			 * Report an established link lost, once: not if the
++			 * disconnect op already did (it clears the flag). A join
++			 * in progress is left to its own result, as this event
++			 * can still be about the previous link.
++			 */
++			if (test_and_clear_bit(WL_STATUS_CONNECTED, &wl->status))
++				wl_report_disconnected(ndev, 0, false);
++			if (!test_bit(WL_STATUS_CONNECTING, &wl->status)) {
++				wl_link_down(wl);
++				wl_init_prof(wl->profile);
++			}
+ 		}
+-		else if (event == WLC_E_SET_SSID && status == WLC_E_STATUS_NO_NETWORKS) {
++		else if (event == WLC_E_SET_SSID &&
++			(status == WLC_E_STATUS_FAIL || status == WLC_E_STATUS_TIMEOUT ||
++			 status == WLC_E_STATUS_NO_NETWORKS || status == WLC_E_STATUS_NO_ACK)) {
++			/*
++			 * The join failed (not only "no networks"). An ABORT is
++			 * left out: it ends a join that a newer one replaced,
++			 * and must not be taken as that newer join's result.
++			 */
+ 			wl_bss_connect_done(wl, ndev, e, data, false);
+ 		}
+ 		else {
+@@ -2213,7 +2318,7 @@ wl_notify_connect_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  			wl_link_up(wl);
  			wl_get_assoc_ies(wl);
  			memcpy(&wl->bssid, &e->addr, ETHER_ADDR_LEN);
@@ -541,7 +773,41 @@ index a70d888..ade02e3 100644
  #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 15, 0)
  			wiphy = wl_to_wiphy(wl);
  			err = wl_dev_intvar_get(ndev, "chanspec", &chanspec);
-@@ -2312,33 +2333,38 @@ static s32 wl_get_assoc_ies(struct wl_cfg80211_priv *wl)
+@@ -2258,9 +2363,32 @@ wl_notify_roaming_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+ 
+ 	WL_DBG(("\n"));
+ 
+-	if (status == WLC_E_STATUS_SUCCESS) {
++	if (status != WLC_E_STATUS_SUCCESS)
++		return err;
++
++	/*
++	 * cfg80211 takes a roam only on an established connection (else it
++	 * WARNs and drops it), but the firmware also "roams" after it lost
++	 * the link, when that loss has already been reported. As in
++	 * brcmfmac, such a roam completes a join in progress. With none in
++	 * progress, cfg80211 and wpa_supplicant consider the card
++	 * disconnected: take the firmware off the AP again to match, so
++	 * that the next join starts from a clean state.
++	 */
++	if (test_bit(WL_STATUS_CONNECTED, &wl->status)) {
+ 		err = wl_bss_roaming_done(wl, ndev, e, data);
+ 		wl->profile->active = true;
++	} else if (test_bit(WL_STATUS_CONNECTING, &wl->status)) {
++		wl_bss_connect_done(wl, ndev, e, data, true);
++		wl->profile->active = true;
++	} else {
++		scb_val_t scbval;
++
++		printk(KERN_INFO KBUILD_MODNAME ": %s: firmware rejoined an AP on its own "
++			"while disconnected, leaving it\n", ndev->name);
++		scbval.val = htod32(WLAN_REASON_DEAUTH_LEAVING);
++		memcpy(&scbval.ea, &e->addr, ETHER_ADDR_LEN);
++		err = wl_dev_ioctl(ndev, WLC_DISASSOC, &scbval, sizeof(scb_val_t));
+ 	}
+ 
+ 	return err;
+@@ -2312,33 +2440,38 @@ static s32 wl_get_assoc_ies(struct wl_cfg80211_priv *wl)
  		return err;
  	}
  	assoc_info = (struct wl_cfg80211_assoc_ielen *)wl->extra_buf;
@@ -596,7 +862,7 @@ index a70d888..ade02e3 100644
  	}
  	WL_DBG(("req len (%d) resp len (%d)\n", conn_info->req_ie_len,
  		conn_info->resp_ie_len));
-@@ -2385,88 +2411,67 @@ static void wl_ch_to_chanspec(struct ieee80211_channel *chan, struct wl_join_par
+@@ -2385,88 +2518,67 @@ static void wl_ch_to_chanspec(struct ieee80211_channel *chan, struct wl_join_par
  	}
  }
  
@@ -734,7 +1000,7 @@ index a70d888..ade02e3 100644
  }
  
  static s32
-@@ -2474,19 +2479,7 @@ wl_bss_roaming_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2474,19 +2586,7 @@ wl_bss_roaming_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
                      const wl_event_msg_t *e, void *data)
  {
  	struct wl_cfg80211_connect_info *conn_info = wl_to_conn(wl);
@@ -755,7 +1021,7 @@ index a70d888..ade02e3 100644
  	s32 err = 0;
  
  	err = wl_get_assoc_ies(wl);
-@@ -2496,22 +2489,44 @@ wl_bss_roaming_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2496,22 +2596,44 @@ wl_bss_roaming_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  	memcpy(wl->profile->bssid, &e->addr, ETHER_ADDR_LEN);
  	memcpy(&wl->bssid, &e->addr, ETHER_ADDR_LEN);
  
@@ -778,7 +1044,7 @@ index a70d888..ade02e3 100644
 +#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
 +			.bssid = wl->profile->bssid,
 +			.bss = bss,
- #else
++#else
 +			.links[0].bssid = wl->profile->bssid,
 +			.links[0].bss = bss,
 +#endif
@@ -790,7 +1056,7 @@ index a70d888..ade02e3 100644
 +
 +		cfg80211_roamed(ndev, &roam_info, GFP_KERNEL);
 +	}
-+#else
+ #else
 +	if (bss)
 +		cfg80211_put_bss(wl_to_wiphy(wl), bss);
 +	cfg80211_roamed(ndev,
@@ -807,18 +1073,31 @@ index a70d888..ade02e3 100644
  	WL_DBG(("Report roaming result\n"));
  
  	set_bit(WL_STATUS_CONNECTED, &wl->status);
-@@ -2535,25 +2550,37 @@ wl_bss_connect_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
- 		cfg80211_scan_done(wl->scan_request, &info);
- #else
+@@ -2526,35 +2648,69 @@ wl_bss_connect_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+ 	struct wl_cfg80211_connect_info *conn_info = wl_to_conn(wl);
+ 	s32 err = 0;
+ 
++	rtnl_lock();
++	cancel_delayed_work(&wl->scan_timeout);
+ 	if (wl->scan_request) {
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
+-		struct cfg80211_scan_info info = {
+-			.aborted = true,
+-		};
+-		WL_DBG(("%s: Aborting scan\n", __FUNCTION__));
+-		cfg80211_scan_done(wl->scan_request, &info);
+-#else
  		WL_DBG(("%s: Aborting scan\n", __FUNCTION__));
 -		cfg80211_scan_done(wl->scan_request, true);     
-+		cfg80211_scan_done(wl->scan_request, true);
- #endif
- 		wl->scan_request = NULL;
+-#endif
+-		wl->scan_request = NULL;
++		wl_scan_done(wl, true);
  	}
++	rtnl_unlock();
  
  	if (test_and_clear_bit(WL_STATUS_CONNECTING, &wl->status)) {
 +		struct cfg80211_bss *bss = NULL;
++		const u8 *bssid;
 +
  		if (completed) {
  			wl_get_assoc_ies(wl);
@@ -827,27 +1106,56 @@ index a70d888..ade02e3 100644
 -			wl_update_bss_info(wl);
 +			wl_update_bss_info(wl, &bss);
  			set_bit(WL_STATUS_CONNECTED, &wl->status);
++			bssid = (u8 *)&wl->bssid;
++		} else {
++			/*
++			 * Name the AP that was being joined, not wl->bssid (the
++			 * previous AP): wpa_supplicant puts the reported AP on
++			 * its ignore list, and blocking the working AP while
++			 * retrying the failing one dragged out every outage.
++			 */
++			bssid = is_zero_ether_addr(wl->profile->bssid) ? NULL : wl->profile->bssid;
++			printk(KERN_INFO KBUILD_MODNAME ": %s: join failed (event %u, status %u, reason %u)\n",
++				ndev->name, EVENT_TYPE(e), EVENT_STATUS(e), dtoh32(e->reason));
  		}
  
  		WL_DBG(("Reporting BSS network join result \"%s\"\n",
  			wl->profile->ssid.SSID));
+-		cfg80211_connect_result(ndev, (u8 *)&wl->bssid,	conn_info->req_ie,
 +#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
 +		/* Hand over the entry (and our reference) instead of a bare BSSID. */
-+		cfg80211_connect_bss(ndev, (u8 *)&wl->bssid, bss, conn_info->req_ie,
++		cfg80211_connect_bss(ndev, bssid, bss, conn_info->req_ie,
 +		    conn_info->req_ie_len, conn_info->resp_ie, conn_info->resp_ie_len,
 +		    completed ? WLAN_STATUS_SUCCESS : WLAN_STATUS_AUTH_TIMEOUT, GFP_KERNEL,
 +		    NL80211_TIMEOUT_UNSPECIFIED);
 +#else
 +		if (bss)
 +			cfg80211_put_bss(wl_to_wiphy(wl), bss);
- 		cfg80211_connect_result(ndev, (u8 *)&wl->bssid,	conn_info->req_ie,
++		cfg80211_connect_result(ndev, bssid, conn_info->req_ie,
  		    conn_info->req_ie_len, conn_info->resp_ie, conn_info->resp_ie_len,
  		    completed ? WLAN_STATUS_SUCCESS : WLAN_STATUS_AUTH_TIMEOUT,	GFP_KERNEL);
 +#endif
  		WL_DBG(("Connection %s\n", completed ? "Succeeded" : "FAILed"));
++
++		/*
++		 * A join that failed while still connected (wpa_supplicant
++		 * roaming to another AP) has taken the firmware off the old AP
++		 * too, but a failed connect result leaves cfg80211 connected to
++		 * it. cfg80211 then refuses every new connection with -EALREADY
++		 * and never passes a disconnect request down, so Wi-Fi would be
++		 * dead until the module is reloaded. Report the old link lost.
++		 */
++		if (!completed && test_and_clear_bit(WL_STATUS_CONNECTED, &wl->status)) {
++			printk(KERN_INFO KBUILD_MODNAME ": %s: joining another AP failed, "
++				"reporting the previous one as lost\n", ndev->name);
++			wl_report_disconnected(ndev, WLAN_REASON_UNSPECIFIED, true);
++			wl_link_down(wl);
++			wl_init_prof(wl->profile);
++		}
  	}
  
-@@ -2588,6 +2615,7 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+ 	return err;
+@@ -2588,6 +2744,7 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  	struct channel_info channel_inform;
  	struct wl_scan_results *bss_list;
  	u32 buflen;
@@ -855,7 +1163,7 @@ index a70d888..ade02e3 100644
  	s32 err = 0;
  
  	WL_DBG(("\n"));
-@@ -2605,45 +2633,51 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2605,48 +2762,46 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  	}
  
  	for (buflen = WL_SCAN_BUF_BASE; ; ) {
@@ -911,21 +1219,64 @@ index a70d888..ade02e3 100644
 +	kvfree(bss_list);
  
  scan_done_out:
- 	if (wl->scan_request) {
-+		/* Results that never reached cfg80211 make this an aborted scan. */
- #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
- 		struct cfg80211_scan_info info = {
+-	if (wl->scan_request) {
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
+-		struct cfg80211_scan_info info = {
 -			.aborted = false,
-+			.aborted = err != 0,
- 		};
- 		cfg80211_scan_done(wl->scan_request, &info);
- #else
+-		};
+-		cfg80211_scan_done(wl->scan_request, &info);
+-#else
 -		cfg80211_scan_done(wl->scan_request, false);
-+		cfg80211_scan_done(wl->scan_request, err != 0);
- #endif
- 		wl->scan_request = NULL;
- 	}
-@@ -3088,13 +3122,6 @@ static bool wl_is_ibssmode(struct wl_cfg80211_priv *wl)
+-#endif
+-		wl->scan_request = NULL;
+-	}
++	cancel_delayed_work(&wl->scan_timeout);
++	/* Results that never reached cfg80211 make this an aborted scan. */
++	if (wl->scan_request)
++		wl_scan_done(wl, err != 0);
+ 	rtnl_unlock();
+ 	return err;
+ }
+@@ -2768,6 +2923,7 @@ static s32 wl_init_cfg80211_priv(struct wl_cfg80211_priv *wl, struct wireless_de
+ 
+ 	wl->scan_request = NULL;
+ 	wl->active_scan = true;
++	INIT_DELAYED_WORK(&wl->scan_timeout, wl_scan_timeout);
+ 	wl_init_eq(wl);
+ 	err = wl_init_priv_mem(wl);
+ 	if (err)
+@@ -2790,6 +2946,8 @@ static s32 wl_init_cfg80211_priv(struct wl_cfg80211_priv *wl, struct wireless_de
+ 
+ static void wl_deinit_cfg80211_priv(struct wl_cfg80211_priv *wl)
+ {
++	/* not under the RTNL (the netdev is already unregistered) */
++	cancel_delayed_work_sync(&wl->scan_timeout);
+ 	wl_destroy_event_handler(wl);
+ 	wl_flush_eq(wl);
+ 	wl_link_down(wl);
+@@ -3068,17 +3226,10 @@ s32 wl_cfg80211_down(struct net_device *ndev)
+ 	struct wl_cfg80211_priv *wl = ndev_to_wl(ndev);
+ 	s32 err = 0;
+ 
+-	if (wl->scan_request) {
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
+-		struct cfg80211_scan_info info = {
+-			.aborted = true,
+-		};
+-		cfg80211_scan_done(wl->scan_request, &info);
+-#else
+-		cfg80211_scan_done(wl->scan_request, true);	
+-#endif
+-		wl->scan_request = NULL;
+-	}
++	/* under the RTNL (ndo_stop) */
++	cancel_delayed_work(&wl->scan_timeout);
++	if (wl->scan_request)
++		wl_scan_done(wl, true);
+ 
+ 	return err;
+ }
+@@ -3088,13 +3239,6 @@ static bool wl_is_ibssmode(struct wl_cfg80211_priv *wl)
  	return wl->conf->mode == WL_MODE_IBSS;
  }
  
@@ -939,7 +1290,7 @@ index a70d888..ade02e3 100644
  static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
  {
  	struct wl_cfg80211_ie *ie = wl_to_ie(wl);
-@@ -3112,41 +3139,6 @@ static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
+@@ -3112,45 +3256,52 @@ static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
  	return err;
  }
  
@@ -947,7 +1298,7 @@ index a70d888..ade02e3 100644
 -{
 -	struct wl_cfg80211_ie *ie = wl_to_ie(wl);
 -	s32 err = 0;
--
+ 
 -	if (ie->offset + ie_size > WL_TLV_INFO_MAX) {
 -		WL_ERR(("ei_stream crosses buffer boundary\n"));
 -		return -ENOSPC;
@@ -956,10 +1307,15 @@ index a70d888..ade02e3 100644
 -	ie->offset += ie_size;
 -
 -	return err;
--}
--
++static void wl_link_up(struct wl_cfg80211_priv *wl)
++{
++	WL_DBG(("\n"));
+ }
+ 
 -static s32 wl_cp_ie(struct wl_cfg80211_priv *wl, u8 *dst, u16 dst_size)
--{
++/* Hand the pending scan back to cfg80211. Callers hold the RTNL. */
++static void wl_scan_done(struct wl_cfg80211_priv *wl, bool aborted)
+ {
 -	struct wl_cfg80211_ie *ie = wl_to_ie(wl);
 -	s32 err = 0;
 -
@@ -970,22 +1326,64 @@ index a70d888..ade02e3 100644
 -	memcpy(dst, &ie->buf[0], ie->offset);
 -
 -	return err;
--}
--
--static u32 wl_get_ielen(struct wl_cfg80211_priv *wl)
--{
--	struct wl_cfg80211_ie *ie = wl_to_ie(wl);
--
--	return ie->offset;
--}
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
++	struct cfg80211_scan_info info = {
++		.aborted = aborted,
++	};
++	cfg80211_scan_done(wl->scan_request, &info);
++#else
++	cfg80211_scan_done(wl->scan_request, aborted);
++#endif
++	wl->scan_request = NULL;
+ }
  
- static void wl_link_up(struct wl_cfg80211_priv *wl)
+-static u32 wl_get_ielen(struct wl_cfg80211_priv *wl)
++/*
++ * The firmware does not always complete a scan: it drops one in progress
++ * when the link goes, for one. cfg80211 then refuses every further scan
++ * with -EBUSY until the scan is done, so no network is found or joined.
++ */
++static void wl_scan_timeout(struct work_struct *work)
  {
+-	struct wl_cfg80211_ie *ie = wl_to_ie(wl);
++	struct wl_cfg80211_priv *wl = container_of(to_delayed_work(work),
++		struct wl_cfg80211_priv, scan_timeout);
+ 
+-	return ie->offset;
++	rtnl_lock();
++	if (wl->scan_request) {
++		printk(KERN_INFO KBUILD_MODNAME ": %s: scan not completed after %d s, "
++			"reporting it aborted\n", wl_to_ndev(wl)->name, WL_SCAN_TIMEOUT_MS / 1000);
++		wl_scan_done(wl, true);
++	}
++	rtnl_unlock();
+ }
+ 
+-static void wl_link_up(struct wl_cfg80211_priv *wl)
++static void wl_report_disconnected(struct net_device *ndev, u16 reason, bool locally_generated)
+ {
+-	WL_DBG(("\n"));
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 2, 0)
++	cfg80211_disconnected(ndev, reason, NULL, 0, GFP_KERNEL);
++#else
++	cfg80211_disconnected(ndev, reason, NULL, 0, locally_generated, GFP_KERNEL);
++#endif
+ }
+ 
+ static void wl_link_down(struct wl_cfg80211_priv *wl)
 diff --git a/src/wl/sys/wl_cfg80211_hybrid.h b/src/wl/sys/wl_cfg80211_hybrid.h
-index bc6f3ad..2f4a4c7 100644
+index bc6f3ad..53df9c5 100644
 --- a/src/wl/sys/wl_cfg80211_hybrid.h
 +++ b/src/wl/sys/wl_cfg80211_hybrid.h
-@@ -46,24 +46,29 @@ struct wl_cfg80211_security;
+@@ -22,6 +22,7 @@
+ #ifndef _wl_cfg80211_h_
+ #define _wl_cfg80211_h_
+ 
++#include <linux/workqueue.h>
+ #include <net/cfg80211.h>
+ #include <wlioctl.h>
+ 
+@@ -46,24 +47,29 @@ struct wl_cfg80211_security;
  #define WL_DBG_ERR	(1 << 0)
  #define WL_DBG_MASK ((WL_DBG_DBG | WL_DBG_INFO | WL_DBG_ERR) << 1)
  
@@ -1021,7 +1419,7 @@ index bc6f3ad..2f4a4c7 100644
  		} 								\
  	}									\
  } while (0)
-@@ -72,8 +77,8 @@ do {										\
+@@ -72,8 +78,8 @@ do {										\
  do {										\
  	if (wl_dbg_level & WL_DBG_INFO) {				\
  		if (net_ratelimit()) {						\
@@ -1032,7 +1430,7 @@ index bc6f3ad..2f4a4c7 100644
  		}								\
  	}									\
  } while (0)
-@@ -81,6 +86,7 @@ do {										\
+@@ -81,6 +87,7 @@ do {										\
  #define WL_NUM_SCAN_MAX		1
  #define WL_NUM_PMKIDS_MAX	MAXPMKID	
  #define WL_SCAN_BUF_BASE 		(16*1024)
@@ -1040,7 +1438,7 @@ index bc6f3ad..2f4a4c7 100644
  #define WL_TLV_INFO_MAX 		1024
  #define WL_BSS_INFO_MAX			2048
  #define WL_ASSOC_INFO_MAX	512
-@@ -99,13 +105,6 @@ enum wl_cfg80211_mode {
+@@ -99,13 +106,6 @@ enum wl_cfg80211_mode {
  	WL_MODE_AP
  };
  
@@ -1054,7 +1452,7 @@ index bc6f3ad..2f4a4c7 100644
  struct wl_cfg80211_conf {
  	u32 mode;		
  	u32 frag_threshold;
-@@ -121,14 +120,6 @@ struct wl_cfg80211_event_loop {
+@@ -121,14 +121,6 @@ struct wl_cfg80211_event_loop {
  	                           const wl_event_msg_t *e, void *data);
  };
  
@@ -1069,6 +1467,18 @@ index bc6f3ad..2f4a4c7 100644
  struct wl_cfg80211_scan_req {
  	struct wlc_ssid ssid;
  };
+@@ -191,8 +183,9 @@ struct wl_cfg80211_priv {
+ 	struct wl_cfg80211_profile *profile;	
+ 	struct wl_cfg80211_connect_info conn_info;	
+ 	struct wl_cfg80211_pmk_list *pmk_list;	
+-	struct task_struct *event_tsk;	
+-	unsigned long status;		
++	struct task_struct *event_tsk;
++	struct delayed_work scan_timeout;	/* ends a scan the firmware never completes */
++	unsigned long status;
+ 	bool active_scan;	
+ 	bool passive;	
+ 	bool offloads;	
 diff --git a/src/wl/sys/wl_linux.c b/src/wl/sys/wl_linux.c
 index 944ae59..211e124 100644
 --- a/src/wl/sys/wl_linux.c

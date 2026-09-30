@@ -27,9 +27,23 @@ find "$dest/src" \( -name '*.o' -o -name '.*.cmd' -o -name '*.mod' -o -name '*.m
 
 dkms add -m "$name" -v "$ver"
 dkms build -m "$name" -v "$ver"
+# Only now that this version has built, drop any other installed version:
+# both install to the same module path.
+for old in $(dkms status -m "$name" 2>/dev/null | sed -n "s|^$name/\([^,:]*\)[,:].*|\1|p" | sort -u); do
+	[ "$old" = "$ver" ] && continue
+	dkms remove -m "$name" -v "$old" --all
+	rm -rf "/usr/src/$name-$old"
+done
 dkms install -m "$name" -v "$ver"
 
 install -Dm644 modprobe.d/bcm4360.conf /etc/modprobe.d/bcm4360.conf
+install -Dm644 systemd/bcm4360-fallback.service /etc/systemd/system/bcm4360-fallback.service
+install -Dm755 systemd/bcm4360-watchdog /usr/local/lib/bcm4360/bcm4360-watchdog
+install -Dm644 systemd/bcm4360-watchdog.service /etc/systemd/system/bcm4360-watchdog.service
+install -Dm644 systemd/bcm4360-watchdog.timer /etc/systemd/system/bcm4360-watchdog.timer
+systemctl daemon-reload
+systemctl enable bcm4360-fallback.service
+systemctl enable --now bcm4360-watchdog.timer
 install -Dm644 lib/LICENSE.txt "/usr/share/licenses/$name/BROADCOM-LICENSE.txt"
 depmod -a
 
