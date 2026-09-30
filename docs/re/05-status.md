@@ -28,33 +28,51 @@ scenarios named.
 | Register access: PHY, radio, PHY tables, shared memory | `wlc_phy_cmn.c`, `wlc_bmac.c` | [access](spec/access.md) | `open/hw/access.c` | `access`: 422 accesses, 0 differences |
 | 2069 radio: power-up, RCAL, RCCAL, tuning, VCO and converter calibration | `wlc_phy_ac.c` | [acphy-radio](spec/acphy-radio.md) | `open/phy/radio2069.c` | `radio-*` (9 scenarios): 85 calls, 5727 accesses, 0 differences |
 | PMU, clocks | `hndpmu.c` | [pmu](spec/pmu.md) | `open/chip/pmu.c` | `pmu-*` (6 scenarios): 83 calls, 2838 accesses, 0 differences |
-| PHY attach (state, SROM variables) | `wlc_phy_ac.c`, `wlc_phy_cmn.c` | [acphy-attach](spec/acphy-attach.md) | in work | scenarios `phy-attach`, `phy-attach-state` |
-| PHY initialisation | `wlc_phy_ac.c` | [acphy-init](spec/acphy-init.md) | - | - |
-| Setting the channel | `wlc_phy_ac.c` | [acphy-chanspec](spec/acphy-chanspec.md) | - | - |
-| Front end control, analog filters | `wlc_phy_ac.c` | in work | - | - |
-| Transmit power control | `wlc_phy_ac.c`, `wlc_ppr.c` | in work | - | - |
-| Receive gain control, desense, interference mitigation | `wlc_phy_ac.c` | in work | - | - |
-| Calibrations (TX IQ/LO, RX IQ, temperature) | `wlc_phy_ac.c` | - | - | - |
+| PHY attach (state, SROM variables) | `wlc_phy_ac.c`, `wlc_phy_cmn.c` | [acphy-attach](spec/acphy-attach.md) | `open/phy/phy_attach.c` | `phy-attach` (206 acc.), `phy-attach-state` (1260 values): 0 differences |
+| PHY initialisation | `wlc_phy_ac.c` | [acphy-init](spec/acphy-init.md) | `open/phy/phy_init.c` | `phy-init`: 47078 accesses, 0 differences (whole session) |
+| Setting the channel | `wlc_phy_ac.c` | [acphy-chanspec](spec/acphy-chanspec.md) | `open/phy/phy_chanspec.c` | `phy-chanspec`: 26593 accesses, 0 differences (9 channels, both bands, 20/40/80 MHz) |
+| Front end control, analog filters | `wlc_phy_ac.c` | [acphy-rxgain](spec/acphy-rxgain.md) | `open/phy/phy_rxgain.c` | part of `phy-init`/`phy-chanspec`, 0 differences |
+| Transmit power control | `wlc_phy_ac.c`, `wlc_ppr.c` | [acphy-txpower](spec/acphy-txpower.md) | `open/phy/phy_txpower.c` | part of `phy-init`/`phy-chanspec`, 0 differences |
+| Receive gain control, desense, interference mitigation | `wlc_phy_ac.c` | [acphy-desense](spec/acphy-desense.md) | `open/phy/phy_desense.c` | part of `phy-init`/`phy-chanspec`, 0 differences |
+| Calibrations (TX IQ/LO, RX IQ, temperature) | `wlc_phy_ac.c` | not yet | - | (run only after association; not in the session) |
 | PHY common layer, interface to the MAC | `wlc_phy_cmn.c` | - | - | - |
 | Backplane, cores, PCIe bridge | `siutils.c`, `aiutils.c`, `nicpci.c` | - | - | - |
 | SROM, OTP, variables | `bcmsrom.c`, `bcmotp.c` | format only, in `tools/re/srom.py` | - | - |
-| MAC core bring-up (microcode, initial values, buffers) | `wlc_bmac.c` | in work | - | - |
+| MAC core bring-up (microcode, initial values, buffers) | `wlc_bmac.c` | [bmac-init](spec/bmac-init.md) (draft) | - | - |
 | DMA, FIFOs, interrupts | `hnddma.c`, `wlc_bmac.c` | - | - | - |
 | Frame formats between driver and MAC core | `wlc.c`, `wlc_bmac.c` | - | - | - |
 | Aggregation and keys in hardware | `wlc_ampdu.c`, `wlc_key.c` | - | - | - |
-
-The assignments for the areas without specification are written
-(`re-out/analysis/assignments/`); they were not started because of the cost
-of the analysis (see "Cost").
 
 How much of the PHY the specifications cover is measured, not estimated:
 `python phy_scenarios.py gaps` (in `tools/re`) runs a session of the object
 (attach, up, nine channel changes, two periodic ticks, down) and lists the
 functions of the PHY files that access the hardware and that no
-specification has in its scope. At the time of writing 86,000 of the 98,800
-accesses of the PHY in that session are made by functions that a
-specification describes (87 %). Calibrations that only run after an
-association are not part of the session.
+specification has in its scope. Of the ~98,800 accesses of the PHY in that
+session, all but 187 are made by functions a specification now describes; the
+187 are the post-association calibrations (`acphy-cal-*`, not yet specified)
+and the watchdog top level.
+
+The open PHY is built and tested as a whole session
+(`tools/re/phy_scenarios.py`): the object is run through attach, up, nine
+channel changes (both bands, 20/40/80 MHz), periodic work and down, and the
+open code is taken through the same calls of the MAC layer, compared access
+by access. **The whole session now matches the object with nothing excluded**:
+`phy-attach` (206 accesses), `phy-attach-state` (1260 state values),
+`phy-init` (47,078 accesses) and `phy-chanspec` (26,593 accesses) all report
+0 differences, as do the register-access, radio and PMU scenarios. The open
+PHY layer is about 280 KB of C in `open/` (attach, init, channel set, radio,
+front end, receive gain and desense, transmit power).
+
+Two small notes on the clean-room separation, kept honest:
+* Two functions the idle-TSSI measurement calls, `wlc_phy_tx_tone_acphy` and
+  `wlc_phy_stopplayback_acphy`, have no specification yet (they belong to the
+  transmit calibration, not written). Their amplitude-0 accesses were
+  reconstructed by the implementer from the comparison test's observed
+  behaviour, which `implementing.md` permits, not from a specification. When
+  the calibration is specified this should be revisited.
+* What is verified is that the open code makes the same hardware accesses as
+  the object **in the emulator**, whose card model uses assumed identity
+  values (below). It is not yet run on a real card.
 
 Not planned: the 802.11 station above the hardware layer (management,
 scanning, WPA, rate control - `wlc.c`, `wlc_assoc.c`, `wlc_scan.c`,
@@ -122,11 +140,14 @@ the table fills.
    of the card; they are for local use (`re-out/`), not for the repository.
    With them: correct the model (`tools/re/bcm4360.py`), replay the recording
    (`python mmiotrace.py replay`), re-run all scenarios.
-2. **Finish the PHY**: attach, initialisation, channel, then receive gain and
-   transmit power, then the calibrations. This is the part no open driver
-   has.
-3. **MAC core bring-up and data path**: microcode download, initial values,
-   DMA, frame headers, transmit status.
+2. **The PHY is done for the exercised session** (bring-up and channel
+   changes). What is left of the PHY: the calibrations that run only after an
+   association (transmit IQ/LO, receive IQ), and re-running the whole session
+   against a *real-card* recording once the model is corrected (step 1).
+3. **MAC core bring-up and data path**: bring-up is specified
+   ([bmac-init](spec/bmac-init.md)) and can be implemented next the same way;
+   still to specify are the data path (DMA, FIFOs, interrupts), the frame
+   formats and the aggregation/key handling in hardware.
 4. **Decide the frame of the open driver.** See below.
 5. **First test on hardware** of the open hardware layer: bring-up to the
    point where the PHY receives (a scan that sees beacons).

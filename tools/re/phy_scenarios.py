@@ -104,6 +104,8 @@ PHY_API = [
     Api('wlc_phy_ldpc_override_set', 'phy_ldpc_override_set', (1,)),
     Api('wlc_acphy_set_scramb_dyn_bw_en', 'phy_set_scramb_dyn_bw_en', (1,)),
     Api('sub_0b56ce', 'phy_timer_phycal'),
+    Api('wlc_phy_cals_acphy', 'phy_cals', (4,)),            # calibrations (acphy-cal-tx)
+    Api('wlc_phy_tempsense_acphy', 'phy_tempsense', result=4),   # acphy-cal-rx
 ]
 API_OF = {a.func: a for a in PHY_API}
 
@@ -227,6 +229,7 @@ _references = {}
 # What the object is taken through after its attach.
 SESSIONS = {
     'attach': [],
+    'cal': ['up', 'tempsense', 'cal-run', 'down'],   # trigger the calibrations directly
     'up': ['up', 'watchdog', 'down'],
     'up-again': ['up', '36/80', 'down', 'up', '149/40', 'down', 'up', '6', 'down'],
     'full': ['up'] + PHY_CHANNELS + ['watchdog', 'down'],
@@ -290,6 +293,11 @@ def phy_reference(model, variables='default', session='full'):
             m.call('wlc_down', d.wlc)
         elif step == 'watchdog':
             m.os.run_timers(m, m.os.now_us // 1000 + 2500)
+        elif step == 'cal-run':
+            # single-shot calibration (phase 0): runs the whole cal sequence
+            m.call('wlc_phy_cals_acphy', r.pi, 0)
+        elif step == 'tempsense':
+            m.call('wlc_phy_tempsense_acphy', r.pi)
         else:
             set_channel(s, step)
     ab.close_stages(d, r.stages)
@@ -506,19 +514,90 @@ def phy_attach(objs, show):
     return total(results)
 
 
+# The big leaf functions of the channel-set and init paths that belong to
+# later tasks (front end and analog filters -> rxgain; receive gain and
+# desense -> desense; transmit power -> txpower).  The "middle" task (init and
+# the channel function) implements the orchestration and its small helpers and
+# leaves these as empty stubs; the tests exclude their accesses until their
+# own task implements them.  A name listed here that is actually reached in a
+# compared stage has its accesses left out; a name that should be compared but
+# is missing here shows up as a difference, so the set is self-correcting.
+# The big leaf functions grouped by the task that implements them.  They are
+# implemented in the channel function's call order (rxgain, then desense, then
+# txpower), each depending only on already-done code; STUBBED lists the areas
+# not yet implemented, whose accesses the tests still leave out.
+RXGAIN_LEAVES = [
+    # front end, analog filters, reciprocity (acphy-rxgain)
+    'sub_0a6b0f', 'sub_0a602f', 'sub_0a4adc', 'sub_0a4867', 'sub_09eaf9', 'sub_09e378',
+    'sub_09db6d', 'sub_09dd80', 'sub_09de37', 'sub_09deee', 'sub_09dfa5', 'sub_09e064',
+    'sub_09e129', 'sub_09e1ee', 'sub_09e2b3', 'sub_0a13ec', 'sub_0a14b6', 'sub_0a5fae',
+    'sub_0a5ffe', 'wlc_phy_set_analog_tx_lpf', 'wlc_phy_set_analog_rx_lpf',
+    'wlc_phy_set_tx_afe_dacbuf_cap', 'sub_08f2e9', 'wlc_phy_populate_recipcoeffs_acphy',
+    'wlc_phy_calc_extra_init_gain_acphy', 'wlc_phy_rfctrl_override_rxgain_acphy',
+    'wlc_phy_lpf_hpc_override_acphy', 'wlc_phy_dig_lpf_override_acphy',
+]
+DESENSE_LEAVES = [
+    # receive gain control and desense (acphy-desense)
+    'sub_09af05', 'sub_099658', 'sub_0998cc', 'sub_09a121', 'sub_099f29', 'sub_09175a',
+    'sub_091b6e', 'sub_090493', 'sub_09a539', 'sub_08f84d', 'sub_090b77', 'sub_092efb',
+    'sub_0909fd', 'sub_08f41b', 'wlc_phy_crs_min_pwr_cal_acphy', 'wlc_phy_hwaci_setup_acphy',
+    'wlc_phy_aci_w2nb_setup_acphy', 'wlc_phy_hwaci_engine_acphy',
+    'wlc_phy_desense_aci_reset_params_acphy', 'wlc_phy_noise_sample_request_crsmincal',
+    'wlc_phy_ed_thres_acphy',
+]
+TXPOWER_LEAVES = [
+    # transmit power (acphy-txpower)
+    'sub_098949', 'wlc_phy_txpwr_by_index_acphy', 'wlc_phy_txpwrctrl_enable_acphy',
+    'wlc_phy_tssivisible_thresh_acphy', 'sub_0affa9', 'sub_0af7f4', 'sub_093f74',
+    'sub_0995ab', 'sub_099528', 'sub_09949f', 'sub_08f9b4', 'sub_0b1227', 'sub_09868f',
+    'wlc_phy_txpower_sromlimit_get_acphy', 'sub_08ef5f', 'sub_093ebe', 'sub_09bbe4',
+    'sub_09be13', 'sub_0b0455', 'wlc_phy_precal_txgain_acphy', 'sub_090381',
+    'wlc_phy_get_paparams_for_band_acphy', 'sub_09c161', 'sub_09bf99', 'sub_09c4e4',
+    'sub_098751',
+]
+
+# Areas not yet implemented (their accesses are excluded from the comparison).
+# Shrink this as each leaf task lands: [] means the whole PHY is compared.
+STUBBED_AREAS = []     # txpower round: the whole PHY is compared, nothing excluded
+LEAVES = [f for area in STUBBED_AREAS for f in area]
+
 INIT_API = ['bcm4360_phy_init', 'bcm4360_phy_set_scramb_dyn_bw_en',
             'bcm4360_phy_ldpc_override_set', 'bcm4360_phy_switch_radio', 'bcm4360_phy_anacore']
+CHANSPEC_API = ['bcm4360_phy_chanspec_set']
+CAL_API = ['bcm4360_phy_tempsense', 'bcm4360_phy_cals']
 
 
 @scenario
 def phy_init(objs, show):
-    """PHY initialisation: up, down and up again on other channels."""
+    """PHY initialisation (the leaf functions of rxgain/desense/txpower stubbed)."""
     results = []
     for model in PHY_MODELS:
         for session in ('up', 'up-again'):
-            res = phy_run(objs, show, INIT_API, model, session=session)
+            res = phy_run(objs, show, INIT_API, model, session=session, without=LEAVES)
             res['differences'] += need(res['open'], INIT_API, show and not results)
             results.append(res)
+    return total(results)
+
+
+@scenario
+def phy_chanspec(objs, show):
+    """Setting the channel (the leaf functions of rxgain/desense/txpower stubbed)."""
+    results = []
+    for model in PHY_MODELS:
+        res = phy_run(objs, show, CHANSPEC_API, model, session='full', without=LEAVES)
+        res['differences'] += need(res['open'], CHANSPEC_API, show and not results)
+        results.append(res)
+    return total(results)
+
+
+@scenario
+def phy_cal(objs, show):
+    """Calibrations: temperature sense and the single-shot cal run (nothing stubbed)."""
+    results = []
+    for model in PHY_MODELS:
+        res = phy_run(objs, show, CAL_API, model, session='cal', without=[])
+        res['differences'] += need(res['open'], CAL_API, show and not results)
+        results.append(res)
     return total(results)
 
 

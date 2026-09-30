@@ -340,7 +340,7 @@ class Session:
         self.loader = Loader(self.m)
         for name, (nargs, fn) in (env or {}).items():
             self.loader.define(name, nargs, fn)
-        self.objs = [self.loader.load(o) for o in (objs or [])]
+        self.objs = self.loader.load_all(objs or [])
         self.names = self._names
         self._strings = {}
 

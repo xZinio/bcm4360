@@ -56,6 +56,10 @@ class Object:
         return None
 
 
+TRAP_BASE = 0x05900000         # unresolved externals: trap when executed
+TRAP_SIZE = 0x10000
+
+
 class Loader:
     def __init__(self, machine):
         self.m = machine
@@ -65,6 +69,37 @@ class Loader:
         self.stub_at = {}
         self.handlers = {}
         self._stub_mapped = False
+        self.traps = {}          # name -> address of a trap for an unresolved symbol
+        self.trap_at = {}
+        self._trap_mapped = False
+
+    # ---- symbols that no object, import or handler provides: they load, but
+    # calling one stops the emulation with a clear message.  A scenario that
+    # does not exercise a part of the open code need not provide that part's
+    # imports; only a part that is actually run must be complete.
+    def _trap(self, name):
+        if name in self.traps:
+            return self.traps[name]
+        m = self.m
+        if not self._trap_mapped:
+            m.mu.mem_map(TRAP_BASE, TRAP_SIZE)
+            m.mu.mem_write(TRAP_BASE, b'\xc3' * TRAP_SIZE)
+            m.mu.hook_add(uc.UC_HOOK_CODE, self._on_trap, None, TRAP_BASE,
+                          TRAP_BASE + TRAP_SIZE - 1)
+            self._trap_mapped = True
+        a = TRAP_BASE + IMPORT_STEP * len(self.traps)
+        self.traps[name] = a
+        self.trap_at[a] = name
+        return a
+
+    def _on_trap(self, mu, address, size, user):
+        name = self.trap_at.get(address)
+        if name is None:
+            return
+        self.m._pending = ('error', EmuError(
+            'the open code calls %s, which nothing provides in this scenario '
+            '(an unresolved external of open/)' % name))
+        mu.emu_stop()
 
     # ---- imports that Broadcom's object does not have
     def _stub(self, name):
@@ -113,9 +148,32 @@ class Loader:
                 return o.symbols[name]
         raise EmuError('undefined symbol %s' % name)
 
+    def load_all(self, paths):
+        """Load several objects that may refer to each other in any order.
+
+        All objects are mapped and their symbols registered first, then the
+        relocations are applied, so a reference from one object to a symbol of
+        another that is loaded later resolves too (a plain ld would sort this
+        out; here the objects come in alphabetical order).
+        """
+        pending = [self._map(p) for p in paths]
+        objs = []
+        for obj, relocs in pending:
+            self._relocate(obj.path, relocs)
+            objs.append(obj)
+        return objs
+
     def load(self, path):
+        obj, relocs = self._map(path)
+        self._relocate(path, relocs)
+        return obj
+
+    def _map(self, path):
+        """Place an object in memory and register its symbols; return the
+        object and the list of relocations still to apply."""
         m = self.m
         obj = Object(path)
+        relocs = []
         with open(path, 'rb') as f:
             elf = ELFFile(f)
             if elf['e_machine'] != 'EM_X86_64' or elf['e_type'] != 'ET_REL':
@@ -168,23 +226,28 @@ class Loader:
                 base = addr[target]
                 for r in s.iter_relocations():
                     si = r['r_info_sym']
-                    S = symaddr[si]
-                    if S is None:
-                        S = self.resolve(syms[si].name)
-                    P = base + r['r_offset']
-                    A = r['r_addend']
-                    t = r['r_info_type']
-                    if t == R_X86_64_64:
-                        m.write(P, struct.pack('<Q', (S + A) & 0xffffffffffffffff))
-                    elif t in (R_X86_64_PC32, R_X86_64_PLT32):
-                        m.write(P, struct.pack('<i', S + A - P))
-                    elif t == R_X86_64_32S:
-                        m.write(P, struct.pack('<i', S + A))
-                    elif t == R_X86_64_32:
-                        m.write(P, struct.pack('<I', S + A))
-                    elif t == R_X86_64_PC64:
-                        m.write(P, struct.pack('<q', S + A - P))
-                    else:
-                        raise EmuError('%s: relocation type %d is not supported '
-                                       '(compile with -fno-pic -mcmodel=kernel)' % (path, t))
-        return obj
+                    relocs.append((base + r['r_offset'], r['r_info_type'], r['r_addend'],
+                                   symaddr[si], syms[si].name))
+        return obj, relocs
+
+    def _relocate(self, path, relocs):
+        m = self.m
+        for P, t, A, S, name in relocs:
+            if S is None:
+                try:
+                    S = self.resolve(name)
+                except EmuError:
+                    S = self._trap(name)
+            if t == R_X86_64_64:
+                m.write(P, struct.pack('<Q', (S + A) & 0xffffffffffffffff))
+            elif t in (R_X86_64_PC32, R_X86_64_PLT32):
+                m.write(P, struct.pack('<i', S + A - P))
+            elif t == R_X86_64_32S:
+                m.write(P, struct.pack('<i', S + A))
+            elif t == R_X86_64_32:
+                m.write(P, struct.pack('<I', S + A))
+            elif t == R_X86_64_PC64:
+                m.write(P, struct.pack('<q', S + A - P))
+            else:
+                raise EmuError('%s: relocation type %d is not supported '
+                               '(compile with -fno-pic -mcmodel=kernel)' % (path, t))

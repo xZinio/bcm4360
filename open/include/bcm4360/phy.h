@@ -176,6 +176,7 @@
 #define BCM4360_PHY_PO_GROUPS_5G	12
 #define BCM4360_PHY_SWCTRLMAP		5	/* elements of a switch control map */
 #define BCM4360_PHY_RXGAIN_STAGES	6
+#define BCM4360_PHY_RXGAIN_ENTRIES	10	/* entries of a receive gain stage (acphy-chanspec, 9) */
 #define BCM4360_PHY_CRSMIN_SAMPLES	4
 #define BCM4360_PHY_HWACI_ENTRIES	4
 
@@ -261,6 +262,7 @@ struct bcm4360_phy_interference {
 	bool forced;		/* sh+0x94: 0 (P2.12) */
 	u8 channel;		/* pi+0x240: channel the code was last set up for, P2.11 */
 	u32 flags;		/* pi+0xc0c: flags of the interference code: 0 (P2.11) */
+	u32 mode_applied;	/* pi+0xc3c: mode last applied by wlc_phy_interference (acphy-init) */
 	u8 noise_window[8];	/* sh+0x96: `phy_noise_window` (bcm): 0 (P1.3) */
 };
 
@@ -354,6 +356,14 @@ struct bcm4360_phy_txpwr {
 	void *ppr;
 	/* pi_ac+0x010 + core: gain index last set; 0x40 = "uninitialised" (procedure 5) */
 	u8 index[BCM4360_PHY_CORE_SLOTS];
+	/*
+	 * pi+0x216 + core: highest target power over all rates of the core, in
+	 * quarter dBm; computed by sub_0b8ca4 (wlc_phy_cmn.c) before it calls
+	 * sub_09949f. Not set on the init/channel path, so 0 here (acphy-txpower.md).
+	 */
+	s8 target_max[BCM4360_PHY_CORE_SLOTS];
+	/* pi_ac+0x44e + core: idle TSSI measured at init (acphy-init.md, section 6): 0 in the model */
+	s16 idle_tssi[BCM4360_PHY_CORE_SLOTS];
 	/* pi_ac+0x456 + core: power offset of the core (wlc_phy_txpower_core_offset_*): 0 */
 	s8 core_offset[BCM4360_PHY_CORE_SLOTS];
 	/*
@@ -375,8 +385,15 @@ struct bcm4360_phy_temp {
 	u8 chain_bitmap;	/* pi+0xc33: mask of all cores in both nibbles, P2.17 */
 	u8 pi_0xc34;		/* pi+0xc34: 0 (P2.17) */
 	s8 offset;		/* pi+0xc35: variable tempoffset (P7.4), cleared by P2.17 */
-	/* pi+0x210 and pi_ac+0x8dc: variable rawtempsense, 9 bit signed, -1 becomes 255; P6.20 */
+	/* pi+0x210: variable rawtempsense, the reference of upd_gain_wrt_temp; P6.20 */
 	s16 rawtempsense;
+	/*
+	 * pi_ac+0x8dc: the last measured temperature, written by
+	 * wlc_phy_tempsense_acphy (acphy-cal-rx section 3). Init from rawtempsense
+	 * at attach; here zero until the first tempsense (the RSSI path that reads
+	 * it is not exercised by the tests). Added by the calibrations task.
+	 */
+	s16 measured_temp;
 	u8 cal_delta;		/* pi+0xf9c: variable phycal_tempdelta, procedure 4 */
 	u8 cal_delta_default;	/* pi+0xf9e: its default: 0 (P2.4), 40 (P7.5), procedure 4 */
 	s16 cal_last;		/* pi+0x1084: temperature of the last calibration (unverified): -50 */
@@ -453,6 +470,68 @@ struct bcm4360_phy_hwaci {
 };
 
 /*
+ * The nine-byte desense set: acphy-desense.md, "The 9-byte desense set". A
+ * desense set is nine bytes; the code below indexes them by name.
+ */
+enum bcm4360_phy_desense_byte {
+	BCM4360_DESENSE_OFDM,		/* 0: OFDM sensitivity reduction, dB */
+	BCM4360_DESENSE_BPHY,		/* 1: 802.11b sensitivity reduction, dB */
+	BCM4360_DESENSE_LNA1_TBL,	/* 2: entries off the stage-1 gain table */
+	BCM4360_DESENSE_LNA2_TBL,	/* 3: the same for stage 2 */
+	BCM4360_DESENSE_LNA1_GAINLMT,	/* 4: stage-1 gain-limit entries blocked */
+	BCM4360_DESENSE_LNA2_GAINLMT,	/* 5: the same for stage 2 */
+	BCM4360_DESENSE_ELNA_BYPASS,	/* 6: bypass the external LNA */
+	BCM4360_DESENSE_NF_HIT,		/* 7: dB added to the clip thresholds */
+	BCM4360_DESENSE_ON,		/* 8: desense is in force */
+	BCM4360_DESENSE_BYTES,
+};
+
+/* number of interference records per band (acphy-desense.md, "Data") */
+#define BCM4360_PHY_INTERF_RECORDS	3
+
+/*
+ * The interference (desense) record of one channel (0x50 bytes in the object,
+ * pi_ac+0x6c8 for 2.4 GHz, pi_ac+0x7b8 for 5 GHz): acphy-desense.md, "Data",
+ * and acphy-chanspec.md annex A4. Field comments give the object offset.
+ */
+struct bcm4360_phy_interf_record {
+	u8 channel;		/* +0x00: channel number (0 = free slot) */
+	u16 bw;			/* +0x02: bandwidth bits */
+	u64 time;		/* +0x08: time of the last use */
+	u8 desense[BCM4360_DESENSE_BYTES];	/* +0x10..0x18: this channel's set */
+	s8 rssi;		/* +0x19: RSSI-based desense input */
+	u32 narrow_ring[BCM4360_PHY_HWACI_ENTRIES];	/* +0x1c: narrow-band metric */
+	u8 narrow_lo;		/* +0x2c */
+	u8 narrow_hi;		/* +0x2d */
+	u8 narrow_dwell;	/* +0x2e */
+	u32 wide_ring[BCM4360_PHY_HWACI_ENTRIES];	/* +0x30: wide-band metric */
+	u8 wide_lo;		/* +0x40 */
+	u8 wide_hi;		/* +0x41 */
+	u8 wide_dwell;		/* +0x42 */
+	u8 ring_idx;		/* +0x44: write index of the two metric rings */
+	u8 settle;		/* +0x45: settle countdown of the desense-aci engine */
+	u8 hwaci_level;		/* +0x46: hwaci current level */
+	u8 hwaci_min;		/* +0x47: hwaci minimum level seen */
+	u8 hwaci_hold;		/* +0x48: hwaci hold-down timer */
+	u8 hwaci_settle;	/* +0x49: hwaci settle countdown */
+};
+
+/*
+ * The desense state (acphy-desense.md, "Overview" and "Data"): the wanted,
+ * applied and baseline desense sets, the per-band interference records and the
+ * Bluetooth-coexistence set. All zero after attach.
+ */
+struct bcm4360_phy_desense {
+	u8 applied[BCM4360_DESENSE_BYTES];	/* pi_ac+0x656: applied last */
+	u8 base[BCM4360_DESENSE_BYTES];		/* pi_ac+0x65f: "no interference" baseline */
+	u8 total[BCM4360_DESENSE_BYTES];	/* pi_ac+0x668: wanted; [8] = pi_ac+0x670 */
+	struct bcm4360_phy_interf_record record[2][BCM4360_PHY_INTERF_RECORDS];	/* pi_ac+0x6c8 / 0x7b8 */
+	struct bcm4360_phy_interf_record *cur;	/* pi_ac+0x8a8: record of the channel */
+	u32 bt_profile;		/* pi_ac+0x8b0: Bluetooth-coexistence profile id (0 = off) */
+	u8 bt_desense[BCM4360_DESENSE_BYTES];	/* pi_ac+0x8b4: Bluetooth-coexistence set */
+};
+
+/*
  * PHY registers as they were at attach (pi_ac+0x8ea..0x8fd): acphy-attach.md,
  * procedure 6, step 4; acphy-radio.md, section 19. In the order in which they
  * are read.
@@ -487,6 +566,34 @@ struct bcm4360_phy_rssi {
 	u8 mode;		/* sh+0xa8: `rssi_mode` (bcm): 0 (P1.4) */
 };
 
+/*
+ * The calibration state block (acphy-cal-tx.md "The calibration state block",
+ * pi+0xfb8, pointer pi+0xf58). Zero after attach; owned by the calibrations
+ * task. Per core the coefficient arrays hold the five 16-bit words a, b, d, e,
+ * f in this order (the sub_09bf99 selections 12..15 = intermediate,
+ * 16..19 = final). Field comments give the object offset in the block.
+ */
+#define BCM4360_CAL_COEFFS	5	/* a, b, d, e, f per core */
+#define BCM4360_CAL_GAINREC	10	/* pre-cal transmit gain record, bytes */
+
+struct bcm4360_phy_cal_state {
+	u8 search_mode;		/* +0x00: cal[0], mphase search mode */
+	u8 phase;		/* +0x01: cal[1], phase counter (0 = idle/single-shot) */
+	u8 subphase;		/* +0x02: cal[2] */
+	u16 coef_final[BCM4360_PHY_CORES_MAX][BCM4360_CAL_COEFFS];	/* +0x04: sel 16..19 */
+	u16 coef_inter[BCM4360_PHY_CORES_MAX][BCM4360_CAL_COEFFS];	/* +0x2c: sel 12..15 */
+	u16 coef_copy[BCM4360_PHY_CORES_MAX][2];			/* +0x54: mode 2 (a, b) */
+	u8 restart_ok;		/* +0x64: restart-from-previous-coeffs allowed */
+	u8 core_flag[BCM4360_PHY_CORES_MAX];	/* +0x65 + c: gainlut loaded for the core */
+	u8 gainrec[BCM4360_PHY_CORES_MAX][BCM4360_CAL_GAINREC];	/* +0x92: pre-cal gain record */
+	u16 last_chanspec;	/* +0xba: chanspec the last calibration ran on */
+	u32 last_cal_time;	/* +0xc0: time of the last calibration (sh+0x34) */
+	u32 last_temp_time;	/* +0xc4: time of the last temperature reading */
+	u32 throttle;		/* +0xc8: set when perical decides not to calibrate */
+	s16 last_temp;		/* +0xcc: last calibration temperature */
+	u8 first_cal;		/* pi+0xf84: first calibration after an association */
+};
+
 /* calibrations: acphy-attach.md, procedure 2, steps 4 and 14, procedure 5, procedure 6, step 3 */
 struct bcm4360_phy_cal {
 	bool init_done;		/* pi+0x187: `initialized`, wlc_phy_cal_init done: 0 (procedure 5) */
@@ -502,10 +609,18 @@ struct bcm4360_phy_cal {
 	u8 acphy_0x900;		/* pi_ac+0x900: 0 (P6.8); wlc_phy_rx_iq_est_acphy */
 	u8 acphy_0x901;		/* pi_ac+0x901: 1 (P6.8); wlc_phy_rx_iq_est_acphy */
 	/*
-	 * The calibration state itself (pi+0xfb8, and the pointer pi+0xf58 to
-	 * it) is all zero after attach: it is added by the task of the
-	 * calibrations.
+	 * The calibration state block (pi+0xfb8, pointer pi+0xf58): all zero
+	 * after attach, added by the calibrations task.
 	 */
+	struct bcm4360_phy_cal_state state;
+	/* the tone / sample player (acphy-cal-tx sections 12/14) */
+	u16 tone_bbmult[BCM4360_PHY_CORES_MAX];	/* pi_ac+0x02 + 2c: bbmult saved by the tone */
+	u8 tone_bbmult_saved;			/* pi_ac+0x0a: a tone bbmult is forced */
+	/* the scan/roam calibration-result cache (acphy-cal-tx section 20) */
+	u8 scanroam_cache[BCM4360_PHY_CORES_MAX][14];	/* pi_ac+0x412 + 0xe*c */
+	/* rx IQ calibration scratch (acphy-cal-rx) */
+	u8 rxcal_loopback;			/* pi_ac+0x11a: radio loopback engaged */
+	s32 rxcal_digfilt[BCM4360_PHY_CORES_MAX];	/* pi_ac+0x8c8 + 4c: digital-filter slope */
 };
 
 /* the state of the PHY of one card */
@@ -548,6 +663,9 @@ struct bcm4360_phy {
 	u16 radio_chanspec;	/* pi+0x17e: chanspec of the radio, P2.11 */
 	u16 bw;			/* pi+0x182: bandwidth bits the PHY clock is set to: 0x1000 (P2.11) */
 	bool radio_on;		/* pi+0xf88: the radio is on; acphy-radio.md, section 4 */
+	bool init_running;	/* pi+0x186: wlc_phy_init is running (acphy-init, section 1) */
+	u16 csearch_count;	/* pi_ac+0x0c: nesting counter of the carrier search (acphy-init, H4) */
+	u8 phyreg_count;	/* pi+0x113d: nesting counter of wlc_phyreg_enter (acphy-init, H13) */
 	bool init_chan;		/* pi_ac+0x32c: the initialisation calls the channel function */
 	bool init_done;		/* pi_ac+0x32d: the PHY is initialised */
 	bool band_2g_last;	/* pi_ac+0x330: band last set up is 2.4 GHz, P6.3 */
@@ -568,6 +686,9 @@ struct bcm4360_phy {
 	/* the front end and the receiver */
 	struct bcm4360_phy_board_flags flags;
 	u8 femctrl;		/* pi_ac+0x342: kind of front end control; variable, P6.11 */
+	u8 bt_active;		/* pi+0xfa2: Bluetooth is active (coexistence); 0 by default */
+	u8 acphy_1169;		/* pi+0x1169: 40 MHz resampler override (iovar only); 0 by default */
+	u8 acphy_116a;		/* pi+0x116a: set by sub_0a4adc; read by out-of-scope code */
 	u16 rpcal2g;		/* sh+0xcc: variable, P6.11 */
 	u16 rpcal5gb[BCM4360_PHY_SUBBANDS_5G];	/* sh+0xce..0xd4: rpcal5gb0..3, P6.11 */
 	u8 cckdigfilttype;	/* pi_ac+0x8fe: digital filter for CCK; variable, default 1, P6.13 */
@@ -582,6 +703,17 @@ struct bcm4360_phy {
 	struct bcm4360_phy_rxgains rxgains[BCM4360_PHY_RXGAIN_BANDS][BCM4360_PHY_CORES_MAX];
 	/* pi_ac+0x64a: number of entries of the receive gain stages: 2, 6, 7, 10, 8, 8 (P6.10) */
 	u8 rxgain_stage_entries[BCM4360_PHY_RXGAIN_STAGES];
+	/*
+	 * Receive gain stage tables (acphy-chanspec.md, 9): gain in dB and code of
+	 * entry k of stage s of core c, and the upper gain limit up to a stage.
+	 * Filled by the receive gain code (acphy-rxgain); zero until then.
+	 */
+	s8 rxgain_gain[BCM4360_PHY_CORES_MAX][BCM4360_PHY_RXGAIN_STAGES][BCM4360_PHY_RXGAIN_ENTRIES];	/* pi_ac+0x46a */
+	u8 rxgain_code[BCM4360_PHY_CORES_MAX][BCM4360_PHY_RXGAIN_STAGES][BCM4360_PHY_RXGAIN_ENTRIES];	/* pi_ac+0x4a6 */
+	u8 rxgain_max[BCM4360_PHY_RXGAIN_STAGES];	/* pi_ac+0x650 */
+	u8 rxgain_trloss[BCM4360_PHY_CORES_MAX];	/* pi_ac+0x45f + 3*core: T/R switch loss in dB */
+	u8 rxgain_bypass[BCM4360_PHY_CORES_MAX];	/* pi_ac+0x460 + 3*core: T/R switch bypasses the ext LNA (acphy-desense A5/A6) */
+	s8 rssi_gain_corr[BCM4360_PHY_CORES_MAX];	/* pi+0x212: rx gain error correction (acphy-chanspec, 5 step 32) */
 	struct bcm4360_phy_rxgainerr rxgainerr[BCM4360_PHY_BANDS];
 	/* pi+0x1fc + 4 * band + core: noise level in dBm: -70 - noiselvl..a<c>; P6.23, P6.24 */
 	s8 noiselvl[BCM4360_PHY_BANDS][BCM4360_PHY_CORES_MAX];
@@ -596,6 +728,7 @@ struct bcm4360_phy {
 	struct bcm4360_phy_crsmincal crsmincal;
 	struct bcm4360_phy_hirssi hirssi;
 	struct bcm4360_phy_hwaci hwaci;
+	struct bcm4360_phy_desense desense;
 
 	/*
 	 * Values of unknown purpose that attach sets. (Left out: the areas of
@@ -616,6 +749,14 @@ struct bcm4360_phy {
 	u8 acphy_0x8e6;		/* pi_ac+0x8e6: 1 (P6.3); written by the channel look-up */
 	u8 acphy_0x8e7;		/* pi_ac+0x8e7: 1 (P6.3); read by an iovar */
 	u8 acphy_0x8e8;		/* pi_ac+0x8e8: 0 (P6.3) */
+
+	/*
+	 * State of the debug/iovar override functions of acphy-rxgain (sections
+	 * 11 and 12); not on the init/channel/band path. Zero after attach.
+	 */
+	u8 lpf_hpc_ovr_active;				/* pi_ac+0x308 */
+	u16 lpf_hpc_ovr_save[BCM4360_PHY_CORES_MAX][2];	/* pi_ac+0x30a */
+	u16 dig_lpf_ovr_save[10];			/* pi+0xf6e */
 };
 
 /*
@@ -665,27 +806,154 @@ bool bcm4360_phy_get_var(const struct bcm4360_phy *phy, const char *name, u32 in
 			 s32 *value);
 
 /*
- * Functions of later tasks that the code of this task calls. Until their
- * tasks are done they are defined in open/phy/phy_todo.c and do nothing.
+ * Initialisation and channel set (open/phy/phy_init.c, open/phy/phy_chanspec.c).
+ * The public entry points (names and arguments are the contract with the tests).
  */
+
+/* acphy-init.md, section 1 (wlc_phy_init) */
+void bcm4360_phy_init(struct bcm4360_phy *phy, u16 chanspec);
+
+/* acphy-chanspec.md, section 4 (wlc_phy_chanspec_set) */
+void bcm4360_phy_chanspec_set(struct bcm4360_phy *phy, u16 chanspec);
+
+/* acphy-init.md, H13 (wlc_acphy_set_scramb_dyn_bw_en) */
+void bcm4360_phy_set_scramb_dyn_bw_en(struct bcm4360_phy *phy, bool enable);
+
+/* acphy-init.md, H12 (wlc_phy_ldpc_override_set -> wlc_phy_update_rxldpc_acphy) */
+void bcm4360_phy_ldpc_override_set(struct bcm4360_phy *phy, bool ldpc);
 
 /*
  * acphy-init.md, section 4 (sub_0a04c2, wlc_phy_set_regtbl_on_pwron_acphy):
  * release the overrides of the radio control, load the static tables. Called
- * by acphy-radio.md, section 4, "On", step 6.
+ * by the initialisation and by acphy-radio.md, section 4, "On", step 6.
  */
 void bcm4360_phy_set_regtbl_on_pwron_acphy(struct bcm4360_phy *phy);
 
 /*
  * acphy-chanspec.md, section 5 (sub_0a7089, wlc_phy_chanspec_set_acphy): the
- * channel function. Called by acphy-radio.md, section 4, "On", step 6.
+ * channel function. Called by the initialisation, by wlc_phy_chanspec_set and
+ * by acphy-radio.md, section 4, "On", step 6.
  */
 void bcm4360_phy_chanspec_set_acphy(struct bcm4360_phy *phy, u16 chanspec);
+
+/*
+ * Helpers of the initialisation that the channel function and later PHY code
+ * reuse (open/phy/phy_init.c). The comment names the section of acphy-init.md.
+ */
+void bcm4360_phy_chanspec_shm_set(struct bcm4360_phy *phy, u16 chanspec);	/* section 2 */
+void bcm4360_phy_set_reg_on_reset_acphy(struct bcm4360_phy *phy);		/* section 5 (sub_0a0be4) */
+void bcm4360_phy_hirssi_set_ucode_params(struct bcm4360_phy *phy);		/* section 3a */
+void bcm4360_phy_stay_in_carriersearch(struct bcm4360_phy *phy, bool enable);	/* H4 */
+void bcm4360_phy_resetcca(struct bcm4360_phy *phy);				/* H5 */
+void bcm4360_phy_rxcore_setstate(struct bcm4360_phy *phy, u8 rxmask);		/* H7 */
+void bcm4360_phy_deaf(struct bcm4360_phy *phy, bool mode);			/* H9 */
+bool bcm4360_phy_hirssi_shmem_read_clear(struct bcm4360_phy *phy);		/* H11 (sub_092500) */
+
+/*
+ * Helpers of the channel function that later PHY code reuses
+ * (open/phy/phy_chanspec.c). The comment names the section of acphy-chanspec.md.
+ */
+u8 bcm4360_phy_get_chan_freq_range(struct bcm4360_phy *phy, u8 channel);	/* section 6 */
+u32 bcm4360_phy_chanspec_bandrange_get(struct bcm4360_phy *phy, u16 chanspec);	/* section 7 */
+u8 bcm4360_phy_get_rxgainerr(struct bcm4360_phy *phy, s16 *err);		/* section 8 */
+/* section 9 (sub_08f086): split a wanted gain into the six stage codes; result: gain reached */
+u8 bcm4360_phy_rxgainctrl_encode_gain(struct bcm4360_phy *phy, u8 core, u8 wanted,
+				      bool include_tr, u8 *codes);
+
+/*
+ * Functions of later tasks that the code of this task calls. Until their
+ * tasks are done they are defined in open/phy/phy_todo.c and do nothing.
+ */
 
 /*
  * acphy-attach.md, "Scope" (sub_0b56ce, wlc_phy_timercb_phycal): what the
  * timer "phycal" does; attach (procedure 2, step 15) only registers it.
  */
 void bcm4360_phy_timer_phycal(struct bcm4360_phy *phy);
+
+/* acphy-rxgain: front end, analog filters, reciprocity (leaves of the channel function) */
+void bcm4360_phy_set_regtbl_femctrl_acphy(struct bcm4360_phy *phy);		/* sub_0a6b0f (INIT) */
+void bcm4360_phy_set_regtbl_on_band_change_acphy(struct bcm4360_phy *phy);	/* sub_09e378 (BANDCHG) */
+void bcm4360_phy_set_regtbl_on_bw_change_acphy(struct bcm4360_phy *phy);	/* sub_09eaf9 (BWCHG) */
+void bcm4360_phy_set_regtbl_on_chan_change_acphy(struct bcm4360_phy *phy,
+						 const u16 *entry);		/* sub_0a4adc */
+
+/*
+ * acphy-rxgain, sections 10 to 12: the receive-gain / LPF / dig-LPF debug
+ * overrides (iovar path; not on the init/channel/band path, not in the traces).
+ */
+void bcm4360_phy_calc_extra_init_gain_acphy(struct bcm4360_phy *phy, u8 want, u8 *out);
+void bcm4360_phy_rfctrl_override_rxgain_acphy(struct bcm4360_phy *phy, u8 mode,
+					      const u8 *codes, u16 *save);
+void bcm4360_phy_lpf_hpc_override_acphy(struct bcm4360_phy *phy, bool apply);
+void bcm4360_phy_dig_lpf_override_acphy(struct bcm4360_phy *phy, u8 mode);
+
+/* acphy-desense: receive gain control and desense (leaves of the channel function) */
+void *bcm4360_phy_desense_getset_chanidx_acphy(struct bcm4360_phy *phy, u16 chanspec,
+					       bool set);			/* sub_092efb */
+void bcm4360_phy_desense_calc_total_acphy(struct bcm4360_phy *phy);		/* sub_0909fd */
+void bcm4360_phy_rxgainctrl_set_gaintbls_acphy(struct bcm4360_phy *phy, bool init,
+					       bool bandchg, bool bwchg);	/* sub_09af05 */
+void bcm4360_phy_rxgainctrl_set_init_clip_gain_acphy(struct bcm4360_phy *phy);	/* sub_09a121 */
+void bcm4360_phy_desense_apply_acphy(struct bcm4360_phy *phy, u8 flag);		/* sub_09a539 */
+void bcm4360_phy_hwaci_setup_acphy(struct bcm4360_phy *phy, bool enable, bool init);
+void bcm4360_phy_aci_w2nb_setup_acphy(struct bcm4360_phy *phy, bool on);
+void bcm4360_phy_desense_aci_reset_params_acphy(struct bcm4360_phy *phy, bool apply,
+						bool a, bool b);
+
+/*
+ * acphy-desense: carrier-sense minimum-power calibration and the periodic
+ * hwaci engine (open/phy/phy_desense.c). wlc_phy_crs_min_pwr_cal_acphy is
+ * called by the channel-change set-up (sub_0a4adc, acphy-chanspec.md A1 step 9,
+ * with restore = 1) and by the noise-sample path (restore = 0).
+ */
+void bcm4360_phy_crs_min_pwr_cal_acphy(struct bcm4360_phy *phy, u8 restore);	/* C1 */
+void bcm4360_phy_noise_sample_request_crsmincal(struct bcm4360_phy *phy);	/* C4 */
+void bcm4360_phy_ed_thres_acphy(struct bcm4360_phy *phy, s32 *val, bool set);	/* C5 */
+void bcm4360_phy_hwaci_engine_acphy(struct bcm4360_phy *phy);			/* E1 */
+
+/* acphy-txpower: transmit power (leaves of the channel function and of section 6) */
+void bcm4360_phy_txpwr_by_index_acphy(struct bcm4360_phy *phy, u8 coremask, s8 index);
+void bcm4360_phy_txpwrctrl_enable_acphy(struct bcm4360_phy *phy, bool on);
+void bcm4360_phy_txpwrctrl_idle_tssi_meas_acphy(struct bcm4360_phy *phy);	/* sub_0affa9 */
+
+/*
+ * acphy-txpower: leaves called by the band-change function of acphy-rxgain
+ * (sub_09e378, open/phy/phy_rxgain.c) - the TSSI radio-path override enable and
+ * the transmit-calibration coefficient apply.
+ */
+void bcm4360_phy_tssi_phy_setup_acphy(struct bcm4360_phy *phy, u8 mode);		/* sub_08f9b4 */
+/* sub_09c161: `set` = 14 bytes per core, or NULL for all zeros (the band change) */
+void bcm4360_phy_txcal_coeffs_apply_acphy(struct bcm4360_phy *phy, const u8 *set);
+
+/*
+ * acphy-txpower: the closed-loop set-up and the pure/getter functions. These
+ * are reached only through phy-cmn or the calibrations (not in the compared
+ * PHY-API stages); they are provided for completeness and to keep the leaves
+ * they call referenced.
+ */
+void bcm4360_phy_txpower_recalc_target_acphy(struct bcm4360_phy *phy);		/* sub_09949f */
+void bcm4360_phy_txpower_core_offset_set_acphy(struct bcm4360_phy *phy,
+					       const s8 *offsets);		/* sub_099528 */
+u8 bcm4360_phy_tssivisible_thresh_acphy(struct bcm4360_phy *phy);		/* section 16 */
+void bcm4360_phy_precal_txgain_acphy(struct bcm4360_phy *phy, u8 *records);	/* sub_0b1227 */
+
+/*
+ * Calibrations (open/phy/phy_cal.c): the public entry points the tests call
+ * and the tone / sample player that the transmit-power idle measurement shares.
+ * docs/re/spec/acphy-cal-tx.md, docs/re/spec/acphy-cal-rx.md.
+ */
+
+/* wlc_phy_cals_acphy(pi, phase): run or advance a calibration (acphy-cal-tx section 1) */
+void bcm4360_phy_cals(struct bcm4360_phy *phy, u32 phase);
+
+/* wlc_phy_tempsense_acphy: measure the die temperature in degC (acphy-cal-rx section 3) */
+u32 bcm4360_phy_tempsense(struct bcm4360_phy *phy);
+
+/* wlc_phy_tx_tone_acphy (acphy-cal-tx section 12); result 0, or nonzero on failure */
+u32 bcm4360_phy_tx_tone_acphy(struct bcm4360_phy *phy, s32 freq, u16 amp,
+			      u8 dont_deaf, u8 rfseq, u8 set_bbmult);
+/* wlc_phy_stopplayback_acphy (acphy-cal-tx section 14) */
+void bcm4360_phy_stopplayback_acphy(struct bcm4360_phy *phy);
 
 #endif
