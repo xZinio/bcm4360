@@ -577,7 +577,20 @@ class Bcm4360(Chip):
         return v
 
     # hooks for the indirect spaces; refined as the PHY is understood
+    IQEST_CTRL = 0x270          # receive IQ power estimate: bit 0 = in progress
+
     def phy_read(self, addr, value):
+        # The IQ-power-estimate control bit clears when the measurement is
+        # done; the hardware clears it, the driver polls it, then reads the
+        # per-core accumulators PHY(c*0x200+0x6c0..0x6c5).  The model has no
+        # real measurement, but clearing the bit lets the driver's read and
+        # coefficient computation run, so the coefficients are deterministic
+        # and identical for the object and the open code (the accumulators
+        # stay 0, so the coefficients follow from zero powers on both sides).
+        # Used only by the receive IQ calibration (acphy-cal-rx.md,
+        # wlc_phy_rx_iq_est_acphy).
+        if addr == self.IQEST_CTRL:
+            return value & ~1
         return value
 
     def phy_written(self, addr, value):

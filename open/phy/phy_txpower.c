@@ -748,61 +748,12 @@ static void phy_conv_reset_pulse(struct bcm4360_phy *phy)
 	hw_udelay(1);
 }
 
-/* read-then-write: reproduces a "R addr; W addr=val" record pair (the write
- * goes to the data register, so it does not advance the write pacing) */
-static void phy_rw(struct bcm4360_phy_io *io, u16 addr, u16 val)
-{
-	bcm4360_phy_mod(io, addr, 0xffff, val);
-}
-
 /*
- * The transmitter test tone and stopping playback (acphy-cal-tx). No
- * specification exists yet; the accesses for the amplitude-0 idle measurement
- * are reconstructed from the object trace shown by the comparison test (see
- * docs/re/questions/phy-txpower.md).
+ * The transmitter test tone and stopping playback are now fully specified in
+ * docs/re/spec/acphy-cal-tx.md and implemented in open/phy/phy_cal.c as
+ * bcm4360_phy_tx_tone_acphy / bcm4360_phy_stopplayback_acphy; the idle-TSSI
+ * measurement (phy_poll_samps_war, step 9/12) calls them with amplitude 0.
  */
-static void phy_tx_tone(struct bcm4360_phy *phy, u16 khz, u16 amplitude)
-{
-	struct bcm4360_phy_io *io = &phy->io;
-	u16 m, s400;
-	u32 c;
-
-	(void)khz;
-	(void)amplitude;
-	/* reconstructed from the test diff */
-	for (c = 0; c < phy_cores(phy); c++)
-		phy_get_tx_bbmult(phy, &m, c);
-	m = 0;
-	for (c = 0; c < phy_cores(phy); c++)
-		phy_set_tx_bbmult(phy, &m, c);
-	bcm4360_phy_resetcca(phy);
-	phy_rw(io, ACPHY_REG_0x471, 0);
-	bcm4360_phy_write(io, ACPHY_REG_0x463, 0);
-	bcm4360_phy_write(io, ACPHY_REG_0x461, 0xffff);
-	bcm4360_phy_write(io, ACPHY_REG_0x462, 0x003c);
-	s400 = bcm4360_phy_read(io, ACPHY_REG_0x400);
-	bcm4360_phy_or(io, ACPHY_REG_0x400, 0x0001);
-	bcm4360_phy_or(io, ACPHY_REG_0x460, 0);
-	bcm4360_phy_and(io, ACPHY_REG_0x460, 0xfffe);
-	bcm4360_phy_or(io, ACPHY_REG_0x382, 0);
-	bcm4360_phy_or(io, ACPHY_REG_0x460, 0x0001);
-	(void)bcm4360_phy_read(io, ACPHY_REG_0x403);
-	bcm4360_phy_write(io, ACPHY_REG_0x400, s400);
-}
-
-static void phy_stopplayback(struct bcm4360_phy *phy)
-{
-	struct bcm4360_phy_io *io = &phy->io;
-	u16 m = 0;
-	u32 c;
-
-	/* reconstructed from the test diff */
-	(void)bcm4360_phy_read(io, ACPHY_REG_0x464);
-	phy_rw(io, ACPHY_REG_0x460, 0x0001);
-	for (c = 0; c < phy_cores(phy); c++)
-		phy_set_tx_bbmult(phy, &m, c);
-	bcm4360_phy_resetcca(phy);
-}
 
 /*
  * acphy-txpower.md, section 28: the Bluetooth-coexistence overrides. No access
@@ -933,7 +884,9 @@ static void phy_poll_samps_war(struct bcm4360_phy *phy, s16 *out, bool idle,
 	bcm4360_phy_mod(io, ACPHY_REG_0x019e, 0x0002, (u16)(stall << 1));	/* step 6 */
 	phy_btcx_override_enable(phy);						/* step 7 */
 	hw_udelay(100);								/* step 8 */
-	phy_tx_tone(phy, 2000, idle ? 0 : 0xb5);				/* step 9 */
+	/* the tone / sample player is now fully specified in acphy-cal-tx and
+	 * implemented in open/phy/phy_cal.c (idle: amplitude 0, sample player) */
+	bcm4360_phy_tx_tone_acphy(phy, 2000, idle ? 0 : 0xb5, 0, 0, 0);		/* step 9 */
 	hw_udelay(100);								/* step 10 */
 	{
 		u8 n = fixed8 ? 3 :						/* step 11 */
@@ -942,7 +895,7 @@ static void phy_poll_samps_war(struct bcm4360_phy *phy, s16 *out, bool idle,
 
 		phy_poll_samps(phy, out, true, n, adc, core);
 	}
-	phy_stopplayback(phy);							/* step 12 */
+	bcm4360_phy_stopplayback_acphy(phy);					/* step 12 */
 	phy_btcx_override_disable(phy);						/* step 13 */
 	bcm4360_phy_mod(io, ACPHY_REG_0x019e, 0x0002, 0x0002);			/* step 14 */
 

@@ -297,7 +297,12 @@ def phy_reference(model, variables='default', session='full'):
             # single-shot calibration (phase 0): runs the whole cal sequence
             m.call('wlc_phy_cals_acphy', r.pi, 0)
         elif step == 'tempsense':
+            # tempsense is really called by the cal scheduler with the MAC
+            # already suspended; do the same, so the MAC-control write of the
+            # (replayed, side-effect-free) suspend is outside the compared stage
+            m.call('wlc_suspend_mac_and_wait', d.wlc)
             m.call('wlc_phy_tempsense_acphy', r.pi)
+            m.call('wlc_enable_mac', d.wlc)
         else:
             set_channel(s, step)
     ab.close_stages(d, r.stages)

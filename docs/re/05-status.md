@@ -34,7 +34,7 @@ scenarios named.
 | Front end control, analog filters | `wlc_phy_ac.c` | [acphy-rxgain](spec/acphy-rxgain.md) | `open/phy/phy_rxgain.c` | part of `phy-init`/`phy-chanspec`, 0 differences |
 | Transmit power control | `wlc_phy_ac.c`, `wlc_ppr.c` | [acphy-txpower](spec/acphy-txpower.md) | `open/phy/phy_txpower.c` | part of `phy-init`/`phy-chanspec`, 0 differences |
 | Receive gain control, desense, interference mitigation | `wlc_phy_ac.c` | [acphy-desense](spec/acphy-desense.md) | `open/phy/phy_desense.c` | part of `phy-init`/`phy-chanspec`, 0 differences |
-| Calibrations (TX IQ/LO, RX IQ, temperature) | `wlc_phy_ac.c` | not yet | - | (run only after association; not in the session) |
+| Calibrations (TX IQ/LO, RX IQ, temperature) | `wlc_phy_ac.c` | [acphy-cal-tx](spec/acphy-cal-tx.md), [acphy-cal-rx](spec/acphy-cal-rx.md) | `open/phy/phy_cal.c` | `phy-cal`: 141130 accesses, 0 differences (scheduler, TX IQ/LO, RX IQ, temperature sense, tone) |
 | PHY common layer, interface to the MAC | `wlc_phy_cmn.c` | - | - | - |
 | Backplane, cores, PCIe bridge | `siutils.c`, `aiutils.c`, `nicpci.c` | - | - | - |
 | SROM, OTP, variables | `bcmsrom.c`, `bcmotp.c` | format only, in `tools/re/srom.py` | - | - |
@@ -63,13 +63,36 @@ by access. **The whole session now matches the object with nothing excluded**:
 PHY layer is about 280 KB of C in `open/` (attach, init, channel set, radio,
 front end, receive gain and desense, transmit power).
 
-Two small notes on the clean-room separation, kept honest:
-* Two functions the idle-TSSI measurement calls, `wlc_phy_tx_tone_acphy` and
-  `wlc_phy_stopplayback_acphy`, have no specification yet (they belong to the
-  transmit calibration, not written). Their amplitude-0 accesses were
-  reconstructed by the implementer from the comparison test's observed
-  behaviour, which `implementing.md` permits, not from a specification. When
-  the calibration is specified this should be revisited.
+The calibrations (which run after an association, not during the session
+above) are also reproduced exactly (`phy-cal`, 141,130 accesses, 0
+differences): the calibration scheduler, the transmit IQ/LO calibration, the
+receive IQ calibration, temperature sense and the tone generation. The
+receive calibration's coefficients are computed from the measured signal
+powers; the model produces no real signal, so the powers are zero and the
+coefficients come out zero on both sides - they match, but a real card is
+needed to confirm the *values* of a live calibration, as for every measured
+quantity (see the assumptions above).
+
+So **the whole AC-PHY - the part no open driver has - is reimplemented and
+reproduces the object for everything the emulator exercises.** What is left
+of the hardware layer is the MAC (bring-up is specified; the data path is
+not) and, for all of it, confirmation against a real card.
+
+Two notes on the clean-room separation, kept honest:
+* For the receive calibration, whose specification had gaps and errors that
+  only the object's own trace resolved, the implementer went beyond the
+  written specification and the comparison test and observed the object's
+  register accesses directly (dumping the trace of the calibration, watching
+  which registers it touched). `implementing.md` permits working from the
+  object's observed *behaviour* - the specifications and the comparison test
+  are themselves such observations - and behaviour (which registers are
+  written, in which order) is not the object's code or its expression, which
+  the implementer never saw. But this is more than the intended split, where
+  the analyst observes and the implementer works from the specification; it
+  is noted so the reader knows the receive-calibration code was shaped partly
+  by direct observation of the object running, and the specification
+  ([acphy-cal-rx](spec/acphy-cal-rx.md)) still needs the corrections the
+  implementer found (kept in [questions/phy-cal.md](questions/phy-cal.md)).
 * What is verified is that the open code makes the same hardware accesses as
   the object **in the emulator**, whose card model uses assumed identity
   values (below). It is not yet run on a real card.
