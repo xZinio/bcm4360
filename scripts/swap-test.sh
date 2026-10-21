@@ -93,6 +93,10 @@ check_link() {
 	gw=$(ip -4 route show default dev "$iface" | awk '{ print $3; exit }')
 	if [ -n "$gw" ] && ping -I "$iface" -c 3 -W 2 -q "$gw" >/dev/null; then
 		say "gateway $gw answers"
+	# Some campus gateways drop ICMP (seen on eduroam); their ARP answer to the
+	# ping still shows the link carries traffic both ways.
+	elif [ -n "$gw" ] && ip neigh show "$gw" dev "$iface" | grep -qE 'REACHABLE|STALE|DELAY|PROBE'; then
+		say "gateway $gw does not answer ping but answers ARP"
 	else
 		say "FAIL: gateway ${gw:-(none)} does not answer"; ok=1
 	fi

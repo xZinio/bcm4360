@@ -1091,6 +1091,61 @@ wl_set_set_sharedkey(struct net_device *dev, struct cfg80211_connect_params *sme
 	return err;
 }
 
+/*
+ * Broadcom's core chooses among the APs of an SSID by signal strength alone.
+ * That puts dual-band networks on 2.4 GHz most of the time, and 2.4 GHz is
+ * where this core stalls on busy enterprise networks (see README). Its
+ * join_pref list, in the layout of brcmfmac's struct brcmf_join_pref_params,
+ * can give 5 GHz APs a bonus before that comparison, as brcmfmac does. It is
+ * set before every join, so a new value of the parameter applies to the next.
+ * Loaded with 0, the driver never touches the core's own setting (the
+ * behaviour of 1.0.2); 0 written later goes back to choosing by signal only.
+ */
+static uint prefer_5ghz = 15;
+module_param(prefer_5ghz, uint, 0644);
+MODULE_PARM_DESC(prefer_5ghz, "dB added to the signal of 5 GHz APs when picking one (0: by signal only)");
+
+#define JOIN_PREF_RSSI		1
+#define JOIN_PREF_RSSI_DELTA	4
+#define JOIN_PREF_BAND_5G	1	/* WLC_BAND_5G */
+
+static void
+wl_set_join_pref(struct net_device *dev)
+{
+	static int shown = -2;	/* bonus last set; -1: rejected, -2: never set */
+	u8 pref[] = {
+		JOIN_PREF_RSSI_DELTA, 2, 0, JOIN_PREF_BAND_5G,
+		JOIN_PREF_RSSI, 2, 0, 0
+	};
+	int bonus = min(prefer_5ghz, 60u);
+	s32 err;
+
+	if (bonus == 0 && shown == -2)
+		return;
+
+	pref[2] = bonus;
+	if (bonus)
+		err = wl_dev_bufvar_set(dev, "join_pref", (s8 *)pref, sizeof(pref));
+	else
+		err = wl_dev_bufvar_set(dev, "join_pref", (s8 *)pref + 4, 4);
+	if (err) {
+		if (shown != -1)
+			printk(KERN_NOTICE KBUILD_MODNAME ": %s: the core rejected join_pref (%d), "
+				"so it picks APs by signal only\n", dev->name, err);
+		shown = -1;
+		return;
+	}
+	if (bonus != shown) {
+		if (bonus)
+			printk(KERN_INFO KBUILD_MODNAME ": %s: preferring 5 GHz APs by %d dB\n",
+				dev->name, bonus);
+		else
+			printk(KERN_INFO KBUILD_MODNAME ": %s: picking APs by signal only\n",
+				dev->name);
+		shown = bonus;
+	}
+}
+
 static s32
 wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
                     struct cfg80211_connect_params *sme)
@@ -1130,6 +1185,8 @@ wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 
 	valc = 1;
 	wl_dev_bufvar_set(dev, "wsec_restrict", &valc, 1);
+
+	wl_set_join_pref(dev);
 
 	/* Remembered to name the right AP if the join fails. */
 	if (sme->bssid) {

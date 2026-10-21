@@ -79,5 +79,12 @@ if [ -n "${BCM4360_WD_TEST:-}" ]; then
 	echo RELOAD
 	exit 0
 fi
-modprobe -r bcm4360
+# rmmod, not modprobe -r: that also unloads cfg80211, and the cfg80211 that
+# loads again registers nl80211 under a new netlink id, which the running
+# wpa_supplicant never looks up again. It then cannot take any Wi-Fi
+# interface ("couldn't grab this interface") until it restarts, and Wi-Fi
+# stays off until a reboot (2026-10-21). The restart also clears whatever
+# it kept of the old interface.
+rmmod bcm4360
 modprobe bcm4360 || { echo "bcm4360 did not load, falling back to wl"; modprobe wl; }
+systemctl try-restart wpa_supplicant.service

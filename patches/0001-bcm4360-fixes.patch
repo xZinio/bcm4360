@@ -72,9 +72,13 @@ Changes, all in the open (ISC) wrapper; Broadcom's binary core is untouched:
    completes it, after which cfg80211 refused every scan with -EBUSY and
    no network was found. Report the scan aborted on link loss, and after
    15 s in any case.
+ * AP choice: the core picks among the APs of an SSID by signal alone, which
+   favours 2.4 GHz, where it stalls on busy enterprise networks. Before
+   every join, give 5 GHz APs a bonus of prefer_5ghz dB (module parameter,
+   default 15) through the core's join_pref setting, in brcmfmac's layout.
 
 diff --git a/src/wl/sys/wl_cfg80211_hybrid.c b/src/wl/sys/wl_cfg80211_hybrid.c
-index a70d888..99f22a3 100644
+index a70d888..b3800f7 100644
 --- a/src/wl/sys/wl_cfg80211_hybrid.c
 +++ b/src/wl/sys/wl_cfg80211_hybrid.c
 @@ -87,6 +87,13 @@ static s32 wl_cfg80211_get_station(struct wiphy *wiphy,
@@ -286,10 +290,74 @@ index a70d888..99f22a3 100644
  
  	return err;
  }
-@@ -1061,9 +1131,15 @@ wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
+@@ -1021,6 +1091,61 @@ wl_set_set_sharedkey(struct net_device *dev, struct cfg80211_connect_params *sme
+ 	return err;
+ }
+ 
++/*
++ * Broadcom's core chooses among the APs of an SSID by signal strength alone.
++ * That puts dual-band networks on 2.4 GHz most of the time, and 2.4 GHz is
++ * where this core stalls on busy enterprise networks (see README). Its
++ * join_pref list, in the layout of brcmfmac's struct brcmf_join_pref_params,
++ * can give 5 GHz APs a bonus before that comparison, as brcmfmac does. It is
++ * set before every join, so a new value of the parameter applies to the next.
++ * Loaded with 0, the driver never touches the core's own setting (the
++ * behaviour of 1.0.2); 0 written later goes back to choosing by signal only.
++ */
++static uint prefer_5ghz = 15;
++module_param(prefer_5ghz, uint, 0644);
++MODULE_PARM_DESC(prefer_5ghz, "dB added to the signal of 5 GHz APs when picking one (0: by signal only)");
++
++#define JOIN_PREF_RSSI		1
++#define JOIN_PREF_RSSI_DELTA	4
++#define JOIN_PREF_BAND_5G	1	/* WLC_BAND_5G */
++
++static void
++wl_set_join_pref(struct net_device *dev)
++{
++	static int shown = -2;	/* bonus last set; -1: rejected, -2: never set */
++	u8 pref[] = {
++		JOIN_PREF_RSSI_DELTA, 2, 0, JOIN_PREF_BAND_5G,
++		JOIN_PREF_RSSI, 2, 0, 0
++	};
++	int bonus = min(prefer_5ghz, 60u);
++	s32 err;
++
++	if (bonus == 0 && shown == -2)
++		return;
++
++	pref[2] = bonus;
++	if (bonus)
++		err = wl_dev_bufvar_set(dev, "join_pref", (s8 *)pref, sizeof(pref));
++	else
++		err = wl_dev_bufvar_set(dev, "join_pref", (s8 *)pref + 4, 4);
++	if (err) {
++		if (shown != -1)
++			printk(KERN_NOTICE KBUILD_MODNAME ": %s: the core rejected join_pref (%d), "
++				"so it picks APs by signal only\n", dev->name, err);
++		shown = -1;
++		return;
++	}
++	if (bonus != shown) {
++		if (bonus)
++			printk(KERN_INFO KBUILD_MODNAME ": %s: preferring 5 GHz APs by %d dB\n",
++				dev->name, bonus);
++		else
++			printk(KERN_INFO KBUILD_MODNAME ": %s: picking APs by signal only\n",
++				dev->name);
++		shown = bonus;
++	}
++}
++
+ static s32
+ wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
+                     struct cfg80211_connect_params *sme)
+@@ -1061,9 +1186,17 @@ wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
  	valc = 1;
  	wl_dev_bufvar_set(dev, "wsec_restrict", &valc, 1);
  
++	wl_set_join_pref(dev);
++
 +	/* Remembered to name the right AP if the join fails. */
  	if (sme->bssid) {
  		memcpy(wl->profile->bssid, sme->bssid, ETHER_ADDR_LEN);
@@ -302,7 +370,7 @@ index a70d888..99f22a3 100644
  	else {
  		memset(wl->profile->bssid, 0, ETHER_ADDR_LEN);
  	}
-@@ -1102,11 +1178,25 @@ wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev, u16 reason_c
+@@ -1102,11 +1235,25 @@ wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev, u16 reason_c
  {
  	struct wl_cfg80211_priv *wl = wiphy_to_wl(wiphy);
  	scb_val_t scbval;
@@ -329,7 +397,7 @@ index a70d888..99f22a3 100644
  		scbval.val = reason_code;
  		memcpy(&scbval.ea, &wl->bssid, ETHER_ADDR_LEN);
  		scbval.val = htod32(scbval.val);
-@@ -1115,33 +1205,40 @@ wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev, u16 reason_c
+@@ -1115,33 +1262,40 @@ wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev, u16 reason_c
  			WL_ERR(("error (%d)\n", err));
  			return err;
  		}
@@ -375,7 +443,7 @@ index a70d888..99f22a3 100644
  	s32 err = 0;
  	s32 disable = 0;
  
-@@ -1149,16 +1246,12 @@ wl_cfg80211_set_tx_power(struct wiphy *wiphy, enum tx_power_setting type, s32 db
+@@ -1149,16 +1303,12 @@ wl_cfg80211_set_tx_power(struct wiphy *wiphy, enum tx_power_setting type, s32 db
  	case NL80211_TX_POWER_AUTOMATIC:
  		break;
  	case NL80211_TX_POWER_LIMITED:
@@ -395,7 +463,7 @@ index a70d888..99f22a3 100644
  		break;
  	}
  
-@@ -1170,16 +1263,12 @@ wl_cfg80211_set_tx_power(struct wiphy *wiphy, enum tx_power_setting type, s32 db
+@@ -1170,16 +1320,12 @@ wl_cfg80211_set_tx_power(struct wiphy *wiphy, enum tx_power_setting type, s32 db
  		return err;
  	}
  
@@ -414,7 +482,7 @@ index a70d888..99f22a3 100644
  
  	return err;
  }
-@@ -1197,17 +1286,16 @@ static s32 wl_cfg80211_get_tx_power(struct wiphy *wiphy, s32 *dbm)
+@@ -1197,17 +1343,16 @@ static s32 wl_cfg80211_get_tx_power(struct wiphy *wiphy, s32 *dbm)
  {
  	struct wl_cfg80211_priv *wl = wiphy_to_wl(wiphy);
  	struct net_device *ndev = wl_to_ndev(wl);
@@ -436,7 +504,7 @@ index a70d888..99f22a3 100644
  
  	return err;
  }
-@@ -1535,8 +1623,10 @@ wl_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
+@@ -1535,8 +1680,10 @@ wl_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
  	s32 rate;
  	s32 err = 0;
  
@@ -448,7 +516,7 @@ index a70d888..99f22a3 100644
  	}
  
  	err = wl_dev_ioctl(dev, WLC_GET_RATE, &rate, sizeof(rate));
-@@ -1573,6 +1663,33 @@ wl_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
+@@ -1573,6 +1720,33 @@ wl_cfg80211_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
  	return err;
  }
  
@@ -482,7 +550,7 @@ index a70d888..99f22a3 100644
  static s32
  wl_cfg80211_set_power_mgmt(struct wiphy *wiphy, struct net_device *dev,
                             bool enabled, s32 timeout)
-@@ -1887,6 +2004,7 @@ static struct cfg80211_ops wl_cfg80211_ops = {
+@@ -1887,6 +2061,7 @@ static struct cfg80211_ops wl_cfg80211_ops = {
  	.join_ibss = wl_cfg80211_join_ibss,
  	.leave_ibss = wl_cfg80211_leave_ibss,
  	.get_station = wl_cfg80211_get_station,
@@ -490,7 +558,7 @@ index a70d888..99f22a3 100644
  	.set_tx_power = wl_cfg80211_set_tx_power,
  	.get_tx_power = wl_cfg80211_get_tx_power,
  	.add_key = wl_cfg80211_add_key,
-@@ -1974,6 +2092,14 @@ static s32 wl_alloc_wdev(struct device *dev, struct wireless_dev **rwdev)
+@@ -1974,6 +2149,14 @@ static s32 wl_alloc_wdev(struct device *dev, struct wireless_dev **rwdev)
  #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 33)
  
  	wdev->wiphy->flags &= ~WIPHY_FLAG_PS_ON_BY_DEFAULT;
@@ -505,7 +573,7 @@ index a70d888..99f22a3 100644
  #endif
  
  #ifdef CONFIG_PM
-@@ -2020,9 +2146,13 @@ static void wl_free_wdev(struct wl_cfg80211_priv *wl)
+@@ -2020,9 +2203,13 @@ static void wl_free_wdev(struct wl_cfg80211_priv *wl)
  	wl_to_wdev(wl) = NULL;
  }
  
@@ -521,7 +589,7 @@ index a70d888..99f22a3 100644
  	s32 err = 0;
  	int i;
  
-@@ -2033,132 +2163,86 @@ static s32 wl_inform_bss(struct wl_cfg80211_priv *wl, struct wl_scan_results *bs
+@@ -2033,132 +2220,86 @@ static s32 wl_inform_bss(struct wl_cfg80211_priv *wl, struct wl_scan_results *bs
  	WL_DBG(("scanned AP count (%d)\n", bss_list->count));
  	bi = next_bss(bss_list, bi);
  	for_each_bss(bss_list, bi, i) {
@@ -531,11 +599,11 @@ index a70d888..99f22a3 100644
 +		u32 len;
 +
 +		if (off + offsetof(struct wl_bss_info, BSSID) > buflen)
-+			break;
+ 			break;
 +		len = dtoh32(bi->length);
 +		if (len < WL_BSS_INFO_MIN_LEN || len > buflen - off) {
 +			WL_ERR(("scan entry %d has bad length %u, dropping the rest\n", i, len));
- 			break;
++			break;
 +		}
 +		/*
 +		 * One odd entry must not hide every network after it: the old
@@ -617,12 +685,12 @@ index a70d888..99f22a3 100644
 -	err = wl_mrg_ie(wl, ((u8 *) bi) + bi->ie_offset, bi->ie_length);
 -	if (err)
 -		goto inform_single_bss_out;
- 
+-
 -	err = wl_cp_ie(wl, beacon_proberesp->variable, WL_BSS_INFO_MAX -
 -	         offsetof(struct wl_cfg80211_bss_info, frame_buf));
 -	if (err)
 -		goto inform_single_bss_out;
--
+ 
 -	notif_bss_info->frame_len = offsetof(struct ieee80211_mgmt, u.beacon.variable) +
 -	                            wl_get_ielen(wl);
 -#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 39)
@@ -717,7 +785,7 @@ index a70d888..99f22a3 100644
  }
  
  static s32
-@@ -2186,16 +2270,37 @@ wl_notify_connect_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2186,16 +2327,37 @@ wl_notify_connect_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  		}
  		else if ((event == WLC_E_LINK && ~(flags & WLC_EVENT_MSG_LINK)) ||
  			event == WLC_E_DEAUTH_IND || event == WLC_E_DISASSOC_IND) {
@@ -764,7 +832,7 @@ index a70d888..99f22a3 100644
  			wl_bss_connect_done(wl, ndev, e, data, false);
  		}
  		else {
-@@ -2213,7 +2318,7 @@ wl_notify_connect_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2213,7 +2375,7 @@ wl_notify_connect_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  			wl_link_up(wl);
  			wl_get_assoc_ies(wl);
  			memcpy(&wl->bssid, &e->addr, ETHER_ADDR_LEN);
@@ -773,7 +841,7 @@ index a70d888..99f22a3 100644
  #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 15, 0)
  			wiphy = wl_to_wiphy(wl);
  			err = wl_dev_intvar_get(ndev, "chanspec", &chanspec);
-@@ -2258,9 +2363,32 @@ wl_notify_roaming_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2258,9 +2420,32 @@ wl_notify_roaming_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  
  	WL_DBG(("\n"));
  
@@ -807,7 +875,7 @@ index a70d888..99f22a3 100644
  	}
  
  	return err;
-@@ -2312,33 +2440,38 @@ static s32 wl_get_assoc_ies(struct wl_cfg80211_priv *wl)
+@@ -2312,33 +2497,38 @@ static s32 wl_get_assoc_ies(struct wl_cfg80211_priv *wl)
  		return err;
  	}
  	assoc_info = (struct wl_cfg80211_assoc_ielen *)wl->extra_buf;
@@ -862,7 +930,7 @@ index a70d888..99f22a3 100644
  	}
  	WL_DBG(("req len (%d) resp len (%d)\n", conn_info->req_ie_len,
  		conn_info->resp_ie_len));
-@@ -2385,88 +2518,67 @@ static void wl_ch_to_chanspec(struct ieee80211_channel *chan, struct wl_join_par
+@@ -2385,88 +2575,67 @@ static void wl_ch_to_chanspec(struct ieee80211_channel *chan, struct wl_join_par
  	}
  }
  
@@ -1000,7 +1068,7 @@ index a70d888..99f22a3 100644
  }
  
  static s32
-@@ -2474,19 +2586,7 @@ wl_bss_roaming_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2474,19 +2643,7 @@ wl_bss_roaming_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
                      const wl_event_msg_t *e, void *data)
  {
  	struct wl_cfg80211_connect_info *conn_info = wl_to_conn(wl);
@@ -1021,7 +1089,7 @@ index a70d888..99f22a3 100644
  	s32 err = 0;
  
  	err = wl_get_assoc_ies(wl);
-@@ -2496,22 +2596,44 @@ wl_bss_roaming_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2496,22 +2653,44 @@ wl_bss_roaming_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  	memcpy(wl->profile->bssid, &e->addr, ETHER_ADDR_LEN);
  	memcpy(&wl->bssid, &e->addr, ETHER_ADDR_LEN);
  
@@ -1044,7 +1112,7 @@ index a70d888..99f22a3 100644
 +#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
 +			.bssid = wl->profile->bssid,
 +			.bss = bss,
-+#else
+ #else
 +			.links[0].bssid = wl->profile->bssid,
 +			.links[0].bss = bss,
 +#endif
@@ -1056,7 +1124,7 @@ index a70d888..99f22a3 100644
 +
 +		cfg80211_roamed(ndev, &roam_info, GFP_KERNEL);
 +	}
- #else
++#else
 +	if (bss)
 +		cfg80211_put_bss(wl_to_wiphy(wl), bss);
 +	cfg80211_roamed(ndev,
@@ -1073,7 +1141,7 @@ index a70d888..99f22a3 100644
  	WL_DBG(("Report roaming result\n"));
  
  	set_bit(WL_STATUS_CONNECTED, &wl->status);
-@@ -2526,35 +2648,69 @@ wl_bss_connect_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2526,35 +2705,69 @@ wl_bss_connect_done(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  	struct wl_cfg80211_connect_info *conn_info = wl_to_conn(wl);
  	s32 err = 0;
  
@@ -1084,10 +1152,10 @@ index a70d888..99f22a3 100644
 -		struct cfg80211_scan_info info = {
 -			.aborted = true,
 -		};
--		WL_DBG(("%s: Aborting scan\n", __FUNCTION__));
+ 		WL_DBG(("%s: Aborting scan\n", __FUNCTION__));
 -		cfg80211_scan_done(wl->scan_request, &info);
 -#else
- 		WL_DBG(("%s: Aborting scan\n", __FUNCTION__));
+-		WL_DBG(("%s: Aborting scan\n", __FUNCTION__));
 -		cfg80211_scan_done(wl->scan_request, true);     
 -#endif
 -		wl->scan_request = NULL;
@@ -1155,7 +1223,7 @@ index a70d888..99f22a3 100644
  	}
  
  	return err;
-@@ -2588,6 +2744,7 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2588,6 +2801,7 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  	struct channel_info channel_inform;
  	struct wl_scan_results *bss_list;
  	u32 buflen;
@@ -1163,7 +1231,7 @@ index a70d888..99f22a3 100644
  	s32 err = 0;
  
  	WL_DBG(("\n"));
-@@ -2605,48 +2762,46 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
+@@ -2605,48 +2819,46 @@ wl_notify_scan_status(struct wl_cfg80211_priv *wl, struct net_device *ndev,
  	}
  
  	for (buflen = WL_SCAN_BUF_BASE; ; ) {
@@ -1237,7 +1305,7 @@ index a70d888..99f22a3 100644
  	rtnl_unlock();
  	return err;
  }
-@@ -2768,6 +2923,7 @@ static s32 wl_init_cfg80211_priv(struct wl_cfg80211_priv *wl, struct wireless_de
+@@ -2768,6 +2980,7 @@ static s32 wl_init_cfg80211_priv(struct wl_cfg80211_priv *wl, struct wireless_de
  
  	wl->scan_request = NULL;
  	wl->active_scan = true;
@@ -1245,7 +1313,7 @@ index a70d888..99f22a3 100644
  	wl_init_eq(wl);
  	err = wl_init_priv_mem(wl);
  	if (err)
-@@ -2790,6 +2946,8 @@ static s32 wl_init_cfg80211_priv(struct wl_cfg80211_priv *wl, struct wireless_de
+@@ -2790,6 +3003,8 @@ static s32 wl_init_cfg80211_priv(struct wl_cfg80211_priv *wl, struct wireless_de
  
  static void wl_deinit_cfg80211_priv(struct wl_cfg80211_priv *wl)
  {
@@ -1254,7 +1322,7 @@ index a70d888..99f22a3 100644
  	wl_destroy_event_handler(wl);
  	wl_flush_eq(wl);
  	wl_link_down(wl);
-@@ -3068,17 +3226,10 @@ s32 wl_cfg80211_down(struct net_device *ndev)
+@@ -3068,17 +3283,10 @@ s32 wl_cfg80211_down(struct net_device *ndev)
  	struct wl_cfg80211_priv *wl = ndev_to_wl(ndev);
  	s32 err = 0;
  
@@ -1276,7 +1344,7 @@ index a70d888..99f22a3 100644
  
  	return err;
  }
-@@ -3088,13 +3239,6 @@ static bool wl_is_ibssmode(struct wl_cfg80211_priv *wl)
+@@ -3088,13 +3296,6 @@ static bool wl_is_ibssmode(struct wl_cfg80211_priv *wl)
  	return wl->conf->mode == WL_MODE_IBSS;
  }
  
@@ -1290,7 +1358,7 @@ index a70d888..99f22a3 100644
  static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
  {
  	struct wl_cfg80211_ie *ie = wl_to_ie(wl);
-@@ -3112,45 +3256,52 @@ static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
+@@ -3112,45 +3313,52 @@ static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
  	return err;
  }
  
@@ -1298,14 +1366,14 @@ index a70d888..99f22a3 100644
 -{
 -	struct wl_cfg80211_ie *ie = wl_to_ie(wl);
 -	s32 err = 0;
- 
+-
 -	if (ie->offset + ie_size > WL_TLV_INFO_MAX) {
 -		WL_ERR(("ei_stream crosses buffer boundary\n"));
 -		return -ENOSPC;
 -	}
 -	memcpy(&ie->buf[ie->offset], ie_stream, ie_size);
 -	ie->offset += ie_size;
--
+ 
 -	return err;
 +static void wl_link_up(struct wl_cfg80211_priv *wl)
 +{

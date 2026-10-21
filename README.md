@@ -110,6 +110,7 @@ new one has built.
   minutes: the last resort for core states the driver cannot get out of. It
   does nothing while connected, with the radio off, after a deliberate
   disconnect or right after suspend, and reloads at most once every 10 minutes.
+  It reloads with `rmmod` and then restarts wpa_supplicant (see below why).
   `sh scripts/test-watchdog.sh` checks its decisions on simulated timelines.
 
 To see how the driver does in daily use, `scripts/wifi-daily.py` logs the
@@ -122,11 +123,24 @@ python3 scripts/wifi-daily.py report --days 7
 python3 scripts/wifi-daily.py disable
 ```
 
-If Wi‑Fi is ever unusable anyway, this brings back the stock driver at once:
+If Wi‑Fi is ever unusable anyway, in this order (each step needs no network):
 
 ```sh
-sudo modprobe -r bcm4360; sudo modprobe wl
+# 1. Nothing connects any more (NetworkManager: "couldn't grab this interface"):
+sudo systemctl restart wpa_supplicant NetworkManager
+# 2. Suspect the 5 GHz preference: turn it off (the next connection is by
+#    signal only); to keep it off, add "options bcm4360 prefer_5ghz=0" to
+#    /etc/modprobe.d/bcm4360-local.conf
+echo 0 | sudo tee /sys/module/bcm4360/parameters/prefer_5ghz
+# 3. Back to Broadcom's stock driver at once:
+sudo rmmod bcm4360; sudo modprobe wl; sudo systemctl restart wpa_supplicant
+# 4. Still nothing: reboot.
 ```
+
+Never use `modprobe -r` for this: it also unloads cfg80211, and the running
+wpa_supplicant cannot use any Wi‑Fi interface after cfg80211 comes back (it
+keeps nl80211's old netlink id) until it is restarted. That is how a driver
+reload by the watchdog of 1.0.2 left Wi‑Fi off until a reboot.
 
 ### Uninstall
 
@@ -139,7 +153,7 @@ sudo reboot                    # the distro's wl (if installed) takes over again
 
 ```
 Makefile                  Kbuild + `make`, `make fetch`, `make install`
-dkms.conf                 DKMS package bcm4360 1.0.2
+dkms.conf                 DKMS package bcm4360 1.0.3
 src/                      Linux/cfg80211 driver code (ISC)
 modprobe.d/bcm4360.conf   blacklist of drivers that would grab the card first
 patches/                  our changes as one patch against the provenance baseline
@@ -188,10 +202,16 @@ yields exactly `src/`. Both were checked on the test machine.
   AP), which restarts EAP once; the retry succeeds (the 32 s above).
 - **2.4 GHz at a busy enterprise network:** on DTU's eduroam every link to a
   2.4 GHz AP dropped within about a minute, while 5 GHz links held for half an
-  hour (the chip shares 2.4 GHz with Bluetooth). The drops recover by
-  themselves, but the core picks the AP by signal strength, which often favours
-  2.4 GHz; the band-preference controls of Broadcom's core are not defined in
-  the headers of this release.
+  hour (the chip shares 2.4 GHz with Bluetooth). In October 2026 other Cisco
+  and Meraki networks showed the same on 2.4 GHz as 20–60 s stalls with the
+  link up, with no Bluetooth device connected. The drops recover by themselves,
+  but the core picks the AP by signal strength, which often favours 2.4 GHz.
+  Since 1.0.3 the driver therefore gives 5 GHz APs a bonus of `prefer_5ghz` dB
+  (module parameter, default 15, writable at runtime) through the core's
+  `join_pref` setting, which the core has although the headers of this release
+  do not define it. The core accepts it, and in a test 4 of 5 joins went to
+  5 GHz; whether it also steers the core's own roaming is not yet known
+  (`wifi-daily.py report` shows the bands in use).
 - **Future kernels** can change cfg80211 interfaces; DKMS rebuilds on every
   kernel update, but a major kernel release may need a source update, as for
   any out-of-tree driver.
