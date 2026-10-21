@@ -112,6 +112,16 @@ new one has built.
   disconnect or right after suspend, and reloads at most once every 10 minutes.
   `sh scripts/test-watchdog.sh` checks its decisions on simulated timelines.
 
+To see how the driver does in daily use, `scripts/wifi-daily.py` logs the
+connection as the normal user (no root, it only watches) and reports
+availability, outages and their causes, per network and band:
+
+```sh
+python3 scripts/wifi-daily.py enable    # logs now and at every login
+python3 scripts/wifi-daily.py report --days 7
+python3 scripts/wifi-daily.py disable
+```
+
 If Wi‑Fi is ever unusable anyway, this brings back the stock driver at once:
 
 ```sh
