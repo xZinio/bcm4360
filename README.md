@@ -128,14 +128,19 @@ If Wi‑Fi is ever unusable anyway, in this order (each step needs no network):
 ```sh
 # 1. Nothing connects any more (NetworkManager: "couldn't grab this interface"):
 sudo systemctl restart wpa_supplicant NetworkManager
-# 2. Suspect the 5 GHz preference: turn it off (the next connection is by
-#    signal only); to keep it off, add "options bcm4360 prefer_5ghz=0" to
-#    /etc/modprobe.d/bcm4360-local.conf
-echo 0 | sudo tee /sys/module/bcm4360/parameters/prefer_5ghz
+# 2. Suspect the 5 GHz preference: turn it off for good (APs are then picked
+#    by signal only, as up to 1.0.2) and reload the driver:
+echo "options bcm4360 prefer_5ghz=0" | sudo tee -a /etc/modprobe.d/bcm4360-local.conf
+sudo rmmod bcm4360; sudo modprobe bcm4360; sudo systemctl restart wpa_supplicant
 # 3. Back to Broadcom's stock driver at once:
 sudo rmmod bcm4360; sudo modprobe wl; sudo systemctl restart wpa_supplicant
 # 4. Still nothing: reboot.
 ```
+
+To try without the preference first, `echo 0 | sudo tee
+/sys/module/bcm4360/parameters/prefer_5ghz` turns it off from the next
+connection on, without a reload. Not in 1.0.3: there the core kept the last
+bonus until the driver was reloaded.
 
 Never use `modprobe -r` for this: it also unloads cfg80211, and the running
 wpa_supplicant cannot use any Wi‑Fi interface after cfg80211 comes back (it

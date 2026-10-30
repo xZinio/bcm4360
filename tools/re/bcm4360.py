@@ -214,12 +214,17 @@ class D11(Core):
 
     SISF_DB_PHY = 0x0008      # status flags in the wrapper: one PHY for both bands
     SISF_FCLKA = 0x0004       # fast clock available
+    SISF_DMA64 = 0x1000       # the DMA engines of the core have 64 bit descriptors
 
     def reset(self):
         self.objmem = {}          # (selector, address) -> 16 bit cells
         self.phy = self.chip.phy
         self.phy.d11 = self
-        self.iostatus = self.SISF_DB_PHY | self.SISF_FCLKA
+        # Without SISF_DMA64 the driver drives the FIFOs with its engine for
+        # 32 bit descriptors (8 byte descriptors, pointer register at +8),
+        # which no core of this generation has.
+        self.iostatus = self.SISF_DB_PHY | self.SISF_FCLKA | (
+            self.SISF_DMA64 if self.chip.dma64 else 0)
 
     def _obj(self, write, size, value=0, high=False):
         sel = (self.peek(self.OBJADDR) >> 16) & 0x7
@@ -496,6 +501,7 @@ class Bcm4360(Chip):
     otp_layout = 0x00010140     # 40 nm OTP, hardware region at bit 0x140
     otp_status = 0x1000         # OTP ready
     otp_cols = 32
+    dma64 = True                # status flag of the 802.11 core (assumed, see D11.reset)
     core_classes = (ChipCommon, D11, ArmCR4, Pcie2, Usb20d)
 
     def __init__(self, m, srom=None, otp=None, phy_rev=1, radio_rev=4, layout=None):

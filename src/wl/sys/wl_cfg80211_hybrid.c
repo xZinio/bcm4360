@@ -1099,7 +1099,8 @@ wl_set_set_sharedkey(struct net_device *dev, struct cfg80211_connect_params *sme
  * can give 5 GHz APs a bonus before that comparison, as brcmfmac does. It is
  * set before every join, so a new value of the parameter applies to the next.
  * Loaded with 0, the driver never touches the core's own setting (the
- * behaviour of 1.0.2); 0 written later goes back to choosing by signal only.
+ * behaviour of 1.0.2). The core keeps a bonus until a list brings another,
+ * so 0 written later goes out as a bonus of 0 for no band.
  */
 static uint prefer_5ghz = 15;
 module_param(prefer_5ghz, uint, 0644);
@@ -1124,10 +1125,9 @@ wl_set_join_pref(struct net_device *dev)
 		return;
 
 	pref[2] = bonus;
-	if (bonus)
-		err = wl_dev_bufvar_set(dev, "join_pref", (s8 *)pref, sizeof(pref));
-	else
-		err = wl_dev_bufvar_set(dev, "join_pref", (s8 *)pref + 4, 4);
+	if (!bonus)
+		pref[3] = 0;
+	err = wl_dev_bufvar_set(dev, "join_pref", (s8 *)pref, sizeof(pref));
 	if (err) {
 		if (shown != -1)
 			printk(KERN_NOTICE KBUILD_MODNAME ": %s: the core rejected join_pref (%d), "
