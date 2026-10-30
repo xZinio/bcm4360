@@ -1,0 +1,28 @@
+# Symbols of Broadcom's object (lib/wlc_hybrid.o_shipped) that the hybrid
+# build changes the binding of (scripts/mkhybrid.sh, hybrid/README.md).
+#
+#   take NAME   the open code takes over the function NAME; the object's own
+#               body stays reachable as bcm4360_blob_NAME
+#   use NAME    the open code calls or reads NAME (made global, unchanged)
+
+# --- cards (hybrid/card.c): note the BAR0 window of each card
+take si_attach
+take si_detach
+
+# --- PMU and clocks (hybrid/pmu.c -> open/chip/pmu.c, docs/re/spec/pmu.md)
+take si_pmu_init
+take si_pmu_pll_init
+take si_pmu_res_init
+take si_pmu_measure_alpclk
+take si_pmu_alp_clock
+take si_pmu_ilp_clock
+take si_pmu_si_clock
+take si_pmu_get_bb_vcofreq
+take si_pmu_fast_pwrup_delay
+take si_pmu_otp_power
+take si_pmu_is_otp_powered
+take si_pmu_chipcontrol
+take si_pmu_regcontrol
+take si_pmu_pllcontrol
+take si_pmu_pllupd
+take si_pmu_rfldo

@@ -35,8 +35,10 @@ def load_srom(path, blob):
 class Driver:
     """The object attached to a modelled card, as the Linux glue would do it."""
 
-    def __init__(self, srom=DEFAULT_SROM, echo=True, verbose=False, chip_class=Bcm4360, **kw):
-        m = self.m = Machine()
+    def __init__(self, srom=DEFAULT_SROM, echo=True, verbose=False, chip_class=Bcm4360,
+                 path=None, **kw):
+        # path: another build of the core, e.g. the hybrid one (hybrid.py)
+        m = self.m = Machine(path)
         m.os.echo = echo
         if isinstance(srom, dict):              # variables
             words = Layout(m.blob).encode(srom)

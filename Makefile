@@ -5,12 +5,18 @@
 # The Linux/cfg80211 side (src/, ISC licensed) is open source. It links
 # against Broadcom's proprietary 802.11 core, lib/wlc_hybrid.o_shipped, which
 # is NOT part of this tree: `make fetch` downloads Broadcom's original release
-# and verifies its checksums before unpacking it into lib/.
+# and verifies its checksums before unpacking it into lib/. Open code
+# (hybrid/, open/, ISC licensed) takes over parts of that core at link time.
 
-BCM4360_VERSION := 1.0.3
+BCM4360_VERSION := 1.1.0
 
 ifneq ($(KERNELRELEASE),)
 # ---- Kbuild -----------------------------------------------------------------
+
+# HYBRID=1 (default): open code (hybrid/, open/) takes over parts of
+# Broadcom's core inside the module, see hybrid/README.md.
+# HYBRID=0: Broadcom's core alone, as up to version 1.0.3.
+HYBRID ?= 1
 
 obj-m        := bcm4360.o
 bcm4360-objs := src/shared/linux_osl.o \
@@ -22,7 +28,24 @@ ccflags-y := -DUSE_CFG80211 -DBCM4360_DRV_VERSION=\"$(BCM4360_VERSION)\" -Wno-da
 ccflags-y += -I$(src)/src/include -I$(src)/src/common/include
 ccflags-y += -I$(src)/src/wl/sys -I$(src)/src/shared/bcmwifi/include
 
-ldflags-y := $(src)/lib/wlc_hybrid.o_shipped
+ifeq ($(HYBRID),1)
+# the adapters and the open code they use
+include $(src)/hybrid/objects.mk
+bcm4360-objs += $(hybrid-objs)
+ccflags-y += -DBCM4360_HYBRID -DBCM4360_OSL -I$(src)/open/include
+
+# Broadcom's core with the functions the open code takes over made weak
+core := $(obj)/lib/wlc_hybrid_open.o
+$(obj)/bcm4360.o: $(core)
+$(core): $(src)/lib/wlc_hybrid.o_shipped $(src)/hybrid/takeover.txt $(src)/scripts/mkhybrid.sh
+	$(Q)NM="$(NM)" OBJCOPY="$(OBJCOPY)" $(CONFIG_SHELL) $(src)/scripts/mkhybrid.sh \
+		$< $@ $(src)/hybrid/takeover.txt
+else
+core := $(src)/lib/wlc_hybrid.o_shipped
+endif
+
+ldflags-y := $(core)
+clean-files := lib/wlc_hybrid_open.o
 
 # objtool cannot process Broadcom's prebuilt 2015 object and its errors are
 # fatal since Linux 6.15, so it is skipped for the final link of the module,

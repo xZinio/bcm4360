@@ -20,10 +20,14 @@ if dkms status -m "$name" -v "$ver" 2>/dev/null | grep -q .; then
 	dkms remove -m "$name" -v "$ver" --all
 fi
 rm -rf "$dest"
-mkdir -p "$dest"
-cp -r Makefile dkms.conf src lib "$dest/"
+mkdir -p "$dest/scripts"
+# hybrid/ and open/: the open code that takes over parts of Broadcom's core
+cp -r Makefile dkms.conf src lib hybrid open "$dest/"
+cp scripts/mkhybrid.sh "$dest/scripts/"
 # Objects from a local `make` must never stand in for a clean DKMS build.
-find "$dest/src" \( -name '*.o' -o -name '.*.cmd' -o -name '*.mod' -o -name '*.mod.c' \) -delete
+find "$dest/src" "$dest/hybrid" "$dest/open" \
+	\( -name '*.o' -o -name '.*.cmd' -o -name '*.mod' -o -name '*.mod.c' \) -delete
+rm -f "$dest/lib/wlc_hybrid_open.o"
 
 dkms add -m "$name" -v "$ver"
 dkms build -m "$name" -v "$ver"

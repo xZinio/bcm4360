@@ -25,6 +25,8 @@ except ImportError:  # loading/symbols work without capstone
 
 R_X86_64_64 = 1
 R_X86_64_PC32 = 2
+R_X86_64_PLT32 = 4      # in objects compiled by clang/zig (the hybrid link, hybrid.py)
+R_X86_64_32 = 10
 R_X86_64_32S = 11
 
 # Flat layout: everything below 2 GiB so that R_X86_64_32S is representable.
@@ -129,7 +131,11 @@ class Blob:
                 elif t == R_X86_64_32S:
                     struct.pack_into('<i', buf, off, S + A)
                     self.relocs[P] = (t, S + A)
-                elif t == R_X86_64_PC32:
+                elif t == R_X86_64_32:
+                    struct.pack_into('<I', buf, off, (S + A) & 0xffffffff)
+                    self.relocs[P] = (R_X86_64_32S, S + A)
+                elif t in (R_X86_64_PC32, R_X86_64_PLT32):
+                    t = R_X86_64_PC32
                     struct.pack_into('<i', buf, off, S + A - P)
                     # The displacement counts from the end of the instruction.
                     # Usually the field is its last part (addend -4); if an

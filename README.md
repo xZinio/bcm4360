@@ -9,12 +9,28 @@ with its Linux side repaired for current kernels (tested on 7.2).
 | Part | License | Where |
 |---|---|---|
 | Linux/cfg80211 driver code, build system, scripts | ISC (open source) | this folder |
-| Broadcom's 802.11 core `wlc_hybrid.o_shipped` (2015, binary) | Broadcom's proprietary license | **not included**; downloaded from Broadcom at install time, checksum-verified, linked in unmodified |
+| Open hardware layer written from specifications, and the adapters that let it take over parts of Broadcom's core inside the module | ISC (open source) | `open/`, `hybrid/` |
+| Broadcom's 802.11 core `wlc_hybrid.o_shipped` (2015, binary) | Broadcom's proprietary license | **not included**; downloaded from Broadcom at install time, checksum-verified; its code is linked in unmodified, only the binding of the symbols the open code takes over changes |
 
 Why not 100 % open? The only open driver for this chip, the kernel's `b43`,
 has its BCM4360 radio support (AC‑PHY) marked **BROKEN** – it crashes. No open
-implementation of this radio exists, so Broadcom's core still does the actual
-802.11 work. Every fix in this project is in the open part.
+implementation of this radio existed, so Broadcom's core still does most of
+the actual 802.11 work. This project is replacing it piece by piece: the open
+hardware layer in `open/` reproduces Broadcom's AC‑PHY, radio and PMU code
+access for access in an emulator (`docs/re/`), and since 1.1.0 parts of it run
+inside the module in place of Broadcom's code (see below and
+[hybrid/README.md](hybrid/README.md)).
+
+### Open code inside the driver (since 1.1.0)
+
+Functions of Broadcom's core are taken over by open code at link time; each
+layer has a module parameter that switches it back to Broadcom's code:
+
+| Layer | Module parameter | Default |
+|---|---|---|
+| PMU and clocks (16 functions of `hndpmu.c`) | `open_pmu` | on |
+
+`make HYBRID=0` builds the module exactly as 1.0.3 (Broadcom's core alone).
 
 ## Status
 
@@ -158,8 +174,13 @@ sudo reboot                    # the distro's wl (if installed) takes over again
 
 ```
 Makefile                  Kbuild + `make`, `make fetch`, `make install`
-dkms.conf                 DKMS package bcm4360 1.0.3
+dkms.conf                 DKMS package bcm4360 1.1.0
 src/                      Linux/cfg80211 driver code (ISC)
+open/                     open hardware layer (AC-PHY, radio, PMU, MAC control), from docs/re/spec
+hybrid/                   adapters: open code takes over functions of Broadcom's core
+docs/re/                  reverse engineering: specifications, status, method
+tools/re/                 emulator, A/B comparison, hybrid check (tools/re/hybrid.py)
+scripts/mkhybrid.sh       makes the functions taken over weak in the copy of the core that is linked
 modprobe.d/bcm4360.conf   blacklist of drivers that would grab the card first
 patches/                  our changes as one patch against the provenance baseline
 scripts/fetch-blob.sh     download + verify Broadcom's core into lib/
