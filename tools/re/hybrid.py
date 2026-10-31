@@ -11,12 +11,16 @@ and on Broadcom's object alone.  Every access to the card is recorded; the two
 traces have to be the same.
 
     hybrid.py build                    make re-out/hybrid/core.o
-    hybrid.py check [--off LAYER,..]   the session on both cores, compared
+    hybrid.py check [--on L,..] [--off L,..]   the session on both cores, compared
     hybrid.py share                    how much of the code that runs is Broadcom's
     hybrid.py selftest                 a broken open function must be found
 
---off switches layers of the hybrid core off (their switches, hybrid/hybrid.h),
-so that the fallback to Broadcom's own functions is tested too.
+--on and --off set the switches of layers of the hybrid core (bcm4360_open_<layer>,
+hybrid/hybrid.h), whatever their defaults; switched off, a layer falls back to
+Broadcom's own functions, which is tested too. The layers: pmu (default on),
+phy (default off; the PHY layer of hybrid/objects.mk is linked for the emulator
+even while the module leaves it out, so that an open PHY function that is still
+missing stops the session with its name).
 
 The session: attach, up, channel changes in both bands and all bandwidths,
 periodic work, down, up again, down, detach.
@@ -37,7 +41,7 @@ ROOT = ab.ROOT
 OUT = os.path.join(ROOT, 're-out', 'hybrid')
 BLOB = os.path.join(ROOT, 'lib', 'wlc_hybrid.o_shipped')
 CORE = os.path.join(OUT, 'core.o')
-LAYERS = ('pmu',)                   # the switches bcm4360_open_<layer>
+LAYERS = ('pmu', 'phy')             # the switches bcm4360_open_<layer>
 
 CHANNELS = ['1', '6', '11', '36', '36/40', '36/80', '149/80', '157/40', '165']
 SESSION = (['attach', 'mpc 0', 'up'] + CHANNELS +
@@ -49,10 +53,13 @@ WINDOW_REGS = {0x70, 0x80}
 
 
 def objects():
-    """The objects of the hybrid build: hybrid/objects.mk."""
+    """The objects of the hybrid build: hybrid/objects.mk, with the PHY layer."""
     text = open(os.path.join(ROOT, 'hybrid', 'objects.mk')).read()
-    m = re.search(r'hybrid-objs\s*:=((?:.*\\\n)*.*)', text)
-    return [o for o in m.group(1).replace('\\\n', ' ').split() if o.endswith('.o')]
+    out = []
+    for var in ('hybrid-objs', 'hybrid-phy-objs'):
+        m = re.search(var + r'\s*:=((?:.*\\\n)*.*)', text)
+        out += [o for o in m.group(1).replace('\\\n', ' ').split() if o.endswith('.o')]
+    return out
 
 
 def build(quiet=False):
@@ -89,19 +96,20 @@ def build(quiet=False):
 class Run:
     """A session on one build of the core."""
 
-    def __init__(self, path=None, off=(), coverage=False, patch=None):
+    def __init__(self, path=None, off=(), coverage=False, patch=None, on=()):
         self.s = ab.Session(path=path)
         self.s.chip.radio_done = True
         self.m = self.s.m
         self.d = self.s.d
         if patch:
             patch(self.m)
-        for layer in off:
-            sym = 'bcm4360_open_' + layer
-            hits = [x for x in self.m.blob.byname.get(sym, []) if x.kind == 'O']
-            if not hits:
-                raise SystemExit('%s: no such switch in this core' % sym)
-            self.m.w8(hits[0].addr, 0)
+        for layers, value in ((off, 0), (on, 1)):
+            for layer in layers:
+                sym = 'bcm4360_open_' + layer
+                hits = [x for x in self.m.blob.byname.get(sym, []) if x.kind == 'O']
+                if not hits:
+                    raise SystemExit('%s: no such switch in this core' % sym)
+                self.m.w8(hits[0].addr, value)
         if coverage:
             self.m.record_coverage()
         self.results = []
@@ -127,9 +135,19 @@ class Run:
         self.results.append((what, r))
         return r
 
-    def session(self, steps=SESSION):
+    def session(self, steps=SESSION, stop_on_error=True):
+        """Run the steps. With stop_on_error False an error of the emulation
+        (for instance an open function that does not exist yet) ends the
+        session early instead: self.error says why."""
+        self.error = None
         for what in steps:
-            self.step(what)
+            try:
+                self.step(what)
+            except EmuError as e:
+                if stop_on_error:
+                    raise
+                self.error = '%s: %s' % (what, str(e).splitlines()[0])
+                break
         return self
 
     def logical(self):
@@ -142,13 +160,24 @@ class Run:
         return out
 
 
-def check(off=(), show=20, patch=None):
+def check(off=(), show=20, patch=None, on=()):
     core = build(quiet=True)
     ref = Run().session()
-    got = Run(core, off=off, patch=patch).session()
+    got = Run(core, off=off, patch=patch, on=on).session(stop_on_error=False)
     want, have = ref.logical(), got.logical()
     bad = 0
-    if ref.results != got.results:
+    if got.error:
+        # compare what both did until the hybrid core stopped
+        bad += 1
+        print('the hybrid core stopped at step %s' % got.error)
+        n = len(have)
+        if want[:n] == have:
+            print('  its %d accesses until then are the same as the object\'s first %d'
+                  % (n, n))
+        else:
+            ab.compare(want[:n], have, show)
+        want = want[:n]
+    if ref.results[:len(got.results)] != got.results:
         bad += 1
         print('results of the steps differ:')
         for (w, a), (_, b) in zip(ref.results, got.results):
@@ -157,9 +186,9 @@ def check(off=(), show=20, patch=None):
     if want != have:
         bad += 1
         ab.compare(want, have, show)
-    print('session (%d steps), switches off: %s: %d accesses of the object, %d of the hybrid '
-          'core, %s' % (len(SESSION), ', '.join(off) or 'none', len(want), len(have),
-                        'the same' if not bad else 'DIFFERENT'))
+    print('session (%d steps), switched on: %s, off: %s: %d accesses of the object, %d of '
+          'the hybrid core, %s' % (len(SESSION), ', '.join(on) or '-', ', '.join(off) or '-',
+                                   len(want), len(have), 'the same' if not bad else 'DIFFERENT'))
     return bad
 
 
@@ -201,6 +230,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('cmd', choices=('build', 'check', 'share', 'selftest'))
     ap.add_argument('--off', default='', help='layers to switch off: ' + ', '.join(LAYERS))
+    ap.add_argument('--on', default='', help='layers to switch on: ' + ', '.join(LAYERS))
     ap.add_argument('--show', type=int, default=20)
     ns = ap.parse_args()
     if ns.cmd == 'build':
@@ -212,7 +242,8 @@ def main():
     if ns.cmd == 'selftest':
         return selftest()
     off = [x for x in ns.off.split(',') if x]
-    return 1 if check(off, ns.show) else 0
+    on = [x for x in ns.on.split(',') if x]
+    return 1 if check(off, ns.show, on=on) else 0
 
 
 if __name__ == '__main__':

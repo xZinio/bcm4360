@@ -72,11 +72,16 @@ struct hyb_card *hyb_card_of(const void *sih);
 /* hybrid/pmu.c: a backplane handle is gone, with the PMU state kept for it */
 void hyb_pmu_forget(const void *sih);
 
+/* hybrid/pmu.c: the open PMU state of a card (also with open_pmu off) */
+struct bcm4360_pmu;
+struct bcm4360_pmu *hyb_pmu_of(const void *sih);
+
 /*
  * Switches, one per layer: true selects the open code. They are module
  * parameters of bcm4360.ko (read when a card is attached), and variables
  * that the emulator sets in its tests.
  */
 extern bool bcm4360_open_pmu;
+extern bool bcm4360_open_phy;
 
 #endif

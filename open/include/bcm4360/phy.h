@@ -956,4 +956,7 @@ u32 bcm4360_phy_tx_tone_acphy(struct bcm4360_phy *phy, s32 freq, u16 amp,
 /* wlc_phy_stopplayback_acphy (acphy-cal-tx section 14) */
 void bcm4360_phy_stopplayback_acphy(struct bcm4360_phy *phy);
 
+/* the rest of the MAC-facing interface (docs/re/spec/acphy-api.md) */
+#include <bcm4360/phy_api.h>
+
 #endif

@@ -77,6 +77,21 @@ python ab.py run NAME --show 50
 A task is finished when its scenario reports `0 differences`, the build has no
 warnings, and the code follows the rules above.
 
+### The PHY inside the driver: `hybrid.py`
+
+The open PHY also runs inside the driver's core in the emulator
+(`hybrid/README.md`): `python hybrid.py check --on phy` links Broadcom's
+object with the open PHY in its place (all 79 entry points of
+[spec/acphy-api.md](spec/acphy-api.md), through `hybrid/phy.c`) and runs a
+whole session - attach, up, channel changes, periodic work, down, detach -
+on it and on the object alone, and compares every access to the card. As
+long as an open function is missing, the session stops where it is first
+called ("import bcm4360_phy_... is not implemented") and the accesses until
+then are compared. This is a comparison test like `ab.py`: you may run it and
+use what it reports. The prototypes of the entry points are in
+`open/include/bcm4360/phy_api.h`; keep the names and arguments, they are the
+interface `hybrid/phy.c` calls.
+
 ## Questions
 
 Write everything you had to guess, everything the specification got wrong or

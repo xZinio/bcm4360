@@ -34,7 +34,7 @@ HYB_TAKE(u32, si_pmu_pllcontrol, (const void *sih, u32 reg, u32 mask, u32 val));
 HYB_TAKE(void, si_pmu_pllupd, (const void *sih));
 HYB_TAKE(void, si_pmu_rfldo, (const void *sih, u8 on));
 
-/* the open PMU of the card of `sih`, or NULL for the object's code */
+/* the open PMU state of a card, one per backplane handle */
 struct hyb_pmu {
 	struct bcm4360_pmu pmu;
 	const void *sih;
@@ -43,16 +43,15 @@ struct hyb_pmu {
 #define HYB_PMUS	4
 static struct hyb_pmu hyb_pmus[HYB_PMUS];
 
-static struct bcm4360_pmu *hyb_pmu(const void *sih)
+/* hybrid.h: the open PMU of the card of `sih`, whatever the switch says */
+struct bcm4360_pmu *hyb_pmu_of(const void *sih)
 {
 	const struct hyb_si_pub *pub = sih;
 	struct hyb_card *c;
 	struct hyb_pmu *h = NULL;
 	int i;
 
-	if (!bcm4360_open_pmu || !sih)
-		return NULL;
-	if (pub->chip != BCM4360_CHIP_ID_4360 && pub->chip != BCM4360_CHIP_ID_4352)
+	if (!sih)
 		return NULL;
 	c = hyb_card_of(sih);
 	if (!c)
@@ -84,6 +83,18 @@ static struct bcm4360_pmu *hyb_pmu(const void *sih)
 	h->pmu.info.pmurev = pub->pmurev;
 	h->pmu.info.pmucaps = pub->pmucaps;
 	return &h->pmu;
+}
+
+/* the open PMU of the card of `sih`, or NULL for the object's code */
+static struct bcm4360_pmu *hyb_pmu(const void *sih)
+{
+	const struct hyb_si_pub *pub = sih;
+
+	if (!bcm4360_open_pmu || !sih)
+		return NULL;
+	if (pub->chip != BCM4360_CHIP_ID_4360 && pub->chip != BCM4360_CHIP_ID_4352)
+		return NULL;
+	return hyb_pmu_of(sih);
 }
 
 /* hybrid.h */
