@@ -45,7 +45,8 @@ from emu import EmuError
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
 OPEN_SRC = os.path.join(ROOT, 'open')
-OPEN_OBJ = os.path.join(ROOT, 're-out', 'open')
+# AB_OUT: a build directory of one's own (several people testing at once)
+OPEN_OBJ = os.environ.get('AB_OUT') or os.path.join(ROOT, 're-out', 'open')
 
 CFLAGS = ['-target', 'x86_64-freestanding', '-c', '-O1', '-std=gnu11', '-ffreestanding',
           '-fno-pic', '-fno-pie', '-mcmodel=kernel', '-mno-red-zone', '-mno-sse', '-mno-mmx',

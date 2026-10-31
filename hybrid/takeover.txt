@@ -175,6 +175,33 @@ use si_set_sromctl
 use si_alp_clock
 use otp_read_word
 # (getvar: taken by the utilities layer above)
+# the MAC's per-rate power container (wlc_ppr.c), services of the open PHY's
+# transmit power (phy_env.h, docs/re/spec/acphy-api-txpower.md)
+use ppr_create
+use ppr_delete
+use ppr_clear
+use ppr_copy_struct
+use ppr_get_ch_bw
+use ppr_set_cmn_val
+use ppr_plus_cmn_val
+use ppr_minus_cmn_val
+use ppr_cmn_val_minus
+use ppr_apply_min
+use ppr_apply_max
+use ppr_compare_min
+use ppr_compare_max
+use ppr_multiply_percentage
+use ppr_force_disabled
+use ppr_get_max
+use ppr_get_min
+use ppr_get_ofdm
+use ppr_set_ofdm
+use ppr_get_ht_mcs
+use ppr_set_ht_mcs
+use ppr_get_vht_mcs
+use ppr_set_vht_mcs
+use ppr_get_dsss
+use ppr_set_dsss
 
 # Broadcom's tables the open PHY loads at runtime (hybrid/fwdata.h)
 use acphy_est_pwr_lut_core0_rev0

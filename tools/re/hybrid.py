@@ -38,7 +38,8 @@ from emu import EmuError
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = ab.ROOT
-OUT = os.path.join(ROOT, 're-out', 'hybrid')
+# HYBRID_OUT: a build directory of one's own (several people testing at once)
+OUT = os.environ.get('HYBRID_OUT') or os.path.join(ROOT, 're-out', 'hybrid')
 BLOB = os.path.join(ROOT, 'lib', 'wlc_hybrid.o_shipped')
 CORE = os.path.join(OUT, 'core.o')
 LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils')   # the switches bcm4360_open_<layer>

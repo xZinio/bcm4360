@@ -107,4 +107,36 @@ void bcm4360_chip_sromctl_set(struct bcm4360_hw *hw, u32 val);
 /* otp_read_word: word `word` of the OTP memory; result 0, or an error below 0 */
 int bcm4360_otp_read_word(struct bcm4360_hw *hw, u32 word, u16 *data);
 
+/*
+ * The MAC's per-rate power container (ppr_*, wlc_ppr.c): opaque to the PHY,
+ * used only through these operations. docs/re/spec/acphy-api-txpower.md,
+ * "The ppr structure is a service"; the group selectors (m, rateset, bw, nss)
+ * are passed through unchanged, in this order.
+ */
+void *bcm4360_ppr_create(struct bcm4360_hw *hw, u8 bw_sel);
+void bcm4360_ppr_delete(struct bcm4360_hw *hw, void *ppr);
+void bcm4360_ppr_clear(void *ppr);
+void bcm4360_ppr_copy(const void *src, void *dst);
+u8 bcm4360_ppr_get_ch_bw(const void *ppr);
+void bcm4360_ppr_set_cmn_val(void *ppr, s8 v);
+void bcm4360_ppr_plus_cmn_val(void *ppr, s8 d);
+void bcm4360_ppr_minus_cmn_val(void *ppr, s8 d);
+void bcm4360_ppr_cmn_val_minus(void *ppr, s8 v);
+void bcm4360_ppr_apply_min(void *ppr, s8 v);
+void bcm4360_ppr_apply_max(void *ppr, s8 v);
+void bcm4360_ppr_compare_min(void *a, void *b);
+void bcm4360_ppr_compare_max(void *a, void *b);
+void bcm4360_ppr_multiply_percentage(void *ppr, u8 pct);
+void bcm4360_ppr_force_disabled(void *ppr, s8 min);
+s8 bcm4360_ppr_get_max(const void *ppr);
+s8 bcm4360_ppr_get_min(const void *ppr, s8 floor);
+void bcm4360_ppr_get_ofdm(const void *ppr, u8 m, u8 rateset, u8 bw, s8 *out);
+void bcm4360_ppr_set_ofdm(void *ppr, u8 m, u8 rateset, u8 bw, const s8 *in);
+void bcm4360_ppr_get_ht_mcs(const void *ppr, u8 nss, u8 m, u8 rateset, u8 bw, s8 *out);
+void bcm4360_ppr_set_ht_mcs(void *ppr, u8 nss, u8 m, u8 rateset, u8 bw, const s8 *in);
+void bcm4360_ppr_get_vht_mcs(const void *ppr, u8 nss, u8 m, u8 rateset, u8 bw, s8 *out);
+void bcm4360_ppr_set_vht_mcs(void *ppr, u8 nss, u8 m, u8 rateset, u8 bw, const s8 *in);
+void bcm4360_ppr_get_dsss(const void *ppr, u8 m, u8 rateset, s8 *out);
+void bcm4360_ppr_set_dsss(void *ppr, u8 m, u8 rateset, const s8 *in);
+
 #endif

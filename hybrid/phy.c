@@ -277,6 +277,164 @@ const char *hw_getvar(struct bcm4360_hw *hw, const char *name)
 	return getvar(hyb_sh_of_hw(hw)->p.vars, name);
 }
 
+/*
+ * The MAC's per-rate power container (wlc_ppr.c), a service of the open PHY
+ * (phy_env.h; docs/re/spec/acphy-api-txpower.md). The object's functions take
+ * the same arguments in the same order, except that create and delete take
+ * the OS handle. Narrow results of the object are taken as u32 and truncated
+ * (the object, built with GCC, does not extend them).
+ */
+void *ppr_create(void *osh, u32 bw);
+void ppr_delete(void *osh, void *ppr);
+void ppr_clear(void *ppr);
+void ppr_copy_struct(const void *src, void *dst);
+u32 ppr_get_ch_bw(const void *ppr);
+void ppr_set_cmn_val(void *ppr, s32 v);
+void ppr_plus_cmn_val(void *ppr, s32 d);
+void ppr_minus_cmn_val(void *ppr, s32 d);
+void ppr_cmn_val_minus(void *ppr, s32 v);
+void ppr_apply_min(void *ppr, s32 v);
+void ppr_apply_max(void *ppr, s32 v);
+void ppr_compare_min(void *a, void *b);
+void ppr_compare_max(void *a, void *b);
+void ppr_multiply_percentage(void *ppr, u32 pct);
+void ppr_force_disabled(void *ppr, s32 min);
+u32 ppr_get_max(const void *ppr);
+u32 ppr_get_min(const void *ppr, s32 floor);
+void ppr_get_ofdm(const void *ppr, u32 m, u32 rateset, u32 bw, s8 *out);
+void ppr_set_ofdm(void *ppr, u32 m, u32 rateset, u32 bw, const s8 *in);
+void ppr_get_ht_mcs(const void *ppr, u32 nss, u32 m, u32 rateset, u32 bw, s8 *out);
+void ppr_set_ht_mcs(void *ppr, u32 nss, u32 m, u32 rateset, u32 bw, const s8 *in);
+void ppr_get_vht_mcs(const void *ppr, u32 nss, u32 m, u32 rateset, u32 bw, s8 *out);
+void ppr_set_vht_mcs(void *ppr, u32 nss, u32 m, u32 rateset, u32 bw, const s8 *in);
+void ppr_get_dsss(const void *ppr, u32 m, u32 rateset, s8 *out);
+void ppr_set_dsss(void *ppr, u32 m, u32 rateset, const s8 *in);
+
+void *bcm4360_ppr_create(struct bcm4360_hw *hw, u8 bw_sel)
+{
+	return ppr_create(hyb_sh_of_hw(hw)->p.osh, bw_sel);
+}
+
+void bcm4360_ppr_delete(struct bcm4360_hw *hw, void *ppr)
+{
+	ppr_delete(hyb_sh_of_hw(hw)->p.osh, ppr);
+}
+
+void bcm4360_ppr_clear(void *ppr)
+{
+	ppr_clear(ppr);
+}
+
+void bcm4360_ppr_copy(const void *src, void *dst)
+{
+	ppr_copy_struct(src, dst);
+}
+
+u8 bcm4360_ppr_get_ch_bw(const void *ppr)
+{
+	return (u8)ppr_get_ch_bw(ppr);
+}
+
+void bcm4360_ppr_set_cmn_val(void *ppr, s8 v)
+{
+	ppr_set_cmn_val(ppr, v);
+}
+
+void bcm4360_ppr_plus_cmn_val(void *ppr, s8 d)
+{
+	ppr_plus_cmn_val(ppr, d);
+}
+
+void bcm4360_ppr_minus_cmn_val(void *ppr, s8 d)
+{
+	ppr_minus_cmn_val(ppr, d);
+}
+
+void bcm4360_ppr_cmn_val_minus(void *ppr, s8 v)
+{
+	ppr_cmn_val_minus(ppr, v);
+}
+
+void bcm4360_ppr_apply_min(void *ppr, s8 v)
+{
+	ppr_apply_min(ppr, v);
+}
+
+void bcm4360_ppr_apply_max(void *ppr, s8 v)
+{
+	ppr_apply_max(ppr, v);
+}
+
+void bcm4360_ppr_compare_min(void *a, void *b)
+{
+	ppr_compare_min(a, b);
+}
+
+void bcm4360_ppr_compare_max(void *a, void *b)
+{
+	ppr_compare_max(a, b);
+}
+
+void bcm4360_ppr_multiply_percentage(void *ppr, u8 pct)
+{
+	ppr_multiply_percentage(ppr, pct);
+}
+
+void bcm4360_ppr_force_disabled(void *ppr, s8 min)
+{
+	ppr_force_disabled(ppr, min);
+}
+
+s8 bcm4360_ppr_get_max(const void *ppr)
+{
+	return (s8)ppr_get_max(ppr);
+}
+
+s8 bcm4360_ppr_get_min(const void *ppr, s8 floor)
+{
+	return (s8)ppr_get_min(ppr, floor);
+}
+
+void bcm4360_ppr_get_ofdm(const void *ppr, u8 m, u8 rateset, u8 bw, s8 *out)
+{
+	ppr_get_ofdm(ppr, m, rateset, bw, out);
+}
+
+void bcm4360_ppr_set_ofdm(void *ppr, u8 m, u8 rateset, u8 bw, const s8 *in)
+{
+	ppr_set_ofdm(ppr, m, rateset, bw, in);
+}
+
+void bcm4360_ppr_get_ht_mcs(const void *ppr, u8 nss, u8 m, u8 rateset, u8 bw, s8 *out)
+{
+	ppr_get_ht_mcs(ppr, nss, m, rateset, bw, out);
+}
+
+void bcm4360_ppr_set_ht_mcs(void *ppr, u8 nss, u8 m, u8 rateset, u8 bw, const s8 *in)
+{
+	ppr_set_ht_mcs(ppr, nss, m, rateset, bw, in);
+}
+
+void bcm4360_ppr_get_vht_mcs(const void *ppr, u8 nss, u8 m, u8 rateset, u8 bw, s8 *out)
+{
+	ppr_get_vht_mcs(ppr, nss, m, rateset, bw, out);
+}
+
+void bcm4360_ppr_set_vht_mcs(void *ppr, u8 nss, u8 m, u8 rateset, u8 bw, const s8 *in)
+{
+	ppr_set_vht_mcs(ppr, nss, m, rateset, bw, in);
+}
+
+void bcm4360_ppr_get_dsss(const void *ppr, u8 m, u8 rateset, s8 *out)
+{
+	ppr_get_dsss(ppr, m, rateset, out);
+}
+
+void bcm4360_ppr_set_dsss(void *ppr, u8 m, u8 rateset, const s8 *in)
+{
+	ppr_set_dsss(ppr, m, rateset, in);
+}
+
 /* Broadcom's tables, where they are in the linked object (hybrid/fwdata.h) */
 #define HYB_FW(name, size)	extern const u8 name[];
 #include "fwdata.h"

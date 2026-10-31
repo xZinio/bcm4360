@@ -40,7 +40,7 @@ the first word), groups of per-rate power bytes in quarter-dBm; a byte of
 | `void bcm4360_ppr_compare_min(void *a, void *b)` | `ppr_compare_min` | a := element-wise min(a, b) |
 | `void bcm4360_ppr_compare_max(void *a, void *b)` | `ppr_compare_max` | a := element-wise max(a, b) |
 | `void bcm4360_ppr_multiply_percentage(void *ppr, u8 pct)` | `ppr_multiply_percentage` | every enabled rate scaled by pct/100 |
-| `void bcm4360_ppr_force_disabled(void *ppr)` | `ppr_force_disabled` | (AC) mark the proprietary-rate groups disabled |
+| `void bcm4360_ppr_force_disabled(void *ppr, s8 min)` | `ppr_force_disabled` | (AC) mark the proprietary-rate groups disabled; `min` is the second argument (see the correction below) |
 | `s8 bcm4360_ppr_get_max(const void *ppr)` | `ppr_get_max` | highest enabled rate |
 | `s8 bcm4360_ppr_get_min(const void *ppr, s8 floor)` | `ppr_get_min` | lowest enabled rate, or `floor` |
 | `void bcm4360_ppr_get_ofdm(const void *ppr, u8 m, u8 rateset, u8 bw, s8 *out)` | `ppr_get_ofdm` | read an OFDM rate group |
@@ -50,8 +50,26 @@ the first word), groups of per-rate power bytes in quarter-dBm; a byte of
 | `void bcm4360_ppr_get_dsss(const void *ppr, u8 m, u8 rateset, s8 *out)` | `ppr_get_dsss` | read the DSSS/CCK group |
 | `void bcm4360_ppr_set_dsss(void *ppr, u8 m, u8 rateset, const s8 *in)` | `ppr_set_dsss` | write it |
 
+| `void bcm4360_ppr_get_vht_mcs(const void *ppr, u8 nss, u8 m, u8 rateset, u8 bw, s8 *out)` | `ppr_get_vht_mcs` | read a VHT MCS group (as `get_ht_mcs`, groups of 10 rates) |
+| `void bcm4360_ppr_set_vht_mcs(void *ppr, u8 nss, u8 m, u8 rateset, u8 bw, const s8 *in)` | `ppr_set_vht_mcs` | write one |
+
 (The `m`/`rateset`/`bw`/`nss` arguments select a rate group; the open code
-passes them through unchanged from the values the merge below uses.)
+passes them through unchanged, in the order of this table, from the values
+the merge below uses.)
+
+**Corrections by the coordinator (2026-11-01, from the object's call sites):**
+
+* `ppr_force_disabled` takes a second argument, a signed byte: in the merge
+  (`sub_0b8ca4`) it is the minimum power that `wlc_phy_txpower_sromlimit`
+  returned through its third argument (a byte initialised to 0 before the
+  call) - the same value step 8 passes as the floor of `ppr_get_min`. So step
+  6 is `ppr_force_disabled(A, min)`.
+* The SROM-11 decoding writes the VHT rate groups with `ppr_set_vht_mcs`
+  (180 calls in a session, from `sub_0b42df`), not `ppr_set_ht_mcs`; both
+  have the argument layout of the table. The two VHT services were added
+  above.
+* `ppr_create` and `ppr_delete` take the OS handle as their first argument
+  (`sh+0x10`); `hw` stands for it in the open prototypes.
 
 ## Entry points
 
