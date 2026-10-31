@@ -83,5 +83,8 @@ struct bcm4360_pmu *hyb_pmu_of(const void *sih);
  */
 extern bool bcm4360_open_pmu;
 extern bool bcm4360_open_phy;
+extern bool bcm4360_open_access;
+extern bool bcm4360_open_mac;
+extern bool bcm4360_open_utils;
 
 #endif

@@ -52,7 +52,7 @@ static const u16 mhf_shm_offset[MHF_COUNT] = {
  * access. A band whose band_present bit is clear is skipped. Any `bands` value
  * other than 0..3 does nothing at all. `idx` is not checked (as in the object).
  */
-void bcm4360_mac_mhf(struct bcm4360_mac *mac, u8 idx, u16 mask, u16 val,
+void bcm4360_bmac_mhf(struct bcm4360_mac *mac, u8 idx, u16 mask, u16 val,
 		     u32 bands)
 {
 	u8 sel;		/* selected band: MHF_BAND_2G or MHF_BAND_5G */

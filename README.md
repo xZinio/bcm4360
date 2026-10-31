@@ -29,6 +29,16 @@ layer has a module parameter that switches it back to Broadcom's code:
 | Layer | Module parameter | Default |
 |---|---|---|
 | PMU and clocks (16 functions of `hndpmu.c`) | `open_pmu` | on |
+| Register access: PHY, radio, PHY tables, shared memory (15 functions) | `open_access` | on |
+| MAC control, suspend/enable, microcode host flags (6 functions of `wlc_bmac.c`) | `open_mac` | on |
+| Board variables, number parsing, CRC-8 (7 functions of `bcmutils.c`) | `open_utils` | on |
+
+With all of them on, a third of everything the driver executes during
+bring-up and channel changes is open code (measured in the emulator,
+`tools/re/hybrid.py share`). Not yet confirmed on the card for the last three:
+if Wi-Fi misbehaves, switch a layer off, e.g.
+`echo "options bcm4360 open_utils=0" | sudo tee /etc/modprobe.d/bcm4360-open.conf`,
+then reload the module.
 
 `make HYBRID=0` builds the module exactly as 1.0.3 (Broadcom's core alone).
 

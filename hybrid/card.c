@@ -14,10 +14,19 @@
 #endif
 
 bool bcm4360_open_pmu = true;
+bool bcm4360_open_access = true;
+bool bcm4360_open_mac = true;
+bool bcm4360_open_utils = true;
 
 #ifdef __KERNEL__
 module_param_named(open_pmu, bcm4360_open_pmu, bool, 0444);
 MODULE_PARM_DESC(open_pmu, "PMU and clocks: open code (1, default) or Broadcom's (0)");
+module_param_named(open_access, bcm4360_open_access, bool, 0444);
+MODULE_PARM_DESC(open_access, "PHY/radio/table/shared-memory register access: open code (1, default) or Broadcom's (0)");
+module_param_named(open_mac, bcm4360_open_mac, bool, 0444);
+MODULE_PARM_DESC(open_mac, "MAC control, suspend/enable, host flags: open code (1, default) or Broadcom's (0)");
+module_param_named(open_utils, bcm4360_open_utils, bool, 0444);
+MODULE_PARM_DESC(open_utils, "board variables, number parsing, CRC-8: open code (1, default) or Broadcom's (0)");
 #endif
 
 #define HYB_CARDS		4

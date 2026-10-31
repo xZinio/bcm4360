@@ -13,8 +13,11 @@ now being worked (first increment: the control primitives, `mac-ctrl`).
 
 Since the **hybrid build** ([../../hybrid/README.md](../../hybrid/README.md)),
 open code runs inside `bcm4360.ko` in place of Broadcom's, not only in the
-emulator: the PMU layer (16 functions of `hndpmu.c`) is taken over and verified
-identical over a full session, and the AC-PHY is wired to be taken over the
+emulator: the PMU (16 functions of `hndpmu.c`), the register access primitives
+(15), the MAC control primitives (6) and the utilities of `bcmutils.c` (7:
+board variables, number parsing, CRC-8) are taken over and verified identical
+over a full session, with each layer's fallback too; a third of everything the
+driver executes in that session is now open code. The AC-PHY is wired to be taken over the
 same way at its 79 MAC-facing entry points ([spec/acphy-api.md](spec/acphy-api.md)),
 with the open side being completed. `tools/re/hybrid.py` is the whole-session
 A/B for that build.

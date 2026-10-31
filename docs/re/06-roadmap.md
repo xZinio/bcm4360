@@ -85,12 +85,17 @@ exactly as 1.0.3.
 session on it and on the object alone, comparing every access. Measured over
 attach, up, nine channel changes, watchdog, down, up, down, detach:
 
-| Build | Broadcom code executed in the session | Open code executed |
-|---|---|---|
-| object alone (1.0.3) | 200,461 bytes (100 %) | — |
-| hybrid, PMU taken over | 197,888 bytes (98.7 %) | 2,716 bytes |
+| Build | Broadcom code executed in the session | Open code executed | Share of all execution in open code |
+|---|---|---|---|
+| object alone (1.0.3) | 200,461 bytes (100 %) | — | 0 % |
+| hybrid, PMU taken over | 197,888 bytes (98.7 %) | 2,716 bytes | — |
+| hybrid, PMU + register access + MAC control + utilities | 194,769 bytes (97.2 %) | 15,765 bytes | **33.0 %** |
 
-The PMU is a small layer; the number that matters is the AC-PHY, which is the
+The last column counts every execution of a basic block: the register access
+primitives and the board-variable lookup (`getvar`, about a fifth of all
+execution on its own) are small but run constantly, so a third of everything
+the driver does in the session is now open code. These are small layers in
+bytes; the number that matters for the static share is the AC-PHY, which is the
 bulk of the hardware layer and the part no open driver has. Once its 79 entry
 points are all answered by `open/` and the `--on phy` session matches the
 object, the executed-closed-code share of a bring-up drops to the MAC/bus/DMA
@@ -117,8 +122,9 @@ Only the user can do this, and it is the highest-value next step by a wide margi
 **Stage 0.5 — the hybrid build (landed).** The mechanism that lets open code
 take over functions of the object inside `bcm4360.ko` at link time, with a
 per-layer switch and a fallback to Broadcom's own code (`hybrid/`,
-`scripts/mkhybrid.sh`, `tools/re/hybrid.py`). The PMU layer is taken over and
-verified identical over a full session; the AC-PHY is wired the same way at its
+`scripts/mkhybrid.sh`, `tools/re/hybrid.py`). The PMU, register access, MAC
+control and utility layers are taken over and verified identical over a full
+session (each also with its switch off); the AC-PHY is wired the same way at its
 79 entry points and the open side is being completed. This turns every later
 "replace layer X" into: write/finish the open layer, list its entry points in
 `takeover.txt`, flip its switch, confirm the `hybrid.py` session still matches.

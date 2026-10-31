@@ -1,0 +1,7 @@
+# Files read by sh/make on the build machine must keep LF line endings even
+# in a checkout on Windows (core.autocrlf).
+*.sh            text eol=lf
+Makefile        text eol=lf
+*.mk            text eol=lf
+dkms.conf       text eol=lf
+hybrid/*.txt    text eol=lf

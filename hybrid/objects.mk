@@ -5,14 +5,17 @@
 # the same list to link the hybrid core for the emulator.
 
 hybrid-objs := hybrid/card.o \
-               hybrid/pmu.o open/chip/pmu.o
+               hybrid/pmu.o open/chip/pmu.o \
+               hybrid/access.o open/hw/access.o \
+               hybrid/mac.o open/mac/bmac_ctrl.o open/mac/bmac_mhf.o \
+               hybrid/utils.o open/lib/utils.o
 
-# The PHY layer (hybrid/phy.c, switch open_phy): the adapter, the open PHY and
-# the register access it uses. Not yet in the module: the open PHY does not
-# answer all 79 entry points yet (docs/re/spec/acphy-api.md); tools/re/hybrid.py
-# links it for the emulator, where an open function that is still missing
-# stops the session with its name.
-hybrid-phy-objs := hybrid/phy.o open/hw/access.o \
+# The PHY layer (hybrid/phy.c, switch open_phy): the adapter and the open PHY
+# (its register access, open/hw/access.o, is in the list above). Not yet in the
+# module: the open PHY does not answer all 79 entry points yet
+# (docs/re/spec/acphy-api.md); tools/re/hybrid.py links it for the emulator,
+# where an open function that is still missing stops the session with its name.
+hybrid-phy-objs := hybrid/phy.o \
                    open/phy/phy_api.o open/phy/phy_attach.o open/phy/phy_cal.o open/phy/phy_chanspec.o \
                    open/phy/phy_desense.o open/phy/phy_init.o open/phy/phy_rxgain.o \
                    open/phy/phy_txpower.o open/phy/radio2069.o

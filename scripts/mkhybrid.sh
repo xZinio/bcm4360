@@ -34,6 +34,9 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 # defined symbols of the object: offset, type letter, name
 "$NM" "$in" | awk 'NF == 3 { print $1, $2, $3 }' > "$tmp/syms"
 
+# the list without carriage returns (a checkout on Windows may have CRLF)
+tr -d '\r' < "$list" > "$tmp/list"
+
 # objcopy weakens a symbol only if it is global already when it gets there,
 # and it globalizes after it weakens: two passes, globalize then weaken
 args=$tmp/args
@@ -74,7 +77,7 @@ while read -r kind name rest; do
 		exit 1
 		;;
 	esac
-done < "$list"
+done < "$tmp/list"
 
 # the argument lists have no spaces in their words
 # shellcheck disable=SC2046

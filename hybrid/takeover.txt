@@ -27,6 +27,43 @@ take si_pmu_pllcontrol
 take si_pmu_pllupd
 take si_pmu_rfldo
 
+# --- register access (hybrid/access.c -> open/hw/access.c, docs/re/spec/access.md)
+take phy_reg_read
+take phy_reg_write
+take phy_reg_mod
+take phy_reg_and
+take phy_reg_or
+take read_radio_reg
+take write_radio_reg
+take mod_radio_reg
+take and_radio_reg
+take or_radio_reg
+take xor_radio_reg
+take wlc_phy_table_write_acphy
+take wlc_phy_table_read_acphy
+take wlc_bmac_read_shm
+take wlc_bmac_write_shm
+use tcm_sem_enter
+use tcm_sem_exit
+
+# --- MAC control (hybrid/mac.c -> open/mac, docs/re/spec/bmac-init.md A1-A9)
+take wlc_bmac_mctrl
+take wlc_ucode_wake_override_set
+take wlc_ucode_wake_override_clear
+take wlc_bmac_suspend_mac_and_wait
+take wlc_bmac_enable_mac
+take wlc_bmac_mhf
+
+# --- utilities (hybrid/utils.c -> open/lib/utils.c, docs/re/spec/utils.md)
+take getvar
+take getintvar
+take getintvararray
+take getintvararraysize
+take bcm_strtoul
+take bcm_bitcount
+take hndcrc8
+use nvram_get
+
 # --- PHY (hybrid/phy.c -> open/phy, docs/re/spec/acphy-api.md): all 79 entry points
 # of the MAC into the PHY
 take wlc_phy_shared_attach
@@ -137,7 +174,7 @@ use si_get_sromctl
 use si_set_sromctl
 use si_alp_clock
 use otp_read_word
-use getvar
+# (getvar: taken by the utilities layer above)
 
 # Broadcom's tables the open PHY loads at runtime (hybrid/fwdata.h)
 use acphy_est_pwr_lut_core0_rev0

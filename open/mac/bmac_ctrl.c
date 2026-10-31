@@ -84,7 +84,7 @@ static void wlc_bmac_wait_for_wake(struct bcm4360_mac *mac)
  * software copy and write it (A1). No register access when nothing changes;
  * `val` is not limited to `mask`.
  */
-void bcm4360_mac_mctrl(struct bcm4360_mac *mac, u32 mask, u32 val)
+void bcm4360_bmac_mctrl(struct bcm4360_mac *mac, u32 mask, u32 val)
 {
 	u32 new_maccontrol = (mac->maccontrol & ~mask) | val;
 
@@ -99,7 +99,7 @@ void bcm4360_mac_mctrl(struct bcm4360_mac *mac, u32 mask, u32 val)
  * microcode awake. If it is awake already (any override set, or WAKE set in the
  * copy), only record the reason; otherwise set WAKE and wait for the wake (A5).
  */
-void bcm4360_mac_wake_override_set(struct bcm4360_mac *mac, u32 bit)
+void bcm4360_bmac_wake_override_set(struct bcm4360_mac *mac, u32 bit)
 {
 	if (mac->wake_override != 0 || (mac->maccontrol & MCTL_WAKE)) {
 		mac->wake_override |= bit;
@@ -115,7 +115,7 @@ void bcm4360_mac_wake_override_set(struct bcm4360_mac *mac, u32 bit)
  * When no reason is left and the copy does not want WAKE, write WAKE away (this
  * write is made even when `bit` was not set before the call).
  */
-void bcm4360_mac_wake_override_clear(struct bcm4360_mac *mac, u32 bit)
+void bcm4360_bmac_wake_override_clear(struct bcm4360_mac *mac, u32 bit)
 {
 	mac->wake_override &= ~bit;
 	if (mac->wake_override == 0 && !(mac->maccontrol & MCTL_WAKE))
@@ -127,7 +127,7 @@ void bcm4360_mac_wake_override_clear(struct bcm4360_mac *mac, u32 bit)
  * Calls nest: only the outermost call acts. The interrupt status bit is not
  * acknowledged here (A7 does that).
  */
-void bcm4360_mac_suspend(struct bcm4360_mac *mac)
+void bcm4360_bmac_suspend(struct bcm4360_mac *mac)
 {
 	u32 waited = 0;
 
@@ -137,7 +137,7 @@ void bcm4360_mac_suspend(struct bcm4360_mac *mac)
 		return;
 
 	/* step 2: keep the microcode awake while the MAC is suspended */
-	bcm4360_mac_wake_override_set(mac, WAKE_REASON_MAC_SUSPENDED);
+	bcm4360_bmac_wake_override_set(mac, WAKE_REASON_MAC_SUSPENDED);
 
 	/* step 3: MAC revisions < 13 with a 3-wire Bluetooth coexistence
 	 * interface drive a GPIO here; MAC revision 42 does not. */
@@ -151,7 +151,7 @@ void bcm4360_mac_suspend(struct bcm4360_mac *mac)
 		return;		/* a real driver would call wl_down() here */
 
 	/* step 6: clear EN_MAC (one write if the copy had the bit) */
-	bcm4360_mac_mctrl(mac, MCTL_EN_MAC, 0);
+	bcm4360_bmac_mctrl(mac, MCTL_EN_MAC, 0);
 
 	/* step 7: wait for the "MAC suspended" interrupt status bit */
 	while ((d11_read32(mac->hw, D11_MACINTSTATUS) & MACINTSTATUS_SUSPENDED) == 0 &&
@@ -174,7 +174,7 @@ void bcm4360_mac_suspend(struct bcm4360_mac *mac)
  * Only the call that brings the nesting counter to 0 acts; it sets EN_MAC and
  * acknowledges "MAC suspended".
  */
-void bcm4360_mac_enable(struct bcm4360_mac *mac)
+void bcm4360_bmac_enable(struct bcm4360_mac *mac)
 {
 	/* step 1: nesting counter; only the call reaching 0 acts */
 	mac->mac_suspend_depth--;
@@ -185,7 +185,7 @@ void bcm4360_mac_enable(struct bcm4360_mac *mac)
 	(void)d11_read32(mac->hw, D11_MACCONTROL);
 
 	/* step 3: set EN_MAC (chips 0xd144 and 0x5357 use mask and value 3) */
-	bcm4360_mac_mctrl(mac, MCTL_EN_MAC, MCTL_EN_MAC);
+	bcm4360_bmac_mctrl(mac, MCTL_EN_MAC, MCTL_EN_MAC);
 
 	/* step 4: acknowledge "MAC suspended" */
 	d11_write32(mac->hw, D11_MACINTSTATUS, MACINTSTATUS_SUSPENDED);
@@ -195,7 +195,7 @@ void bcm4360_mac_enable(struct bcm4360_mac *mac)
 	(void)d11_read32(mac->hw, D11_MACINTSTATUS);
 
 	/* step 6 */
-	bcm4360_mac_wake_override_clear(mac, WAKE_REASON_MAC_SUSPENDED);
+	bcm4360_bmac_wake_override_clear(mac, WAKE_REASON_MAC_SUSPENDED);
 
 	/* step 7: MAC revisions < 13 with a 3-wire coexistence interface drive a
 	 * GPIO here; MAC revision 42 does not. */

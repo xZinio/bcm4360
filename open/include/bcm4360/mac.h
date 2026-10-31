@@ -34,12 +34,12 @@ struct bcm4360_mac {
 	u8  band_present;	/* bit 0: 2.4 GHz band state exists, bit 1: 5 GHz exists */
 };
 
-void bcm4360_mac_mctrl(struct bcm4360_mac *mac, u32 mask, u32 val);	/* A2 (+A1) */
-void bcm4360_mac_wake_override_set(struct bcm4360_mac *mac, u32 bit);	/* A3 (+A5) */
-void bcm4360_mac_wake_override_clear(struct bcm4360_mac *mac, u32 bit);	/* A4 */
-void bcm4360_mac_suspend(struct bcm4360_mac *mac);			/* A6 */
-void bcm4360_mac_enable(struct bcm4360_mac *mac);			/* A7 */
-void bcm4360_mac_mhf(struct bcm4360_mac *mac, u8 idx, u16 mask, u16 val,
+void bcm4360_bmac_mctrl(struct bcm4360_mac *mac, u32 mask, u32 val);	/* A2 (+A1) */
+void bcm4360_bmac_wake_override_set(struct bcm4360_mac *mac, u32 bit);	/* A3 (+A5) */
+void bcm4360_bmac_wake_override_clear(struct bcm4360_mac *mac, u32 bit);	/* A4 */
+void bcm4360_bmac_suspend(struct bcm4360_mac *mac);			/* A6 */
+void bcm4360_bmac_enable(struct bcm4360_mac *mac);			/* A7 */
+void bcm4360_bmac_mhf(struct bcm4360_mac *mac, u8 idx, u16 mask, u16 val,
 		     u32 bands);					/* A9 */
 
 #endif

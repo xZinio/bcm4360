@@ -32,13 +32,22 @@ from scenarios import scenario, make_hw, set_channel
 MAC_SPACES = ('d11', 'shm', 'delay')
 
 # control-primitive object function -> (open function, u32 args after wlc_hw)
+# (docs/re/tasks/bmac-rename.md: the open names were bcm4360_mac_* before;
+# open_sym() accepts both while the rename lands)
 MAC_FUNCS = {
-    'wlc_bmac_mctrl':                ('bcm4360_mac_mctrl', 2),
-    'wlc_ucode_wake_override_set':   ('bcm4360_mac_wake_override_set', 1),
-    'wlc_ucode_wake_override_clear': ('bcm4360_mac_wake_override_clear', 1),
-    'wlc_bmac_suspend_mac_and_wait': ('bcm4360_mac_suspend', 0),
-    'wlc_bmac_enable_mac':           ('bcm4360_mac_enable', 0),
+    'wlc_bmac_mctrl':                ('bcm4360_bmac_mctrl', 2),
+    'wlc_ucode_wake_override_set':   ('bcm4360_bmac_wake_override_set', 1),
+    'wlc_ucode_wake_override_clear': ('bcm4360_bmac_wake_override_clear', 1),
+    'wlc_bmac_suspend_mac_and_wait': ('bcm4360_bmac_suspend', 0),
+    'wlc_bmac_enable_mac':           ('bcm4360_bmac_enable', 0),
 }
+
+
+def open_sym(t, name):
+    try:
+        return t.sym(name)
+    except ab.EmuError:
+        return t.sym(name.replace('bcm4360_bmac_', 'bcm4360_mac_'))
 MHF_FUNC = 'wlc_bmac_mhf'
 WATCHED = list(MAC_FUNCS) + [MHF_FUNC]
 
@@ -185,7 +194,7 @@ def mac_ctrl(objs, show):
     def call(t, p, st):
         open_fn, nargs = MAC_FUNCS[st.func]
         args = [st.args[1 + i] & 0xffffffff for i in range(nargs)]
-        t.m.call(t.sym(open_fn), p, *args)
+        t.m.call(open_sym(t, open_fn), p, *args)
     return _run(objs, show, lambda st: st.func in MAC_FUNCS, call)
 
 
@@ -197,7 +206,7 @@ def mac_mhf(objs, show):
         mask = st.args[2] & 0xffff
         val = st.args[3] & 0xffff
         bands = st.args[4] & 0xffffffff
-        t.m.call(t.sym('bcm4360_mac_mhf'), p, idx, mask, val, bands)
+        t.m.call(open_sym(t, 'bcm4360_bmac_mhf'), p, idx, mask, val, bands)
     return _run(objs, show, lambda st: st.func == MHF_FUNC, call)
 
 

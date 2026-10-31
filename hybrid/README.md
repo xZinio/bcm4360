@@ -35,9 +35,13 @@ was compared there.
 |---|---|---|---|---|---|
 | cards | - | - | `si_attach`, `si_detach` (wrapped: note the BAR0 window, then Broadcom's) | `card.c` | - |
 | PMU, clocks | `open_pmu` | on | 16: `si_pmu_init`, `si_pmu_pll_init`, `si_pmu_res_init`, `si_pmu_measure_alpclk`, the clock queries, OTP power, radio supply, the indirect PMU registers | `pmu.c` -> `open/chip/pmu.c` | [pmu](../docs/re/spec/pmu.md) |
+| register access | `open_access` | on | 15: `phy_reg_read/write/mod/and/or`, `read/write/mod/and/or/xor_radio_reg`, `wlc_phy_table_write/read_acphy`, `wlc_bmac_read/write_shm` | `access.c` -> `open/hw/access.c` | [access](../docs/re/spec/access.md) |
+| MAC control | `open_mac` | on | 6: `wlc_bmac_mctrl`, `wlc_ucode_wake_override_set/clear`, `wlc_bmac_suspend_mac_and_wait`, `wlc_bmac_enable_mac`, `wlc_bmac_mhf` | `mac.c` -> `open/mac/bmac_ctrl.c`, `bmac_mhf.c` | [bmac-init](../docs/re/spec/bmac-init.md) A1-A9 |
+| utilities | `open_utils` | on | 7: `getvar`, `getintvar`, `getintvararray`, `getintvararraysize`, `bcm_strtoul`, `bcm_bitcount`, `hndcrc8` (the global NVRAM, `nvram_get`, stays Broadcom's) | `utils.c` -> `open/lib/utils.c` | [utils](../docs/re/spec/utils.md) |
 
-The switches are read when a card is attached. To run a layer on Broadcom's
-code again, e.g. the PMU:
+The switches are read when a card is attached (`open_access`, `open_mac` and
+`open_utils` at every call; all are read-only once the module is loaded). To
+run a layer on Broadcom's code again, e.g. the PMU:
 
 ```sh
 echo "options bcm4360 open_pmu=0" | sudo tee /etc/modprobe.d/bcm4360-open.conf
@@ -73,10 +77,25 @@ is the real card.
 
 ## Results
 
-| Build | Broadcom code executed in the session | Open code executed |
-|---|---|---|
-| object alone (1.0.3) | 200,461 bytes (100 %) | - |
-| hybrid, PMU open | 197,888 bytes (98.7 %) | 2,716 bytes |
+| Build | Broadcom code executed in the session | Open code executed | Share of all execution (counting repetitions) in open code |
+|---|---|---|---|
+| object alone (1.0.3) | 200,461 bytes (100 %) | - | 0 % |
+| hybrid, PMU open | 197,888 bytes (98.7 %) | 2,716 bytes | - |
+| hybrid, PMU, register access, MAC control, utilities open | 194,769 bytes (97.2 %) | 15,765 bytes | **33.0 %** |
+
+The last column weighs code by how often it runs: the register access
+primitives and the variable lookup are small but run constantly (`getvar`
+alone was about a fifth of everything the driver executes). `check` gives
+"the same" with all layers on and with each switched off; the module builds
+against linux-headers 7.2.11-arch1-1 with GCC 16.2.1 without warnings from
+`open/` or `hybrid/`, and each of the 46 taken functions of these layers has
+exactly one strong definition, the adapter's (the 79 of the PHY stay
+Broadcom's until the PHY adapter goes into the module).
+
+One value of the object is not defined by the object itself: the third
+16-bit word of PHY table 0x14, entry 0x33, comes from uninitialized stack in
+Broadcom's `sub_09eaf9` (docs/re/questions/phy-rxgain.md); `hybrid.py`
+compares that word as undefined.
 
 ## Rules for adapters
 
@@ -87,6 +106,9 @@ is the real card.
 * Declare every taken function with `HYB_TAKE()` (hybrid.h), which also
   declares Broadcom's body `bcm4360_blob_NAME`.
 * Parameters of type `bool` of the object are bytes: take them as `u8`.
+  Other integer parameters narrower than 32 bit: take them as `u32` and
+  truncate. GCC, which built the object, does not extend them; a compiler
+  that relies on the extension (clang) would read garbage bits.
 * A layer whose state Broadcom's other code reads cannot be taken over in
   part. The PMU keeps no state of its own (one cached clock measurement), so
   its functions can be taken over one by one. The PHY keeps a large state that

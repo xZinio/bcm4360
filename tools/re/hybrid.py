@@ -41,7 +41,7 @@ ROOT = ab.ROOT
 OUT = os.path.join(ROOT, 're-out', 'hybrid')
 BLOB = os.path.join(ROOT, 'lib', 'wlc_hybrid.o_shipped')
 CORE = os.path.join(OUT, 'core.o')
-LAYERS = ('pmu', 'phy')             # the switches bcm4360_open_<layer>
+LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils')   # the switches bcm4360_open_<layer>
 
 CHANNELS = ['1', '6', '11', '36', '36/40', '36/80', '149/80', '157/40', '165']
 SESSION = (['attach', 'mpc 0', 'up'] + CHANNELS +
@@ -51,6 +51,14 @@ SESSION = (['attach', 'mpc 0', 'up'] + CHANNELS +
 # object moves them to reach ChipCommon, the open code uses the fixed window
 WINDOW_REGS = {0x70, 0x80}
 
+# Bits the object writes without defining them (compared as 0). TBL(0x14)[0x33]
+# is one 48-bit entry that sub_09eaf9 (the AC-PHY's update of register tables
+# on a bandwidth change) writes from a 32-bit variable on its stack: the third
+# 16-bit word is whatever lies on the stack behind it (0x8080 or 0 in the
+# object's own session), so it changes with the stack use of any code that
+# ran before. Proven by hooking the table write (docs/re/questions/phy-rxgain.md).
+UNDEFINED_TBL = {('W', 'tbl.14', 0x33, 6): 0xffffffff}
+
 
 def objects():
     """The objects of the hybrid build: hybrid/objects.mk, with the PHY layer."""
@@ -58,7 +66,8 @@ def objects():
     out = []
     for var in ('hybrid-objs', 'hybrid-phy-objs'):
         m = re.search(var + r'\s*:=((?:.*\\\n)*.*)', text)
-        out += [o for o in m.group(1).replace('\\\n', ' ').split() if o.endswith('.o')]
+        out += [o for o in m.group(1).replace('\\\n', ' ').split()
+                if o.endswith('.o') and o not in out]
     return out
 
 
@@ -112,6 +121,21 @@ class Run:
                 self.m.w8(hits[0].addr, value)
         if coverage:
             self.m.record_coverage()
+            # executions per basic block, for the share counting repetitions
+            self.counts = collections.Counter()
+            tb = BASES['.text']
+
+            def count(mu, address, size, user):
+                self.counts[address] += 1
+            import unicorn as uc
+            self.m.mu.hook_add(uc.UC_HOOK_BLOCK, count, None, tb,
+                               tb + self.m.blob.size['.text'] - 1)
+        if path and 'bcm4360_tbl_write' in self.m.blob.byname:
+            # the card model records the table transfers of Broadcom's table
+            # functions; record those of the open ones (open/hw/access.c) alike
+            shim = type('S', (), {})()
+            shim.chip, shim.m, shim.sym = self.s.chip, self.m, (lambda name: name)
+            ab.open_tables(shim)
         self.results = []
 
     def step(self, what):
@@ -156,6 +180,8 @@ class Run:
         for a in ab.logical(self.s.chip.trace, self.s.chip.func_name):
             if a[1] == 'pcicfg' and a[2] in WINDOW_REGS:
                 continue
+            if (a[0], a[1], a[2], a[3]) in UNDEFINED_TBL and isinstance(a[4], int):
+                a = a[:4] + (a[4] & UNDEFINED_TBL[(a[0], a[1], a[2], a[3])],) + a[5:]
             out.append(a)
         return out
 
@@ -199,17 +225,22 @@ def share():
     out = {}
     for name, path, off in (('object alone', None, ()), ('hybrid', core, ())):
         r = Run(path, off=off, coverage=True).session()
-        closed = opened = 0
+        closed = opened = dclosed = dopened = 0
         for a, size in r.m.blocks.items():
+            n = r.counts.get(a, 0)
             if a < text_end:
                 closed += size
+                dclosed += size * n
             else:
                 opened += size
-        out[name] = (closed, opened)
+                dopened += size * n
+        out[name] = (closed, opened, dclosed, dopened)
     base = out['object alone'][0]
-    for name, (closed, opened) in out.items():
-        print('%-14s Broadcom code executed: %7d bytes (%5.1f%%), open code: %6d bytes'
-              % (name, closed, 100.0 * closed / base, opened))
+    for name, (closed, opened, dclosed, dopened) in out.items():
+        print('%-14s Broadcom code executed: %7d bytes (%5.1f%%), open code: %6d bytes; '
+              'of all execution (counting repetitions) %5.1f%% open'
+              % (name, closed, 100.0 * closed / base, opened,
+                 100.0 * dopened / max(dclosed + dopened, 1)))
     return out
 
 
