@@ -262,8 +262,10 @@ struct bcm4360_phy_interference {
 	bool forced;		/* sh+0x94: 0 (P2.12) */
 	u8 channel;		/* pi+0x240: channel the code was last set up for, P2.11 */
 	u32 flags;		/* pi+0xc0c: flags of the interference code: 0 (P2.11) */
+	u32 flags_time;		/* pi+0xc00: time stamp for the mode-3 code (acphy-api.md A8): 0 */
 	u32 mode_applied;	/* pi+0xc3c: mode last applied by wlc_phy_interference (acphy-init) */
 	u8 noise_window[8];	/* sh+0x96: `phy_noise_window` (bcm): 0 (P1.3) */
+	u32 noise_index;	/* sh+0xa0: next slot of noise_window (acphy-api-rx.md): 0 */
 };
 
 /* receive gains of a core in a band (pi_ac+0x3e0 + 12 * band + 3 * core), P6.18 */
@@ -352,6 +354,13 @@ struct bcm4360_phy_txpwr {
 	bool hwpwrctrl_capable;	/* pi+0xc40: 1 (P6.15) */
 	bool hwpwrctrl;		/* pi+0xfa0: power control by hardware is enabled: 1 (P6.15) */
 	s16 radiopwr_override;	/* pi+0x236: (bcm) (unverified): -1 (P2.14) */
+	/* pi+0x21a + core: lowest target power over the rates, quarter dBm (acphy-api-txpower.md) */
+	s8 target_min[BCM4360_PHY_CORE_SLOTS];
+	/* the user-override state (wlc_phy_txpower_get/set, acphy-api-txpower.md) */
+	s8 ovr_value;		/* pi+0x22f: the override target in dBm */
+	u8 ovr_active;		/* pi+0x230: an override is in force */
+	u8 ovr_got;		/* pi+0x232: the override byte returned by txpower_get */
+	u8 ovr_neg;		/* pi+0x234: the override is a negative/rfport form */
 	/* pi+0x1c8: object of the power limits per rate, made later: NULL (P2.14) */
 	void *ppr;
 	/* pi_ac+0x010 + core: gain index last set; 0x40 = "uninitialised" (procedure 5) */
@@ -681,6 +690,9 @@ struct bcm4360_phy {
 	u32 slow_timer;		/* sh+0x78: 60 */
 	u32 glacial_timer;	/* sh+0x7c: 120 */
 	bool watchdog_override;	/* pi+0x18c: (bcm): 1 (P2.14) */
+	u32 now;		/* sh+0x34: watchdog seconds, incremented each tick (acphy-api-watchdog.md) */
+	u8 cal_skip;		/* pi+0x18d: set at the top of cal_perical, cleared on a periodic run */
+	u8 cal_wide;		/* pi+0x18e: (PHY rev > 0x12); 0 for the AC-PHY */
 	u8 watchdog_core;	/* pi_ac+0x918: core that the watchdog puts into PHY(0x520): 0 */
 
 	/* the front end and the receiver */
@@ -757,6 +769,24 @@ struct bcm4360_phy {
 	u8 lpf_hpc_ovr_active;				/* pi_ac+0x308 */
 	u16 lpf_hpc_ovr_save[BCM4360_PHY_CORES_MAX][2];	/* pi_ac+0x30a */
 	u16 dig_lpf_ovr_save[10];			/* pi+0xf6e */
+
+	/*
+	 * Scalars the MAC-facing control entry points store or read
+	 * (docs/re/spec/acphy-api.md, sections A3, A5, A6, A8, A15). On the
+	 * AC-PHY most are stored and never read by the AC code; they are kept so
+	 * the state matches the object. Zero after attach unless noted.
+	 */
+	u8 encore;		/* pi+0x178: wlc_phy_get_encore (A3); 0 for the AC-PHY */
+	u8 ofdm_rateset_war;	/* pi+0x17d: wlc_phy_ofdm_rateset_war (A3) */
+	u8 btclock_war;		/* pi+0xfa1: wlc_phy_btclock_war (A3) */
+	u8 antsel_type;		/* pi+0x180: wlc_phy_antsel_type_set (A15) */
+	bool antsel_type_lut;	/* pi+0x10fa: antsel type is 4 or 5 (A15) */
+	u8 bbpll_blocked;	/* pi+0x113e: changes of the baseband PLL are blocked (A5) */
+	u16 spur_pending;	/* pi+0x1140: spur-mode request while blocked (A5); 0 on the 4360 */
+	s8 femctrl_ovrd;	/* pi_ac+0x32e: wlc_phy_set_femctrl_bt_wlan_ovrd (A6) */
+	s16 bssinit_a[16];	/* pi+0xed4: set to -92 by wlc_phy_BSSinit (A8) */
+	s16 bssinit_b[16];	/* pi+0xef4: set to -92 by wlc_phy_BSSinit (A8) */
+	u8 bssinit_f54;		/* pi+0xf54: cleared by wlc_phy_BSSinit (A8) */
 };
 
 /*

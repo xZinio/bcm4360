@@ -1798,3 +1798,9 @@ bool bcm4360_phy_get_var(const struct bcm4360_phy *phy, const char *name, u32 in
 #undef RET
 #undef EQ
 }
+
+/* acphy-api.md, A10: the "uninitted" procedure, exposed for wlc_phy_ioctl */
+void bcm4360_phy_set_uninitted(struct bcm4360_phy *phy)
+{
+	phy_set_uninitted(phy);
+}

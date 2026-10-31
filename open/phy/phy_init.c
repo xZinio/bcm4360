@@ -750,3 +750,9 @@ void bcm4360_phy_init(struct bcm4360_phy *phy, u16 chanspec)
 	phy->init_running = false;				/* step 18 */
 	(void)bcm4360_shm_read(phy->hw, SHM_UCODE_BLOCK);	/* step 19 */
 }
+
+/* acphy-api.md, A10: the interference "apply" used by wlc_phy_ioctl */
+void bcm4360_phy_interference_apply(struct bcm4360_phy *phy, u32 mode, bool init)
+{
+	phy_interference(phy, mode, init);
+}

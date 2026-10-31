@@ -1998,3 +1998,9 @@ void bcm4360_phy_timer_phycal(struct bcm4360_phy *phy)
 		return;
 	/* the remaining phases run the multi-phase machine; not exercised */
 }
+
+/* acphy-api.md, A13: restore the scan/roam calibration cache (hold_upd) */
+void bcm4360_phy_scanroam_restore(struct bcm4360_phy *phy)
+{
+	phy_scanroam_cache(phy, 0);
+}

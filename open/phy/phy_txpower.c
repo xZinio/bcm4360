@@ -983,3 +983,104 @@ void bcm4360_phy_precal_txgain_acphy(struct bcm4360_phy *phy, u8 *records)
 		phy_get_txgain_by_index(phy, (struct txgain_rec *)(records + 10 * c), (s8)i);
 	}
 }
+
+/* ===================================================================
+ * MAC-facing transmit-power entry points (docs/re/spec/acphy-api-txpower.md).
+ * The ppr-merge path (limit_set/set/sromlimit) is separate; these are the
+ * small getters and stores the bring-up and the MAC query.
+ * =================================================================== */
+
+/* acphy-api-txpower.md: wlc_phy_txpower_ipa_ison - 0 for the AC-PHY */
+bool bcm4360_phy_txpower_ipa_ison(struct bcm4360_phy *phy)
+{
+	(void)phy;
+	return false;
+}
+
+/* acphy-api-txpower.md: wlc_phy_txpower_hw_ctrl_get */
+bool bcm4360_phy_txpower_hw_ctrl_get(struct bcm4360_phy *phy)
+{
+	return phy->txpwr.hwpwrctrl;
+}
+
+/* acphy-api-txpower.md: wlc_phy_txpwr_percent_set */
+void bcm4360_phy_txpwr_percent_set(struct bcm4360_phy *phy, u8 percent)
+{
+	phy->txpwr.percent = percent;
+}
+
+/* acphy-api-txpower.md: wlc_phy_txpower_get_target_max (over the active chains) */
+u8 bcm4360_phy_txpower_get_target_max(struct bcm4360_phy *phy)
+{
+	u8 m = 0;
+	u32 c;
+
+	for (c = 0; c < phy_cores(phy); c++)
+		if ((phy->rxchain >> c) & 1)
+			if ((u8)phy->txpwr.target_max[c] > m)
+				m = (u8)phy->txpwr.target_max[c];
+	return m;
+}
+
+/* acphy-api-txpower.md: wlc_phy_txpower_get_target_min */
+u8 bcm4360_phy_txpower_get_target_min(struct bcm4360_phy *phy)
+{
+	u8 m = 0x7f;
+	u32 c;
+
+	for (c = 0; c < phy_cores(phy); c++)
+		if ((phy->rxchain >> c) & 1)
+			if ((u8)phy->txpwr.target_min[c] < m)
+				m = (u8)phy->txpwr.target_min[c];
+	return m;
+}
+
+/* acphy-api-txpower.md: wlc_phy_txpower_get */
+s32 bcm4360_phy_txpower_get(struct bcm4360_phy *phy, u32 *qdbm, u8 *override)
+{
+	*qdbm = phy->txpwr.user_target;
+	if (phy->txpwr.ovr_active) {
+		u32 v = (u32)(s32)phy->txpwr.ovr_value;
+
+		if (phy->txpwr.ovr_neg)
+			v = (u32)(-(s32)v) | 0x40000000;
+		*qdbm = v;
+	}
+	if (override)
+		*override = phy->txpwr.ovr_got;
+	return 0;
+}
+
+/* acphy-api-txpower.md: wlc_phy_get_olpc_pwroffset */
+s8 bcm4360_phy_get_olpc_pwroffset(struct bcm4360_phy *phy, u16 bw)
+{
+	switch (bw) {
+	case BCM4360_CHANSPEC_BW_20:
+		return (s8)phy->txpwr.olpc_pwroffset[0];
+	case BCM4360_CHANSPEC_BW_40:
+		return (s8)phy->txpwr.olpc_pwroffset[1];
+	case BCM4360_CHANSPEC_BW_80:
+		return (s8)phy->txpwr.olpc_pwroffset[2];
+	default:
+		return 0;
+	}
+}
+
+/* acphy-api-txpower.md: wlc_phy_tssivisible_thresh */
+s32 bcm4360_phy_tssivisible_thresh(struct bcm4360_phy *phy)
+{
+	return (s8)bcm4360_phy_tssivisible_thresh_acphy(phy);
+}
+
+/* acphy-api-txpower.md: wlc_phy_clear_tssi - no effect on the AC-PHY */
+void bcm4360_phy_clear_tssi(struct bcm4360_phy *phy)
+{
+	(void)phy;
+}
+
+/* acphy-api-txpower.md: wlc_phy_txpower_core_offset_set (via the AC function) */
+s32 bcm4360_phy_txpower_core_offset_set(struct bcm4360_phy *phy, const void *offsets)
+{
+	bcm4360_phy_txpower_core_offset_set_acphy(phy, offsets);
+	return 0;
+}

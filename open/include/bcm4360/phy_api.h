@@ -101,4 +101,9 @@ bool bcm4360_phy_ant_rxdiv_get(struct bcm4360_phy *phy, u8 *val);
 s32 bcm4360_phy_swdiv_ant_get(struct bcm4360_phy *phy, u8 bit, u8 *val);
 s32 bcm4360_phy_swdiv_ant_set(struct bcm4360_phy *phy, u8 bit, bool on);
 
+/* internal helpers other PHY files expose for the control entry points */
+void bcm4360_phy_interference_apply(struct bcm4360_phy *phy, u32 mode, bool init);
+void bcm4360_phy_set_uninitted(struct bcm4360_phy *phy);
+void bcm4360_phy_scanroam_restore(struct bcm4360_phy *phy);
+
 #endif
