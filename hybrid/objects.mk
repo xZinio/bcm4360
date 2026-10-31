@@ -18,4 +18,5 @@ hybrid-objs := hybrid/card.o \
 hybrid-phy-objs := hybrid/phy.o \
                    open/phy/phy_api.o open/phy/phy_attach.o open/phy/phy_cal.o open/phy/phy_chanspec.o \
                    open/phy/phy_desense.o open/phy/phy_init.o open/phy/phy_rxgain.o \
-                   open/phy/phy_txpower.o open/phy/radio2069.o
+                   open/phy/phy_txpower.o open/phy/radio2069.o \
+                   open/phy/phy_rx.o open/phy/phy_wd.o

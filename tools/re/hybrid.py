@@ -61,11 +61,11 @@ WINDOW_REGS = {0x70, 0x80}
 UNDEFINED_TBL = {('W', 'tbl.14', 0x33, 6): 0xffffffff}
 
 
-def objects():
+def objects(variables=('hybrid-objs', 'hybrid-phy-objs')):
     """The objects of the hybrid build: hybrid/objects.mk, with the PHY layer."""
     text = open(os.path.join(ROOT, 'hybrid', 'objects.mk')).read()
     out = []
-    for var in ('hybrid-objs', 'hybrid-phy-objs'):
+    for var in variables:
         m = re.search(var + r'\s*:=((?:.*\\\n)*.*)', text)
         out += [o for o in m.group(1).replace('\\\n', ' ').split()
                 if o.endswith('.o') and o not in out]
@@ -77,8 +77,11 @@ def build(quiet=False):
     zig = ab.find_zig()
     os.makedirs(os.path.join(OUT, 'obj'), exist_ok=True)
     objs = []
+    phy_only = set(objects()) - set(objects(('hybrid-objs',)))
     for o in objects():
         src = os.path.join(ROOT, o[:-2] + '.c')
+        if o in phy_only and not os.path.exists(src):
+            continue    # a file of the PHY layer that is still to be written
         out = os.path.join(OUT, 'obj', o.replace('/', '_'))
         r = subprocess.run([zig, 'cc'] + ab.CFLAGS +
                            ['-DBCM4360_HYBRID=1', '-I', os.path.join(ROOT, 'open', 'include'),
