@@ -10,6 +10,16 @@ code, only ~24% (~372 KB) is the hardware layer an open driver needs; ~46% of
 that is already reproduced in `open/` (the whole AC-PHY), and the MAC layer is
 now being worked (first increment: the control primitives, `mac-ctrl`).
 
+**New (2026-10-31): open code in the running driver.** The HYBRID build
+([`hybrid/README.md`](../../hybrid/README.md), `make HYBRID="access pmu mac"`)
+replaces layers of the object inside `bcm4360.ko` with the open code: the
+register access primitives, the PMU and the MAC control primitives (37
+functions of the object). In the emulator the hybrid driver makes exactly the
+bus accesses of the object over a whole session (76,781 accesses, 0
+differences; `tools/re/hybrid.py`), and 8.9% of everything it executes is open
+code. It builds against the target kernel (7.2.11-arch1-1, GCC 16.2.1). Not
+yet run on a card.
+
 ## Summary
 
 * The object is completely inventoried and decompiled; every function is
@@ -22,6 +32,9 @@ now being worked (first increment: the control primitives, `mac-ctrl`).
   and is **not finished**. The table below says how far each area is.
 * Nothing has been tried on a real card. The repository still needs
   `lib/wlc_hybrid.o_shipped` to produce a working driver.
+* Parts of `open/` can now run inside the real driver in place of the
+  object's code (HYBRID build, experimental, see above); the default build is
+  unchanged.
 
 ## Areas
 

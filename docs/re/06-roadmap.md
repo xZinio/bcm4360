@@ -59,10 +59,43 @@ with `fwcut.py`). Per-device SROM/calibration is read from the card, not shipped
   access-for-access in the emulator: 21/21 scenarios, 0 differences.
 - It has **never run on a real card.** The card model uses *assumed* identity
   values (chip/PHY/radio revisions, SROM) and fakes calibration results.
-- None of `open/` is built into the shipping `bcm4360.ko`, which still links the
-  full 7.35 MB `wlc_hybrid.o_shipped`.
+- The default `bcm4360.ko` still links the full 7.35 MB `wlc_hybrid.o_shipped`
+  and runs none of `open/`. The experimental HYBRID build (below) runs parts
+  of `open/` in place of the object's code.
 - The MAC layer is specified for bring-up (`bmac-init`) only; the data path is
   not specified or implemented.
+
+## The hybrid path: replace the object layer by layer, inside the working driver
+
+The stages below end in a new driver. Before that, the open code can already
+replace the object's own code in the driver that works today ("strangler"
+build, [`hybrid/README.md`](../../hybrid/README.md)). This is the measure of
+progress that matters at runtime: how much of what the driver executes is
+still Broadcom's code.
+
+- Every call between named functions of the object is a relocation against
+  the callee's symbol (no call bypasses it, checked per function), so a weak
+  copy of the object plus a bridge that defines the same names redirects all
+  of them to the open code. The bridges only marshal the object's structures
+  into the open interfaces.
+- `tools/re/hybrid.py` runs the object with the bridges in place through a
+  whole session and compares every bus access with the object alone, and
+  measures how much object code is still executed.
+- Done (0 differences): `access`, `pmu`, `mac` (37 functions; 8.9% of the
+  execution is open code; 36 functions of the object no longer run).
+- Next, by size of the object code a session runs:
+  1. **The PHY** (`wlc_phy_ac.c` + `wlc_phy_cmn.c`: 72.7 KB, 38% of the object
+     code a session runs). Measured: no code outside the PHY touches the
+     PHY's memory and the PHY touches none of the MAC's, so it can be
+     replaced as a whole at its 83 entry points. 23 of them are specified;
+     `phy-cmn` (in progress) specifies the other 60.
+  2. **The rest of `wlc_bmac.c`** (20 KB, 10.6%): the bring-up is specified
+     (`bmac-init.md`), implementation continues increment by increment.
+  3. Backplane (`siutils.c`, `aiutils.c`, `nicpci.c`: 9.4 KB, 5%), DMA
+     (`hnddma.c`, 2%), SROM/OTP (`bcmsrom.c`, `bcmotp.c`, 2.1%): need specs.
+- The upper 802.11 layers (`wlc.c`, `wlc_channel.c`, CLM, scan, association:
+  most of the remainder) stay the object's in the hybrid; the new driver gets
+  them from mac80211 (stage 4).
 
 ## The critical path, with its honest gates
 

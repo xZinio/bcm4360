@@ -9,7 +9,10 @@ You work **only** from
 
 * the specifications and documents in `docs/re/` (this directory),
 * the code and headers in `open/`,
-* the results of the comparison tests (`tools/re/ab.py`).
+* the results of the comparison tests (`tools/re/ab.py`, and
+  `tools/re/hybrid.py run`, which compares a whole session of the object
+  with the same session in which some of its functions are replaced by
+  yours through the bridges in `hybrid/`).
 
 You do **not** look at Broadcom's object or anything derived from its code:
 nothing below `lib/` and `re-out/` (except `re-out/open/`, the build output of

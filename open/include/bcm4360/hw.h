@@ -1,11 +1,14 @@
 /* SPDX-License-Identifier: ISC */
 /*
  * The platform interface: everything the hardware layer needs from its
- * environment. There are two environments:
+ * environment. There are three environments:
  *
  *  - the emulator (BCM4360_EMU): the functions below resolve to the imports
  *    of Broadcom's object (osl_readw() and friends), which the emulator
  *    provides for both programs alike, so that both can be compared;
+ *  - the hybrid module (BCM4360_OSL): open code built into bcm4360.ko next to
+ *    Broadcom's object (hybrid/README.md); the same functions, provided by
+ *    the driver's OS layer src/shared/linux_osl.c;
  *  - Linux: a driver provides them on top of its bus (not written yet).
  *
  * The register spaces and the notation D11(), CC(), PCICFG() ... are those of
@@ -30,7 +33,7 @@ struct bcm4360_hw {
 	void *wrap;		/* second movable window: bar0 + 0x1000 */
 };
 
-#ifdef BCM4360_EMU
+#if defined(BCM4360_EMU) || defined(BCM4360_OSL)
 
 u8 osl_readb(volatile u8 *r);
 u16 osl_readw(volatile u16 *r);
@@ -138,7 +141,7 @@ const void *hw_fw_data(struct bcm4360_hw *hw, const char *name, u32 *size);
 #define hw_strlen(s)		osl_strlen(s)
 
 #else
-#error "no platform: only the emulator build (BCM4360_EMU) exists so far"
+#error "no platform: define BCM4360_EMU (emulator) or BCM4360_OSL (hybrid module)"
 #endif
 
 /* register access relative to the windows of the card */

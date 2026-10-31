@@ -46,6 +46,25 @@ Open points for the analysts:
 - The physical reading (outer/non-DFS sub-bands 0x8080, inner/DFS 0x0000) is a
   guess.
 
+**Resolution (coordinator, 2026-10-31): the specification is right; `0x8080`
+is not a value the object defines.** `sub_09eaf9` passes the address of a
+32-bit variable on its stack to `wlc_phy_table_write_acphy` for one 48-bit
+entry, so the transfer's third word is the two bytes behind the variable:
+whatever an earlier call left on the stack there. Hooking the table write in
+the object's session shows the data pointer on the stack, the same address in
+calls with bytes 4..7 = `80808080` and in calls with `00000000`; which one a
+call sees depends on the calls before it (hence the apparent dependence on
+channel and initialisation). Found when the whole-session hybrid comparison
+(`tools/re/hybrid.py`, `hybrid/README.md`) ran the object with bridges that
+use the stack differently, and only that word changed. So the open code's
+rule above reproduces an emulator artifact, not object behaviour: writing
+`0x0000` (the spec values) is as faithful to the object as anything else.
+The A/B scenarios still expect `0x8080` in those cases, so do not change the
+code without also treating that word as undefined in `phy_scenarios.py`
+(as `hybrid.py` does, `UNDEFINED_TBL_WORDS`). On the card the original
+driver writes stack contents there; what the hardware does with bits 32..47
+of that entry is unknown.
+
 ## 2. Tables loaded by name with `hw_fw_data()`
 
 The specification names these Broadcom tables; I load them by name:

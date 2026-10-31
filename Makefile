@@ -22,7 +22,15 @@ ccflags-y := -DUSE_CFG80211 -DBCM4360_DRV_VERSION=\"$(BCM4360_VERSION)\" -Wno-da
 ccflags-y += -I$(src)/src/include -I$(src)/src/common/include
 ccflags-y += -I$(src)/src/wl/sys -I$(src)/src/shared/bcmwifi/include
 
+ifeq ($(HYBRID),)
 ldflags-y := $(src)/lib/wlc_hybrid.o_shipped
+else
+# Experimental: layers of Broadcom's object replaced by the open code in
+# open/ (see hybrid/README.md), e.g.  make HYBRID="access pmu mac"
+include $(src)/hybrid/hybrid.mk
+bcm4360-objs += $(hybrid-objs) wlc_hybrid_open.o
+ccflags-y += -I$(src)/open/include -I$(src)/hybrid -DBCM4360_OSL
+endif
 
 # objtool cannot process Broadcom's prebuilt 2015 object and its errors are
 # fatal since Linux 6.15, so it is skipped for the final link of the module,
