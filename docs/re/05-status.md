@@ -1,7 +1,8 @@
 # Status
 
-State of 2026-09-28 (PHY areas). This document says what is known, how well,
-and what is missing. Read "What the results rest on" before relying on anything.
+State of 2026-10-31 (PHY areas unchanged since 2026-09-28; hybrid build added).
+This document says what is known, how well, and what is missing. Read "What the
+results rest on" before relying on anything.
 
 For the measured closed-source surface (how much of the blob an open driver
 must actually replace, and how much is already done) and the path through the
@@ -9,6 +10,14 @@ rest, see [06-roadmap.md](06-roadmap.md). In short: of the blob's ~1.54 MB of
 code, only ~24% (~372 KB) is the hardware layer an open driver needs; ~46% of
 that is already reproduced in `open/` (the whole AC-PHY), and the MAC layer is
 now being worked (first increment: the control primitives, `mac-ctrl`).
+
+Since the **hybrid build** ([../../hybrid/README.md](../../hybrid/README.md)),
+open code runs inside `bcm4360.ko` in place of Broadcom's, not only in the
+emulator: the PMU layer (16 functions of `hndpmu.c`) is taken over and verified
+identical over a full session, and the AC-PHY is wired to be taken over the
+same way at its 79 MAC-facing entry points ([spec/acphy-api.md](spec/acphy-api.md)),
+with the open side being completed. `tools/re/hybrid.py` is the whole-session
+A/B for that build.
 
 ## Summary
 

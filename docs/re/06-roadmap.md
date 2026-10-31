@@ -56,13 +56,48 @@ with `fwcut.py`). Per-device SROM/calibration is read from the card, not shipped
 
 - `open/` reimplements the AC-PHY hardware layer (radio 2069, PHY attach/init,
   channel set, rxgain/desense/txpower, calibrations). It reproduces the object
-  access-for-access in the emulator: 21/21 scenarios, 0 differences.
+  access-for-access in the emulator: 23/23 scenarios, 0 differences.
+- Since the hybrid build (`hybrid/`, see below), open code **does** run inside
+  the shipping `bcm4360.ko`, in place of Broadcom's: the PMU and clocks (16
+  functions of `hndpmu.c`) are taken over, verified identical over a whole
+  session. The AC-PHY is wired to be taken over the same way at its 79 entry
+  points; the open side answers about a third of them today and the rest are
+  in progress.
 - It has **never run on a real card.** The card model uses *assumed* identity
-  values (chip/PHY/radio revisions, SROM) and fakes calibration results.
-- None of `open/` is built into the shipping `bcm4360.ko`, which still links the
-  full 7.35 MB `wlc_hybrid.o_shipped`.
+  values (chip/PHY/radio revisions, SROM) and fakes calibration results, so the
+  hybrid result says the open code does to the *model* exactly what the object
+  does, not yet that it drives silicon.
 - The MAC layer is specified for bring-up (`bmac-init`) only; the data path is
   not specified or implemented.
+
+## What runs inside the module now (the hybrid build)
+
+Until now `open/` was only ever exercised in the emulator. The hybrid build
+(`hybrid/README.md`) links Broadcom's core together with open code that takes
+over functions of it at link time — the functions named in `hybrid/takeover.txt`
+are made weak in a copy of the object (`scripts/mkhybrid.sh`), so the open
+definitions win every call, and Broadcom's own bodies stay reachable as
+`bcm4360_blob_*` for the fallback. Each layer has a module parameter that
+switches it back to Broadcom's code; `make HYBRID=0` drops all of it and builds
+exactly as 1.0.3.
+
+`tools/re/hybrid.py` builds the same core for the emulator and runs the whole
+session on it and on the object alone, comparing every access. Measured over
+attach, up, nine channel changes, watchdog, down, up, down, detach:
+
+| Build | Broadcom code executed in the session | Open code executed |
+|---|---|---|
+| object alone (1.0.3) | 200,461 bytes (100 %) | — |
+| hybrid, PMU taken over | 197,888 bytes (98.7 %) | 2,716 bytes |
+
+The PMU is a small layer; the number that matters is the AC-PHY, which is the
+bulk of the hardware layer and the part no open driver has. Once its 79 entry
+points are all answered by `open/` and the `--on phy` session matches the
+object, the executed-closed-code share of a bring-up drops to the MAC/bus/DMA
+remainder. The static measure stays as in the table above (the blob is still
+linked, so its code is still *present*); what the hybrid build changes is how
+much of it *runs*, and it is the first time the open AC-PHY meets anything but
+the emulator.
 
 ## The critical path, with its honest gates
 
@@ -79,12 +114,24 @@ card, the present driver loaded):
      says something about silicon rather than about the model.
 Only the user can do this, and it is the highest-value next step by a wide margin.
 
+**Stage 0.5 — the hybrid build (landed).** The mechanism that lets open code
+take over functions of the object inside `bcm4360.ko` at link time, with a
+per-layer switch and a fallback to Broadcom's own code (`hybrid/`,
+`scripts/mkhybrid.sh`, `tools/re/hybrid.py`). The PMU layer is taken over and
+verified identical over a full session; the AC-PHY is wired the same way at its
+79 entry points and the open side is being completed. This turns every later
+"replace layer X" into: write/finish the open layer, list its entry points in
+`takeover.txt`, flip its switch, confirm the `hybrid.py` session still matches.
+It is independent of Gate 0 (it runs in the emulator), but the *point* of it is
+that the same object code then runs on the real card with the open layer in
+place, so it is what carries Gate 0's result into the shipping module.
+
 **Stage 1 — MAC core bring-up.** `bmac-init` spec is done. Implement it the same
 way the PHY was: the coordinator writes a MAC A/B scenario harness (`wlc_bmac_*`
 on a MAC context, `phy_scenarios.py`-style) and a task file; an implementer
-writes `open/mac/` from the spec only; compare in the emulator. Open question
-from the spec: the real MAC capabilities word (`D11` 0x15c reads 0 in the model)
-is resolved by Gate 0.
+writes `open/mac/` from the spec only; compare in the emulator, then take it
+over in the hybrid build (Stage 0.5). Open question from the spec: the real MAC
+capabilities word (`D11` 0x15c reads 0 in the model) is resolved by Gate 0.
 
 **Stage 2 — MAC data path (`bmac-data`).** DMA / FIFOs / interrupts, the TX/RX
 path. Needs an analyst spec first, and the emulator extended to simulate packet
