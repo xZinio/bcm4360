@@ -60,6 +60,15 @@ WINDOW_REGS = {0x70, 0x80}
 # ran before. Proven by hooking the table write (docs/re/questions/phy-rxgain.md).
 UNDEFINED_TBL = {('W', 'tbl.14', 0x33, 6): 0xffffffff}
 
+# Functions of the object that read stack they never wrote, so their result
+# depends on what earlier code left there (and the open code leaves something
+# else). Both runs zero the stack below rsp at their entry, which makes the
+# value the same. wlc_update_txppr_offset (wlc.c, the MAC's update of the
+# per-rate power offsets): run on the object alone with the stack filled 0x00
+# or 0xaa at its entry, it writes different values to SHM(0x5d4)/SHM(0x5d6)
+# (1 or 3) and makes a different number of accesses.
+STACK_ZEROED = ('wlc_update_txppr_offset',)
+
 
 def objects(variables=('hybrid-objs', 'hybrid-phy-objs')):
     """The objects of the hybrid build: hybrid/objects.mk, with the PHY layer."""
@@ -116,6 +125,12 @@ class Run:
         self.d = self.s.d
         if patch:
             patch(self.m)
+        for name in STACK_ZEROED:
+            def zero(m, *args):
+                from unicorn import x86_const as x86
+                rsp = m.mu.reg_read(x86.UC_X86_REG_RSP)
+                m.write(rsp - 0x2000, bytes(0x2000))
+            self.m.on_call(name, zero, 1)
         for layers, value in ((off, 0), (on, 1)):
             for layer in layers:
                 sym = 'bcm4360_open_' + layer

@@ -422,6 +422,8 @@ struct bcm4360_phy_crsmincal {
 	s8 sample[BCM4360_PHY_CRSMIN_SAMPLES][BCM4360_PHY_CORE_SLOTS];
 	u8 next_sample;		/* pi_ac+0x03c: index of the next sample */
 	s8 average[BCM4360_PHY_CORE_SLOTS];	/* pi_ac+0x03d: averaged noise of the last run */
+	/* pi_ac+0x041: run the calibration on every noise sample (acphy-desense.md "Data"): 0 */
+	bool every_sample;
 	u8 thresh;		/* pi_ac+0x042: threshold in use: 0x36 (P6.3) */
 	u8 runs;		/* pi_ac+0x043: counter of runs */
 	u8 channel;		/* pi_ac+0x044: channel number of the last run */
@@ -787,6 +789,16 @@ struct bcm4360_phy {
 	s16 bssinit_a[16];	/* pi+0xed4: set to -92 by wlc_phy_BSSinit (A8) */
 	s16 bssinit_b[16];	/* pi+0xef4: set to -92 by wlc_phy_BSSinit (A8) */
 	u8 bssinit_f54;		/* pi+0xf54: cleared by wlc_phy_BSSinit (A8) */
+
+	/*
+	 * The receive and measurement entry points (docs/re/spec/acphy-api-rx.md,
+	 * open/phy/phy_rx.c). The noise history of wlc_phy_noise_read_shmem is
+	 * bssinit_a/bssinit_b (one 16-entry ring per core) with the index
+	 * bssinit_f54. Zero after attach.
+	 */
+	u8 rx_antdiv;		/* sh+0x95: `rx_antdiv` (bcm), wlc_phy_ant_rxdiv_set; not at attach */
+	u8 noise_reason;	/* pi+0x18f: reason of the pending noise sample (sub_0baff6), 0: none */
+	u32 noise_time;		/* pi+0x190: sh+0x34 when that noise sample was requested */
 };
 
 /*
@@ -963,9 +975,11 @@ void bcm4360_phy_txcal_coeffs_apply_acphy(struct bcm4360_phy *phy, const u8 *set
  * they call referenced.
  */
 void bcm4360_phy_txpower_recalc_target_acphy(struct bcm4360_phy *phy);		/* sub_09949f */
-void bcm4360_phy_txpower_core_offset_set_acphy(struct bcm4360_phy *phy,
-					       const s8 *offsets);		/* sub_099528 */
+s32 bcm4360_phy_txpower_core_offset_set_acphy(struct bcm4360_phy *phy,
+					      const s8 *offsets);		/* sub_099528 */
 u8 bcm4360_phy_tssivisible_thresh_acphy(struct bcm4360_phy *phy);		/* section 16 */
+/* acphy-api-txpower.md (sub_0b72a4, the recalculation tick; also called by the watchdog) */
+bool bcm4360_phy_txpower_recalc_tick(struct bcm4360_phy *phy);
 void bcm4360_phy_precal_txgain_acphy(struct bcm4360_phy *phy, u8 *records);	/* sub_0b1227 */
 
 /*
@@ -985,6 +999,14 @@ u32 bcm4360_phy_tx_tone_acphy(struct bcm4360_phy *phy, s32 freq, u16 amp,
 			      u8 dont_deaf, u8 rfseq, u8 set_bbmult);
 /* wlc_phy_stopplayback_acphy (acphy-cal-tx section 14) */
 void bcm4360_phy_stopplayback_acphy(struct bcm4360_phy *phy);
+
+/*
+ * Receive and measurements (open/phy/phy_rx.c, docs/re/spec/acphy-api-rx.md):
+ * sub_0baff6, the common noise-sample request. The watchdog calls it with
+ * reason 1, wlc_phy_noise_sample_request_crsmincal with reason 4; `channel`
+ * is the channel number (low byte of the chanspec) the sample is for.
+ */
+void bcm4360_phy_noise_sample_request(struct bcm4360_phy *phy, u8 reason, u8 channel);
 
 /* the rest of the MAC-facing interface (docs/re/spec/acphy-api.md) */
 #include <bcm4360/phy_api.h>
