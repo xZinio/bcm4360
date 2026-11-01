@@ -285,10 +285,11 @@ struct bcm4360_phy_rxgainerr {
 /*
  * Power offsets per rate group of SROM revision 11 (pi+0xc4c..0xd3b):
  * acphy-attach.md, "Tx power offsets" and procedure 7, step 2. The object
- * keeps some offsets several times; what a copy stands for is decided by its
- * consumer (wlc_phy_txpwr_apply_srom11), which is not specified yet. So the
- * copies are kept, in the order of the object. Elements of three: the ranges
- * low, mid and high of 5 GHz.
+ * keeps some offsets several times, in the order kept here. Its consumer,
+ * wlc_phy_txpwr_apply_srom11 (acphy-api-txpower.md, Q3), reads ofdm_2g[0],
+ * mcs_2g[0] and [2], the 5 GHz groups 0, 3, 5, 6, 9 and 11 and the words from
+ * ofdmlrbw202gpo on; the other copies are never read. Elements of three: the
+ * ranges low, mid and high of 5 GHz.
  */
 struct bcm4360_phy_srom_po {
 	u16 cckbw202gpo;	/* pi+0xc4c */
@@ -304,7 +305,7 @@ struct bcm4360_phy_srom_po {
 	/*
 	 * pi+0xc6c + 12 * group + 4 * range. Groups 0, 1, 2, 6, 7, 8:
 	 * mcsbw205g?po; groups 3, 4, 9, 10: mcsbw405g?po; groups 5, 11:
-	 * mcsbw805g?po.
+	 * mcsbw805g?po. The decode reads 0, 3, 5 (OFDM) and 6, 9, 11 (VHT).
 	 */
 	u32 mcs_5g[BCM4360_PHY_PO_GROUPS_5G][BCM4360_PHY_PO_RANGES_5G];
 	u16 ofdmlrbw202gpo;	/* pi+0xd14 */
@@ -356,6 +357,8 @@ struct bcm4360_phy_txpwr {
 	s16 radiopwr_override;	/* pi+0x236: (bcm) (unverified): -1 (P2.14) */
 	/* pi+0x21a + core: lowest target power over the rates, quarter dBm (acphy-api-txpower.md) */
 	s8 target_min[BCM4360_PHY_CORE_SLOTS];
+	/* pi+0x21e: cleared by the merge on core 0 (acphy-api-txpower.md, step 5.9); unknown */
+	u8 pi_0x21e;
 	/* the user-override state (wlc_phy_txpower_get/set, acphy-api-txpower.md) */
 	s8 ovr_value;		/* pi+0x22f: the override target in dBm */
 	u8 ovr_active;		/* pi+0x230: an override is in force */
@@ -422,8 +425,13 @@ struct bcm4360_phy_crsmincal {
 	s8 sample[BCM4360_PHY_CRSMIN_SAMPLES][BCM4360_PHY_CORE_SLOTS];
 	u8 next_sample;		/* pi_ac+0x03c: index of the next sample */
 	s8 average[BCM4360_PHY_CORE_SLOTS];	/* pi_ac+0x03d: averaged noise of the last run */
-	/* pi_ac+0x041: run the calibration on every noise sample (acphy-desense.md "Data"): 0 */
-	bool every_sample;
+	/*
+	 * pi_ac+0x041: the last crsmincal noise request (reason 4) was refused
+	 * because a sample was pending; cleared by every request
+	 * (acphy-api-watchdog.md, "Corrections and answers", Q3). The next noise
+	 * result then runs the calibration (acphy-desense.md C3). 0
+	 */
+	bool noise_refused;
 	u8 thresh;		/* pi_ac+0x042: threshold in use: 0x36 (P6.3) */
 	u8 runs;		/* pi_ac+0x043: counter of runs */
 	u8 channel;		/* pi_ac+0x044: channel number of the last run */
@@ -636,31 +644,45 @@ struct bcm4360_phy_cal {
 
 /*
  * The glitch / bad-PLCP statistics of the watchdog
- * (docs/re/spec/acphy-api-watchdog.md, step 5): the last values of three SHM
- * counters and two-deep circular histories of their per-tick deltas, each
- * with a running sum and its half. No hardware access; the shape is the
- * implementation's (the spec allows it), the object places named per field.
+ * (docs/re/spec/acphy-api-watchdog.md, "Corrections and answers", Q5): the
+ * last values of three SHM counters and six two-deep circular histories of
+ * per-tick deltas, each with an index, a running sum, its half and the
+ * previous half. No hardware access. Initial values: wlc_phy_cal_init
+ * (acphy-cal-tx.md, section 8).
  */
 #define BCM4360_PHY_WD_HIST_DEPTH	2
-#define BCM4360_PHY_WD_HISTS		5
 
+/* the six histories, by the value pushed (Q5, table) */
+enum bcm4360_phy_wd_hist_id {
+	BCM4360_WD_H0,		/* D0, the SHM(0x10e) delta */
+	BCM4360_WD_H1,		/* D1, the SHM(0x10c) delta */
+	BCM4360_WD_H2,		/* X2: D0 (5 GHz), D0 - D2 (2.4 GHz) */
+	BCM4360_WD_H3,		/* D2, the SHM(0x158) delta */
+	BCM4360_WD_H4,		/* X4: D1 (5 GHz), D1 + p (2.4 GHz) */
+	BCM4360_WD_H5,		/* X5: -p */
+	BCM4360_PHY_WD_HISTS
+};
+
+/*
+ * One history; the object's places (array / index / sum / average /
+ * previous): H0 pi+0x492 / 0x4a4 / 0x490 / 0x488 / 0x48a, H1 0x2ea / 0x2fc /
+ * 0x2e8 / 0x2e4 / 0x2e6, H2 0x3f6 / 0x400 / 0x3f2 / 0x3ea / 0x3ec, H3 0x3fa /
+ * 0x404 / 0x3f4 / 0x3e8 / 0x3ee, H4 0x414 / 0x418 / 0x410 / 0x40a / 0x40c,
+ * H5 0x41c / 0x420 / 0x412 / 0x408 / 0x40e.
+ */
 struct bcm4360_phy_wd_hist {
 	u16 ring[BCM4360_PHY_WD_HIST_DEPTH];
-	u8 next;		/* slot written next */
-	u32 sum;		/* sum of the ring */
-	u16 avg;		/* sum / 2 */
+	u32 next;		/* index of the slot written next */
+	u16 sum;		/* running sum, modulo 2^16 */
+	u16 avg;		/* sum >> 1 */
+	u16 prev_avg;		/* avg before the last push */
 };
 
 struct bcm4360_phy_wd_stats {
-	u16 shm_0x10e;		/* pi+0x48c: SHM(0x10e) at the last tick */
+	u32 shm_0x10e;		/* pi+0x48c: SHM(0x10e) at the last tick */
 	u16 shm_0x10c;		/* pi+0x300: SHM(0x10c) at the last tick */
 	u16 shm_0x158;		/* pi+0x3f0: SHM(0x158) at the last tick */
-	/*
-	 * Histories (the object's ring / sum / half): 0: pi+0x492 / 0x490 /
-	 * 0x488 (index pi+0x4a4); 1: pi+0x2ea / 0x2e4 / 0x2fc; 2: pi+0x3ea /
-	 * 0x3f2 / 0x400; 3: pi+0x410 / 0x40a / 0x418; 4: pi+0x412 / 0x408 / 0x420
-	 * (the spec's triples, see docs/re/questions/phy-api-watchdog.md)
-	 */
+	s16 pi_0x302;		/* pi+0x302: a correction p other PHY types feed in; 0 here */
 	struct bcm4360_phy_wd_hist hist[BCM4360_PHY_WD_HISTS];
 };
 
@@ -827,17 +849,30 @@ struct bcm4360_phy {
 	 * bssinit_f54. Zero after attach.
 	 */
 	u8 rx_antdiv;		/* sh+0x95: `rx_antdiv` (bcm), wlc_phy_ant_rxdiv_set; not at attach */
-	u8 noise_reason;	/* pi+0x18f: reason of the pending noise sample (sub_0baff6), 0: none */
-	u32 noise_time;		/* pi+0x190: sh+0x34 when that noise sample was requested */
+	/*
+	 * pi+0x18f: the pending noise-sample requests, one bit per requester
+	 * (BCM4360_PHY_NOISE_*); a sample is pending when it is not 0
+	 * (acphy-api-watchdog.md, "Corrections and answers", Q3)
+	 */
+	u8 noise_pending;
+	u32 noise_time;		/* pi+0x190: sh+0x34 of the request that was accepted */
+	u32 noise_chan;		/* pi+0x194: channel of the watchdog's request */
 
 	/*
 	 * The watchdog (docs/re/spec/acphy-api-watchdog.md, open/phy/phy_wd.c).
 	 * Zero after attach; the three register overrides are set only by an
 	 * iovar (not in open/).
 	 */
-	u16 wd_ovr_0x1136;	/* pi+0x1136: when not 0 written to PHY(0x45a), PHY(0x45c) (step 3) */
-	u16 wd_ovr_0x113a;	/* pi+0x113a: PHY(0x44c), PHY(0x448) */
-	u16 wd_ovr_0x1138;	/* pi+0x1138: PHY(0x446), PHY(0x44a) */
+	u16 wd_ovr_0x1136;	/* pi+0x1136: when not 0 copied to pi+0x45a, pi+0x45c (step 3) */
+	u16 wd_ovr_0x113a;	/* pi+0x113a: to pi+0x44c, pi+0x448 */
+	u16 wd_ovr_0x1138;	/* pi+0x1138 (low 16 bits): to pi+0x446, pi+0x44a */
+	/* step 3, as corrected: where the overrides go (pi fields of unknown purpose) */
+	u16 pi_0x45a;
+	u16 pi_0x45c;
+	u16 pi_0x44c;
+	u16 pi_0x448;
+	u16 pi_0x446;
+	u16 pi_0x44a;
 	u8 pi_0x199;		/* pi+0x199: not 0: no periodic calibration (acphy-cal-tx.md) */
 	u32 txpwr_tick_time;	/* pi+0xc44: sh+0x34 of the last tx-power recalc tick (step 12) */
 	u16 bt_period;		/* pi+0xfa4: Bluetooth period (wlapi_bmac_btc_period_get, step 13.5) */
@@ -1047,11 +1082,20 @@ u32 bcm4360_phy_tx_tone_acphy(struct bcm4360_phy *phy, s32 freq, u16 amp,
 void bcm4360_phy_stopplayback_acphy(struct bcm4360_phy *phy);
 
 /*
- * Receive and measurements (open/phy/phy_rx.c, docs/re/spec/acphy-api-rx.md):
- * sub_0baff6, the common noise-sample request. The watchdog calls it with
- * reason 1, wlc_phy_noise_sample_request_crsmincal with reason 4; `channel`
- * is the channel number (low byte of the chanspec) the sample is for.
+ * Receive and measurements (open/phy/phy_rx.c, docs/re/spec/acphy-api-rx.md
+ * and acphy-api-watchdog.md, "Corrections and answers", Q3): sub_0baff6
+ * (wlc_phy_noise_sample_request), the common noise-sample request. The
+ * watchdog calls it with reason 1, wlc_phy_noise_sample_request_external with
+ * reason 2, wlc_phy_noise_sample_request_crsmincal with reason 4; `channel` is
+ * the channel number (low byte of the chanspec) the sample is for. Each reason
+ * has its bit in pi+0x18f (noise_pending).
  */
+#define BCM4360_PHY_NOISE_REASON_WATCHDOG	1
+#define BCM4360_PHY_NOISE_REASON_EXTERNAL	2
+#define BCM4360_PHY_NOISE_REASON_CRSMIN		4
+#define BCM4360_PHY_NOISE_WATCHDOG		0x01	/* pi+0x18f bit 0 */
+#define BCM4360_PHY_NOISE_EXTERNAL		0x02	/* pi+0x18f bit 1 */
+#define BCM4360_PHY_NOISE_CRSMIN		0x04	/* pi+0x18f bit 2 */
 void bcm4360_phy_noise_sample_request(struct bcm4360_phy *phy, u8 reason, u8 channel);
 
 /* the rest of the MAC-facing interface (docs/re/spec/acphy-api.md) */

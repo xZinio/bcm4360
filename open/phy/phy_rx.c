@@ -55,8 +55,6 @@
 #define NOISE_POWER_SHIFT	9
 #define NOISE_FLOOR_DBM		(-92)	/* 0xa4 */
 #define NOISE_HISTORY		16	/* entries of the per-core history (pi+0xed4, pi+0xef4) */
-#define NOISE_REASON_CRSMIN	4	/* acphy-desense.md, "Data": the sample is for C1 */
-#define NOISE_REASON_EXTERNAL	2	/* guessed (questions, Q6) */
 
 /* D11(0x124), the MAC command register (bmac-init.md); bit 4 starts the noise measurement */
 #define D11_REG_MACCMD		0x124
@@ -280,7 +278,7 @@ static s8 noise_read_shmem(struct bcm4360_phy *phy)
 
 	if (total != 0) {
 		/* sub_0b701e(pi, power, dbm, 0): not specified (questions, Q5) */
-		if (phy->noise_reason == NOISE_REASON_CRSMIN || phy->crsmincal.every_sample)
+		if (phy->noise_pending == BCM4360_PHY_NOISE_CRSMIN || phy->crsmincal.noise_refused)
 			bcm4360_phy_crs_min_pwr_cal_acphy(phy, 0);
 	}
 
@@ -356,23 +354,56 @@ s8 bcm4360_phy_noise_avg(struct bcm4360_phy *phy)
 }
 
 /*
- * acphy-api-rx.md, "sub_0baff6" (acphy-desense.md C4): the common noise-sample
- * request. Nothing while a sample is pending (pi+0x18f set); otherwise note
- * the reason and the time (pi+0x18f, pi+0x190), clear the per-core result
- * words SHM(0x308..0x312) and start the measurement with D11(0x124) bit 4.
- * The accesses are those the whole-session test shows, not the classifier set-up
- * acphy-api-rx.md names (docs/re/questions/phy-api-watchdog.md, Q3).
+ * acphy-api-watchdog.md, "Corrections and answers", Q3, steps 1 to 3 of
+ * sub_0baff6: note the request in pi+0x18f, one bit per requester. False if
+ * a sample is already pending (the request is refused; a refused crsmincal
+ * request sets pi_ac+0x41).
+ */
+static bool noise_request_accept(struct bcm4360_phy *phy, u8 reason, u8 channel)
+{
+	bool pending = phy->noise_pending != 0;				/* step 1 */
+
+	phy->crsmincal.noise_refused = false;				/* step 2 */
+	if (reason == BCM4360_PHY_NOISE_REASON_CRSMIN) {		/* step 3 */
+		if (pending) {
+			phy->crsmincal.noise_refused = true;
+			return false;
+		}
+		phy->noise_pending |= BCM4360_PHY_NOISE_CRSMIN;
+		return true;
+	}
+	if (pending)
+		return false;
+	if (reason == BCM4360_PHY_NOISE_REASON_EXTERNAL) {
+		phy->noise_pending |= BCM4360_PHY_NOISE_EXTERNAL;
+	} else if (reason == BCM4360_PHY_NOISE_REASON_WATCHDOG) {
+		phy->noise_pending |= BCM4360_PHY_NOISE_WATCHDOG;
+		phy->noise_chan = channel;
+	}
+	return true;
+}
+
+/*
+ * acphy-api-watchdog.md, "Corrections and answers", Q3 (sub_0baff6,
+ * wlc_phy_noise_sample_request; acphy-desense.md C4): the common noise-sample
+ * request. Refused without an access while a sample is pending; otherwise
+ * the reason's bit and the time (pi+0x18f, pi+0x190), then the per-core result
+ * words SHM(0x308..0x312) cleared and the measurement started with
+ * D11(0x124) bit 4.
+ *
+ * Step 5 (pi+0xc21 set: wlc_phy_noise_cb with -95 at once) is left out:
+ * pi+0xc21 is not kept by the open code (0 in the session, set by nothing
+ * in open/), see docs/re/questions/phy-api-txpower.md. Step 6: pi+0x198 is 0
+ * on the AC-PHY, so the immediate-measurement branch is never taken.
  */
 void bcm4360_phy_noise_sample_request(struct bcm4360_phy *phy, u8 reason, u8 channel)
 {
 	u32 c, v;
 
-	(void)channel;
-	if (phy->noise_reason)
+	if (!noise_request_accept(phy, reason, channel))		/* steps 1 to 3 */
 		return;
-	phy->noise_reason = reason;
-	phy->noise_time = phy->now;
-	for (c = 0; c < SHM_NOISE_WORDS; c++)
+	phy->noise_time = phy->now;					/* step 4 */
+	for (c = 0; c < SHM_NOISE_WORDS; c++)				/* step 6 */
 		bcm4360_shm_write(phy->hw, (u16)(SHM_NOISE_RESULT + 2 * c), 0);
 	v = d11_read32(phy->hw, D11_REG_MACCMD);
 	d11_write32(phy->hw, D11_REG_MACCMD, v | D11_MACCMD_NOISE);
@@ -381,22 +412,25 @@ void bcm4360_phy_noise_sample_request(struct bcm4360_phy *phy, u8 reason, u8 cha
 /*
  * acphy-api-rx.md, "wlc_phy_noise_sample_intr": the microcode has measured the
  * noise; read the result as wlc_phy_noise_read_shmem does, move on in the
- * noise window and complete the pending request.
+ * noise window and complete the pending requests (wlc_phy_noise_cb clears the
+ * bits 0, 1 and 2 of pi+0x18f, acphy-api-watchdog.md, Q3).
  */
 void bcm4360_phy_noise_sample_intr(struct bcm4360_phy *phy)
 {
 	noise_read_shmem(phy);
 	noise_window_advance(phy);
-	phy->noise_reason = 0;
+	phy->noise_pending &= (u8)~(BCM4360_PHY_NOISE_WATCHDOG | BCM4360_PHY_NOISE_EXTERNAL |
+				    BCM4360_PHY_NOISE_CRSMIN);
 }
 
 /*
  * acphy-api-rx.md, "wlc_phy_noise_sample_request_external": a noise sample
- * that the MAC asks for, for the current channel.
+ * that the MAC asks for, for the current channel (reason 2,
+ * acphy-api-watchdog.md, Q3).
  */
 void bcm4360_phy_noise_sample_request_external(struct bcm4360_phy *phy)
 {
-	bcm4360_phy_noise_sample_request(phy, NOISE_REASON_EXTERNAL,
+	bcm4360_phy_noise_sample_request(phy, BCM4360_PHY_NOISE_REASON_EXTERNAL,
 					 phy->radio_chanspec & BCM4360_CHANSPEC_CHANNEL);
 }
 

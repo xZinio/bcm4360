@@ -137,3 +137,52 @@ declared it in phy.h (`bcm4360_phy_txpower_recalc_tick`) for the watchdog task.
 * `sub_099528` (`core_offset_set_acphy`) now returns 0 or -2 and accepts index
   N (acphy-attach.md, "Function pointer table"); the earlier code rejected
   index N and returned nothing.
+
+## Round 2 (2026-11-01): the analyst's corrections applied
+
+Code changed: `open/phy/phy_txpower.c` (SROM-11 decode, wrapper, merge,
+`get_est_pout`, Q5 comment), `open/include/bcm4360/phy.h`,
+`open/include/bcm4360/phy_env.h` (comments of the `ppr` services only, no new
+service); for the watchdog answers `open/phy/phy_wd.c`, `open/phy/phy_rx.c`,
+`open/phy/phy_desense.c` (C4 through the common request),
+`open/phy/phy_cal.c` (the hand-made `D11(0x124)` write removed, it is now in
+the request), `open/phy/phy_init.c` (field rename), `open/phy/phy_api.c`
+(`wlc_phy_cal_init` sets the start values of the histories).
+
+Test state: `hybrid.py check --on phy` 41416 / 41416 accesses, **the same**
+(was different from access 24548 on); `hybrid.py check` the same; `ab.py all`
+0 differences in every scenario; build without warnings.
+
+Remaining points (none of them changes the tests):
+
+* **R1. `est_pout_cck` is one byte behind a `u16 *`.** Q6 says the object
+  writes one byte to `*est_pout_cck`; the open prototype (phy_api.h, called
+  by `hybrid/phy.c`) has `u16 *`. Written as one byte through the pointer
+  (`*(u8 *)est_pout_cck = 0`), prototype kept. Is the MAC's variable really
+  16 bits (then its high byte stays as it was), or should the open prototype
+  become `u8 *`? `get_est_pout` is not called in the session.
+* **R2. Which copy of the 5 GHz MCS words feeds which group.** Q3 lists both
+  copies per bandwidth as read (`0xc6c+4i` and `0xcb4+4i`, `0xc90`/`0xcd8`,
+  `0xca8`/`0xcf0`) but not which one OFDM8 and which one VHT10 takes. They
+  hold the same value after attach, so it does not matter for the result;
+  written as OFDM8 from the first, VHT10 from the second.
+* **R3. `sub_0baff6` step 5 (`pi+0xc21` set).** Not implemented: `pi+0xc21` is
+  not kept in `phy.h`, nothing in `open/` sets it, and `wlc_phy_noise_cb`
+  would need `wlapi_noise_cb` (bit 1), which is not a service in
+  `phy_env.h`. What sets `pi+0xc21` (an iovar?), and should
+  `wlapi_noise_cb(physhim, chan, value)` become a service?
+* **R4. `wlc_phy_noise_sample_intr` and `wlc_phy_noise_cb`.** Q3 of the
+  watchdog answers says the callback stores the value in `sh+0x96[sh+0xa0]`
+  and advances `sh+0xa0` only if `chan` = `pi+0x194` (bit 0), and calls
+  `wlapi_noise_cb` for bit 1. The receive group's `bcm4360_phy_noise_sample_intr`
+  reads the result, always advances the window and now clears bits 0..2;
+  the channel test and the MAC callback are not there (`acphy-api-rx.md` does
+  not describe them). Not reached in the session (no noise interrupt).
+* **R5. `pi_ac+0x41`.** acphy-desense.md "Data" calls it "run the calibration
+  on every noise sample", the watchdog answers "the last crsmincal request
+  was refused". Both describe the same use in C3; the field is now
+  `crsmincal.noise_refused`, set and cleared only by the request.
+* **R6. `wlc_phy_cal_init` step 5.** The start values of the six histories
+  (acphy-cal-tx.md section 8, steps 3 and 4) are now set; the
+  calibration-init callback `pi+0x30` (`sub_08e77a`) is still not called
+  (unchanged; no access is visible for it).

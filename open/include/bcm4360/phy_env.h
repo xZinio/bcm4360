@@ -123,23 +123,26 @@ int bcm4360_otp_read_word(struct bcm4360_hw *hw, u32 word, u16 *data);
 /*
  * The MAC's per-rate power container (ppr_*, wlc_ppr.c): opaque to the PHY,
  * used only through these operations. docs/re/spec/acphy-api-txpower.md,
- * "The ppr structure is a service"; the group selectors (m, rateset, bw, nss)
- * are passed through unchanged, in this order.
+ * "The ppr structure is a service" and "Corrections to the ppr service
+ * table"; the group selectors are passed through unchanged, in this order:
+ * dsss (bw variant, chains), ofdm (bw variant, mode, chains), ht/vht (bw
+ * variant, streams, mode, chains). A rate byte of -128 is disabled.
  */
-void *bcm4360_ppr_create(struct bcm4360_hw *hw, u8 bw_sel);
-void bcm4360_ppr_delete(struct bcm4360_hw *hw, void *ppr);
-void bcm4360_ppr_clear(void *ppr);
-void bcm4360_ppr_copy(const void *src, void *dst);
+void *bcm4360_ppr_create(struct bcm4360_hw *hw, u8 bw_sel);	/* ppr_create(osh, 0/1/2) */
+void bcm4360_ppr_delete(struct bcm4360_hw *hw, void *ppr);	/* ppr_delete(osh, ppr) */
+void bcm4360_ppr_clear(void *ppr);			/* every rate := -128 */
+void bcm4360_ppr_copy(const void *src, void *dst);	/* ppr_copy_struct */
 u8 bcm4360_ppr_get_ch_bw(const void *ppr);
-void bcm4360_ppr_set_cmn_val(void *ppr, s8 v);
-void bcm4360_ppr_plus_cmn_val(void *ppr, s8 d);
-void bcm4360_ppr_minus_cmn_val(void *ppr, s8 d);
-void bcm4360_ppr_cmn_val_minus(void *ppr, s8 v);
-void bcm4360_ppr_apply_min(void *ppr, s8 v);
-void bcm4360_ppr_apply_max(void *ppr, s8 v);
-void bcm4360_ppr_compare_min(void *a, void *b);
-void bcm4360_ppr_compare_max(void *a, void *b);
+void bcm4360_ppr_set_cmn_val(void *ppr, s8 v);		/* every rate := v */
+void bcm4360_ppr_plus_cmn_val(void *ppr, s8 d);		/* enabled rates += d */
+void bcm4360_ppr_minus_cmn_val(void *ppr, s8 d);	/* enabled: rate > d ? rate - d : 0 */
+void bcm4360_ppr_cmn_val_minus(void *ppr, s8 v);	/* enabled rates := v - rate */
+void bcm4360_ppr_apply_min(void *ppr, s8 v);		/* all rates := max(rate, v) */
+void bcm4360_ppr_apply_max(void *ppr, s8 v);		/* all rates := min(rate, v) */
+void bcm4360_ppr_compare_min(void *a, void *b);		/* same selector: a := min(a, b) */
+void bcm4360_ppr_compare_max(void *a, void *b);		/* same selector: a := max(a, b) */
 void bcm4360_ppr_multiply_percentage(void *ppr, u8 pct);
+/* a group with one of its first 8 rates below min: all -128; VHT MCS 8, 9 each alone */
 void bcm4360_ppr_force_disabled(void *ppr, s8 min);
 s8 bcm4360_ppr_get_max(const void *ppr);
 s8 bcm4360_ppr_get_min(const void *ppr, s8 floor);

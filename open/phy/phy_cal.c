@@ -1937,18 +1937,14 @@ void bcm4360_phy_cals(struct bcm4360_phy *phy, u32 phase_mode)
 	bcm4360_phy_rxcore_setstate(phy, phy->hw_rxchain);
 
 	if ((phase == 0x11 || phase == 0) && phy->crsmincal.enable) {	/* common 3 */
-		u32 v;
-
 		phy->crsmincal.state[0] = 1;
-		bcm4360_phy_noise_sample_request_crsmincal(phy);
 		/*
-		 * The open noise-sample request (phy_desense.c) only clears the
-		 * per-core result words; the object's request helper (sub_0baff6,
-		 * wlc_phy_cmn.c) also triggers the measurement via D11(0x124). Reproduce
-		 * the trigger here (see docs/re/questions/phy-cal.md).
+		 * the common request sub_0baff6 (phy_rx.c) clears the result words
+		 * and starts the measurement with D11(0x124) bit 4; refused while a
+		 * sample is pending (acphy-api-watchdog.md, "Corrections and
+		 * answers", Q3)
 		 */
-		v = d11_read32(phy->hw, 0x124);
-		d11_write32(phy->hw, 0x124, v | 0x0010);
+		bcm4360_phy_noise_sample_request_crsmincal(phy);
 	}
 
 	sm = (chanspec == st->last_chanspec && st->restart_ok) ? mode : 0;	/* common 4 */

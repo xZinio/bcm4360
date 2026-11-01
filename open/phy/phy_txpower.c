@@ -134,6 +134,22 @@ static bool phy_is_2g(const struct bcm4360_phy *phy)
 	return (phy->radio_chanspec & BCM4360_CHANSPEC_BAND) == BCM4360_CHANSPEC_BAND_2G;
 }
 
+/*
+ * acphy-init.md, H13 (wlc_phyreg_enter/exit): a nesting counter; the first
+ * enter takes the ucode wake override, the last exit releases it.
+ */
+static void phy_reg_enter(struct bcm4360_phy *phy)
+{
+	if (phy->phyreg_count++ == 0)
+		bcm4360_mac_wake_override_set(phy->hw);
+}
+
+static void phy_reg_exit(struct bcm4360_phy *phy)
+{
+	if (--phy->phyreg_count == 0)
+		bcm4360_mac_wake_override_clear(phy->hw);
+}
+
 /* per-core register base: core c uses address + c * ACPHY_CORE_STEP */
 static u16 core_reg(u16 base, u32 core)
 {
@@ -1068,17 +1084,15 @@ static u8 ppr_bw_sel(u16 chanspec)
 }
 
 /*
- * The rate groups of a ppr (acphy-api-txpower.md, "The ppr structure is a
- * service"): the selectors the open code passes to the bcm4360_ppr_* services.
- * The group sizes and the valid selector combinations are those the services
- * accept (see docs/re/questions/phy-api-txpower.md).
+ * The rate groups of a ppr (acphy-api-txpower.md, "Corrections and answers",
+ * Q2): the selectors the open code passes to the bcm4360_ppr_* services.
  */
 #define PPR_DSSS_RATES		4	/* 1, 2, 5.5, 11 Mbit/s */
-#define PPR_OFDM_RATES		8	/* 6 .. 54 Mbit/s */
+#define PPR_OFDM_RATES		8	/* 6, 9, 12, 18, 24, 36, 48, 54 Mbit/s */
 #define PPR_VHT_RATES		10	/* MCS 0 .. 9 */
-#define SROM11_MCS_NIBBLES	8	/* offsets per MCS word: MCS 0 .. 7 */
+#define PPR_RATE_DISABLED	(-128)	/* a disabled rate (0x80) */
 
-/* the bandwidth selector of a rate group (first selector of every group) */
+/* the bandwidth variant of a rate group (first selector of every group) */
 enum ppr_txbw {
 	PPR_TXBW_20 = 0,
 	PPR_TXBW_40 = 1,
@@ -1088,168 +1102,448 @@ enum ppr_txbw {
 	PPR_TXBW_40IN80 = 5,
 };
 
-/* the mode selector of the OFDM and MCS groups */
+/* the mode selector of the OFDM and VHT groups */
 #define PPR_MODE_NONE		0
 #define PPR_MODE_STBC		1
 #define PPR_MODE_CDD		2
 #define PPR_MODE_TXBF		3
 
-/* one OFDM group: mode, chains */
-struct ppr_ofdm_grp {
-	u8 mode;
-	u8 chains;
-};
-
-/* one MCS group: streams, mode, chains */
-struct ppr_mcs_grp {
+/* one VHT group the decode writes: streams, mode, chains; `no_hi`: MCS 8 and 9 disabled */
+struct ppr_vht_grp {
 	u8 nss;
 	u8 mode;
 	u8 chains;
-};
-
-static const struct ppr_ofdm_grp ppr_ofdm_grps[] = {
-	{ PPR_MODE_NONE, 1 }, { PPR_MODE_CDD, 2 }, { PPR_MODE_CDD, 3 },
-	{ PPR_MODE_TXBF, 2 }, { PPR_MODE_TXBF, 3 },
-};
-
-static const struct ppr_mcs_grp ppr_mcs_grps[] = {
-	{ 1, PPR_MODE_NONE, 1 }, { 1, PPR_MODE_CDD, 2 }, { 1, PPR_MODE_CDD, 3 },
-	{ 2, PPR_MODE_NONE, 2 }, { 2, PPR_MODE_NONE, 3 },
-	{ 2, PPR_MODE_STBC, 2 }, { 2, PPR_MODE_STBC, 3 },
-	{ 3, PPR_MODE_NONE, 3 },
-	{ 1, PPR_MODE_TXBF, 2 }, { 1, PPR_MODE_TXBF, 3 },
-	{ 2, PPR_MODE_TXBF, 2 }, { 2, PPR_MODE_TXBF, 3 },
-	{ 3, PPR_MODE_TXBF, 3 },
+	bool no_hi;
 };
 
 /*
- * The SROM-11 offset words of one bandwidth variant (acphy-attach.md, "Tx power
- * offsets"): which copy in pi+0xc50..0xcf8 holds the offsets of the OFDM and
- * of the MCS rates of the variant, for 2.4 GHz and for 5 GHz.
+ * acphy-api-txpower.md, Q3, sub_0b42df (wlc_phy_ppr_set_vht_all): the VHT
+ * groups in the order of the calls; a group is written only if its chain
+ * count is at most N. The TXBF groups whose stream count equals the chain
+ * count get MCS 8 and 9 disabled.
  */
-struct srom11_bw {
-	u8 txbw;	/* enum ppr_txbw */
-	u8 ofdm_2g;	/* index into po.ofdm_2g, 0xff: none */
-	u8 mcs_2g;	/* index into po.mcs_2g, 0xff: none */
-	u8 ofdm_5g;	/* group index into po.mcs_5g */
-	u8 mcs_5g;	/* group index into po.mcs_5g */
+static const struct ppr_vht_grp srom11_vht_grps[] = {
+	{ 1, PPR_MODE_NONE, 1, false },
+	{ 1, PPR_MODE_CDD, 2, false },
+	{ 2, PPR_MODE_STBC, 2, false },
+	{ 2, PPR_MODE_NONE, 2, false },
+	{ 1, PPR_MODE_TXBF, 2, false },
+	{ 2, PPR_MODE_TXBF, 2, true },
+	{ 1, PPR_MODE_CDD, 3, false },
+	{ 2, PPR_MODE_STBC, 3, false },
+	{ 2, PPR_MODE_NONE, 3, false },
+	{ 3, PPR_MODE_NONE, 3, false },
+	{ 1, PPR_MODE_TXBF, 3, false },
+	{ 2, PPR_MODE_TXBF, 3, false },
+	{ 3, PPR_MODE_TXBF, 3, true },
 };
 
-#define SROM11_NONE	0xff
+/*
+ * The SROM-11 words the decode reads (acphy-api-txpower.md, Q3, "The words
+ * read"; the copies of struct bcm4360_phy_srom_po). The 5 GHz MCS words exist
+ * twice per bandwidth with the same value; OFDM8 is taken from the first copy,
+ * VHT10 from the second.
+ */
+#define SROM11_2G_OFDM		0	/* po.ofdm_2g[0], pi+0xc50 */
+#define SROM11_2G_BW20_MCS	0	/* po.mcs_2g[0], pi+0xc5c: mcsbw202gpo */
+#define SROM11_2G_BW40_MCS	2	/* po.mcs_2g[2], pi+0xc64: mcsbw402gpo */
+#define SROM11_5G_BW20_OFDM	0	/* po.mcs_5g[0][i], pi+0xc6c + 4i: mcsbw205g?po */
+#define SROM11_5G_BW40_OFDM	3	/* po.mcs_5g[3][i], pi+0xc90 + 4i: mcsbw405g?po */
+#define SROM11_5G_BW80_OFDM	5	/* po.mcs_5g[5][i], pi+0xca8 + 4i: mcsbw805g?po */
+#define SROM11_5G_BW20_VHT	6	/* po.mcs_5g[6][i], pi+0xcb4 + 4i: mcsbw205g?po */
+#define SROM11_5G_BW40_VHT	9	/* po.mcs_5g[9][i], pi+0xcd8 + 4i: mcsbw405g?po */
+#define SROM11_5G_BW80_VHT	11	/* po.mcs_5g[11][i], pi+0xcf0 + 4i: mcsbw805g?po */
 
-static const struct srom11_bw srom11_bws[] = {
-	{ PPR_TXBW_20,     0, 0, 0, 6 },
-	{ PPR_TXBW_20IN40, 1, 1, 1, 7 },
-	{ PPR_TXBW_20IN80, SROM11_NONE, SROM11_NONE, 2, 8 },
-	{ PPR_TXBW_40,     2, 2, 3, 9 },
-	{ PPR_TXBW_40IN80, SROM11_NONE, SROM11_NONE, 4, 10 },
-	{ PPR_TXBW_80,     SROM11_NONE, SROM11_NONE, 5, 11 },
-};
+/*
+ * HB: the two bits of MCS 8 and 9 in pi+0xd36 (2.4 GHz) or in
+ * sb40and80hr5g[i] (5 GHz), by their shift; each bit takes 8 dB off.
+ */
+#define SROM11_HB_2G_BW20	12
+#define SROM11_HB_2G_BW40	14
+#define SROM11_HB_5G_BW20	4
+#define SROM11_HB_5G_BW40	6
+#define SROM11_HB_5G_BW80	8
+#define SROM11_HB_MCS8		0x1
+#define SROM11_HB_MCS9		0x2
+#define SROM11_HB_STEP		32	/* 8 dB in quarter dBm */
 
-/* the bandwidth variants a ppr of bandwidth selector `s` holds (40: 20, 40, 20in40) */
-static bool srom11_bw_in_ppr(u8 txbw, u8 s)
+/* the second adjustment of the outer 20 MHz channels of an 80 MHz block: bits 2..5 */
+#define SROM11_SB20IN80_OUTER_SHIFT	2
+#define SROM11_NIBBLE			0xf
+
+/* the control sidebands of an 80 MHz chanspec that are outer channels (LL, UU) */
+#define CHANSPEC_SB_LL		0x0000
+#define CHANSPEC_SB_UU		0x0300
+
+/* the rates of an OFDM / VHT group that the low adjustment of ADJ8 / ADJ10 covers */
+#define SROM11_ADJ8_LO_RATES	6	/* 6 .. 36 Mbit/s */
+#define SROM11_ADJ10_LO_RATES	5	/* MCS 0 .. 4 */
+
+/* acphy-api-txpower.md, Q3, "Notation": n_k(w), bits 4k..4k+3 of w */
+static u32 srom11_nib(u32 w, u32 k)
 {
-	switch (txbw) {
-	case PPR_TXBW_20:
-		return true;
-	case PPR_TXBW_40:
-	case PPR_TXBW_20IN40:
-		return s >= PPR_BW_40;
-	default:
-		return s >= PPR_BW_80;
-	}
+	return (w >> (4 * k)) & SROM11_NIBBLE;
+}
+
+/* acphy-api-txpower.md, Q3, "Notation": P(x) = maxpwr - 2x, a byte modulo 256 */
+static s8 srom11_p(u8 maxpwr, u32 x)
+{
+	return (s8)(u8)(maxpwr - 2 * x);
+}
+
+/* acphy-api-txpower.md, Q3, "Notation": 2 * s4(x), as ((x + 8) & 15) * 2 - 16 */
+static s32 srom11_s4x2(u32 x)
+{
+	return (s32)((x + 8) & SROM11_NIBBLE) * 2 - 16;
+}
+
+/* acphy-api-txpower.md, Q3, "Notation": a power byte plus d, modulo 256 */
+static s8 srom11_add(s8 v, s32 d)
+{
+	return (s8)(u8)(v + d);
 }
 
 /*
- * acphy-api-txpower.md, "wlc_phy_txpwr_apply_srom11" (sub_0b3369): unpack the
- * `n` 4 bit offsets of `w`, lowest nibble first, to power bytes maxpwr - 2 * nibble
- * (steps of half a dB below maxpwr, quarter dBm).
+ * acphy-api-txpower.md, Q3, sub_0b2716 (wlc_phy_txpwr_srom11_ofdm_rates):
+ * OFDM8(w, x) = [P(n0), P(n0), Q, Q, P(n1), P(n2), P(n3), P(n4)] with
+ * Q = P(n0) - 2 * s4(x).
  */
-static void srom11_unpack(u32 w, u32 n, u8 maxpwr, s8 *out)
+static void srom11_ofdm8(u32 w, u32 x, u8 maxpwr, s8 *r)
+{
+	s8 p0 = srom11_p(maxpwr, srom11_nib(w, 0));
+	s8 q = srom11_add(p0, -srom11_s4x2(x));
+	u32 k;
+
+	r[0] = p0;					/* 6 Mbit/s */
+	r[1] = p0;					/* 9 */
+	r[2] = q;					/* 12 */
+	r[3] = q;					/* 18 */
+	for (k = 1; k <= 4; k++)			/* 24, 36, 48, 54 */
+		r[3 + k] = srom11_p(maxpwr, srom11_nib(w, k));
+}
+
+/*
+ * acphy-api-txpower.md, Q3, sub_0b2765 (wlc_phy_txpwr_srom11_vht_rates):
+ * VHT10(w, x) = [P(n0), Q, Q, P(n1), .., P(n7)] with Q as in OFDM8.
+ */
+static void srom11_vht10(u32 w, u32 x, u8 maxpwr, s8 *r)
+{
+	s8 p0 = srom11_p(maxpwr, srom11_nib(w, 0));
+	s8 q = srom11_add(p0, -srom11_s4x2(x));
+	u32 k;
+
+	r[0] = p0;					/* MCS 0 */
+	r[1] = q;					/* MCS 1 */
+	r[2] = q;					/* MCS 2 */
+	for (k = 1; k <= 7; k++)			/* MCS 3 .. 9 */
+		r[2 + k] = srom11_p(maxpwr, srom11_nib(w, k));
+}
+
+/*
+ * acphy-api-txpower.md, Q3, sub_0b2690 (wlc_phy_txpwr_ofdm_offset_adj):
+ * ADJ8(src, lo, hi) into `dst` (may be `src`): rates 0..5 + 2 * s4(lo),
+ * rates 6, 7 + 2 * s4(hi).
+ */
+static void srom11_adj8(const s8 *src, u32 lo, u32 hi, s8 *dst)
 {
 	u32 k;
 
-	for (k = 0; k < n; k++)
-		out[k] = (s8)(maxpwr - 2 * ((w >> (4 * k)) & 0xf));
-}
-
-/* the DSSS groups of one bandwidth variant: every chain count gets the same powers */
-static void srom11_set_dsss(void *out, u8 txbw, const s8 *pwr)
-{
-	u8 chains;
-
-	for (chains = 1; chains <= BCM4360_PHY_CORES_MAX; chains++)
-		bcm4360_ppr_set_dsss(out, txbw, chains, pwr);
-}
-
-/* the OFDM groups of one bandwidth variant (sub_0b2690 .. sub_0b2765) */
-static void srom11_set_ofdm(void *out, u8 txbw, const s8 *pwr)
-{
-	u32 i;
-
-	for (i = 0; i < ARRAY_SIZE(ppr_ofdm_grps); i++)
-		bcm4360_ppr_set_ofdm(out, txbw, ppr_ofdm_grps[i].mode, ppr_ofdm_grps[i].chains, pwr);
-}
-
-/* the MCS groups of one bandwidth variant (sub_0b42df) */
-static void srom11_set_mcs(void *out, u8 txbw, const s8 *pwr)
-{
-	u32 i;
-
-	for (i = 0; i < ARRAY_SIZE(ppr_mcs_grps); i++)
-		bcm4360_ppr_set_vht_mcs(out, txbw, ppr_mcs_grps[i].nss, ppr_mcs_grps[i].mode,
-					ppr_mcs_grps[i].chains, pwr);
+	for (k = 0; k < PPR_OFDM_RATES; k++)
+		dst[k] = srom11_add(src[k], srom11_s4x2(k < SROM11_ADJ8_LO_RATES ? lo : hi));
 }
 
 /*
- * acphy-api-txpower.md, "wlc_phy_txpwr_apply_srom11": fill `out` with the
- * per-rate power limit of one core for the rate-offset group `group` (0 =
- * 2.4 GHz, 1..3 = 5 GHz low, mid, high): `maxpwr` minus the offsets of the
- * SROM-11 power-offset variables, for every bandwidth variant the ppr holds.
- * The sub-band corrections (sb20in40*, sb20in80and160*, sb40and80*, mcslr5g*,
- * gated by pi_ac+0x34d) are not applied: see the questions.
+ * acphy-api-txpower.md, Q3, sub_0b26d3 (wlc_phy_txpwr_vht_offset_adj):
+ * ADJ10(src, lo, hi) into `dst` (may be `src`): rates 0..4 + 2 * s4(lo),
+ * rates 5..9 + 2 * s4(hi).
  */
-static void phy_txpwr_apply_srom11(struct bcm4360_phy *phy, u8 group, u8 maxpwr, void *out)
+static void srom11_adj10(const s8 *src, u32 lo, u32 hi, s8 *dst)
 {
-	const struct bcm4360_phy_srom_po *po = &phy->txpwr.po;
-	u8 s = bcm4360_ppr_get_ch_bw(out);
-	s8 pwr[PPR_VHT_RATES];
-	u32 i;
+	u32 k;
 
-	for (i = 0; i < ARRAY_SIZE(srom11_bws); i++) {
-		const struct srom11_bw *v = &srom11_bws[i];
-		u32 wo, wm;
+	for (k = 0; k < PPR_VHT_RATES; k++)
+		dst[k] = srom11_add(src[k], srom11_s4x2(k < SROM11_ADJ10_LO_RATES ? lo : hi));
+}
 
-		if (!srom11_bw_in_ppr(v->txbw, s))
-			continue;
-		if (group == 0) {
-			if (v->ofdm_2g == SROM11_NONE)
-				continue;
-			wo = po->ofdm_2g[v->ofdm_2g];
-			wm = po->mcs_2g[v->mcs_2g];
-			if (v->txbw == PPR_TXBW_20 || v->txbw == PPR_TXBW_20IN40) {
-				srom11_unpack(v->txbw == PPR_TXBW_20 ? po->cckbw202gpo :
-					      po->cckbw20ul2gpo, PPR_DSSS_RATES, maxpwr, pwr);
-				srom11_set_dsss(out, v->txbw, pwr);
-			}
-		} else {
-			wo = po->mcs_5g[v->ofdm_5g][group - 1];
-			wm = po->mcs_5g[v->mcs_5g][group - 1];
-		}
-		srom11_unpack(wo, PPR_OFDM_RATES, maxpwr, pwr);
-		srom11_set_ofdm(out, v->txbw, pwr);
-		srom11_unpack(wm, SROM11_MCS_NIBBLES, maxpwr, pwr);
-		/* MCS 8 and 9: no offsets of their own in the words (a guess, see the questions) */
-		pwr[8] = pwr[SROM11_MCS_NIBBLES - 1];
-		pwr[9] = pwr[SROM11_MCS_NIBBLES - 1];
-		srom11_set_mcs(out, v->txbw, pwr);
+/*
+ * acphy-api-txpower.md, Q3, HB(v, f): with the board flag F (pi_ac+0x34d),
+ * MCS 8 of `v` loses 8 dB when bit 0 of `f` is set, MCS 9 when bit 1 is.
+ */
+static void srom11_hb(s8 *v, u32 f, bool flag)
+{
+	if (!flag)
+		return;
+	if (f & SROM11_HB_MCS8)
+		v[8] = srom11_add(v[8], -SROM11_HB_STEP);
+	if (f & SROM11_HB_MCS9)
+		v[9] = srom11_add(v[9], -SROM11_HB_STEP);
+}
+
+/* what the decode writes into: the ppr and the number of cores N (pi+0x168) */
+struct srom11_out {
+	void *ppr;
+	u32 cores;
+};
+
+/* acphy-api-txpower.md, Q3, SET_DSSS(sel, buf): chains 1 .. N */
+static void srom11_set_dsss(const struct srom11_out *o, u8 sel, const s8 *buf)
+{
+	u32 c;
+
+	for (c = 1; c <= o->cores; c++)
+		bcm4360_ppr_set_dsss(o->ppr, sel, (u8)c, buf);
+}
+
+/*
+ * acphy-api-txpower.md, Q3, sub_0b3369 (wlc_phy_ppr_set_ofdm_all),
+ * SET_OFDM(sel, buf): (mode, chains) = (none, 1), then (CDD, c) and (TXBF, c)
+ * for c = 2 .. N.
+ */
+static void srom11_set_ofdm(const struct srom11_out *o, u8 sel, const s8 *buf)
+{
+	u32 c;
+
+	bcm4360_ppr_set_ofdm(o->ppr, sel, PPR_MODE_NONE, 1, buf);
+	for (c = 2; c <= o->cores; c++) {
+		bcm4360_ppr_set_ofdm(o->ppr, sel, PPR_MODE_CDD, (u8)c, buf);
+		bcm4360_ppr_set_ofdm(o->ppr, sel, PPR_MODE_TXBF, (u8)c, buf);
 	}
 }
 
 /*
- * acphy-txpower.md, section 19 (wlc_phy_txpower_sromlimit_get_acphy): the
- * highest power the board allows for every rate on `chanspec`, for core
- * `core`, into `out` (made by the caller for the bandwidth of the chanspec).
+ * acphy-api-txpower.md, Q3, sub_0b42df (wlc_phy_ppr_set_vht_all),
+ * SET_VHT(sel, buf): the groups of srom11_vht_grps up to N chains, some
+ * with MCS 8 and 9 disabled (a copy; `buf` is left as it was).
+ */
+static void srom11_set_vht(const struct srom11_out *o, u8 sel, const s8 *buf)
+{
+	s8 no_hi[PPR_VHT_RATES];
+	u32 i;
+
+	for (i = 0; i < PPR_VHT_RATES; i++)
+		no_hi[i] = buf[i];
+	no_hi[8] = PPR_RATE_DISABLED;
+	no_hi[9] = PPR_RATE_DISABLED;
+
+	for (i = 0; i < ARRAY_SIZE(srom11_vht_grps); i++) {
+		const struct ppr_vht_grp *g = &srom11_vht_grps[i];
+
+		if (g->chains > o->cores)
+			continue;
+		bcm4360_ppr_set_vht_mcs(o->ppr, sel, g->nss, g->mode, g->chains,
+					g->no_hi ? no_hi : buf);
+	}
+}
+
+/* acphy-api-txpower.md, Q3: the four DSSS powers [P(n_k(w))], k = 0..3 */
+static void srom11_dsss4(u32 w, u8 maxpwr, s8 *r)
+{
+	u32 k;
+
+	for (k = 0; k < PPR_DSSS_RATES; k++)
+		r[k] = srom11_p(maxpwr, srom11_nib(w, k));
+}
+
+/*
+ * acphy-api-txpower.md, Q3, "2.4 GHz", 0x1800 (40 MHz): the groups of
+ * selectors 1 and 3 from the 20 MHz groups OFDM20 and VHT20.
+ */
+static void srom11_decode_2g_40(struct bcm4360_phy *phy, const struct srom11_out *o, u8 maxpwr,
+				const s8 *ofdm20, const s8 *vht20)
+{
+	const struct bcm4360_phy_srom_po *po = &phy->txpwr.po;
+	u32 w = po->mcs_2g[SROM11_2G_BW40_MCS];
+	u32 x = srom11_nib(po->ofdmlrbw202gpo, 3);
+	u32 lo = srom11_nib(po->sb20in40lrpo, 0);
+	u32 hi = srom11_nib(po->sb20in40hrpo, 0);
+	s8 dsss40[PPR_DSSS_RATES], vht40[PPR_VHT_RATES], ofdm40[PPR_OFDM_RATES];
+	s8 ofdm20in40[PPR_OFDM_RATES], vht20in40[PPR_VHT_RATES];
+
+	srom11_dsss4(po->cckbw20ul2gpo, maxpwr, dsss40);
+	srom11_vht10(w, x, maxpwr, vht40);
+	srom11_hb(vht40, po->sb40and80hr5gpo[0] >> SROM11_HB_2G_BW40, phy->flags.bf3_bit11);
+	srom11_ofdm8(w, x, maxpwr, ofdm40);
+	srom11_adj8(ofdm40, srom11_nib(po->dot11agduplrpo, 0), srom11_nib(po->dot11agduphrpo, 0),
+		    ofdm40);
+	srom11_adj8(ofdm20, lo, hi, ofdm20in40);
+	srom11_adj10(vht20, lo, hi, vht20in40);
+
+	srom11_set_ofdm(o, PPR_TXBW_40, ofdm40);
+	srom11_set_vht(o, PPR_TXBW_40, vht40);
+	srom11_set_dsss(o, PPR_TXBW_20IN40, dsss40);
+	srom11_set_ofdm(o, PPR_TXBW_20IN40, ofdm20in40);
+	srom11_set_vht(o, PPR_TXBW_20IN40, vht20in40);
+}
+
+/* acphy-api-txpower.md, Q3, "2.4 GHz" (chanspec & 0xc000 = 0) */
+static void srom11_decode_2g(struct bcm4360_phy *phy, const struct srom11_out *o, u16 chanspec,
+			     u8 maxpwr)
+{
+	const struct bcm4360_phy_srom_po *po = &phy->txpwr.po;
+	s8 ofdm20[PPR_OFDM_RATES], vht20[PPR_VHT_RATES], dsss20[PPR_DSSS_RATES];
+	u32 k;
+
+	/* always first */
+	for (k = 0; k < PPR_OFDM_RATES; k++)
+		ofdm20[k] = srom11_p(maxpwr, srom11_nib(po->ofdm_2g[SROM11_2G_OFDM], k));
+	srom11_vht10(po->mcs_2g[SROM11_2G_BW20_MCS], srom11_nib(po->ofdmlrbw202gpo, 2), maxpwr,
+		     vht20);
+	srom11_hb(vht20, po->sb40and80hr5gpo[0] >> SROM11_HB_2G_BW20, phy->flags.bf3_bit11);
+
+	switch (chanspec & BCM4360_CHANSPEC_BW) {
+	case BCM4360_CHANSPEC_BW_20:
+		srom11_dsss4(po->cckbw202gpo, maxpwr, dsss20);
+		srom11_set_dsss(o, PPR_TXBW_20, dsss20);
+		srom11_set_ofdm(o, PPR_TXBW_20, ofdm20);
+		srom11_set_vht(o, PPR_TXBW_20, vht20);
+		break;
+	case BCM4360_CHANSPEC_BW_40:
+		srom11_decode_2g_40(phy, o, maxpwr, ofdm20, vht20);
+		break;
+	default:
+		break;
+	}
+}
+
+/*
+ * acphy-api-txpower.md, Q3, "5 GHz", 40 MHz: the groups of selectors 1 and 3;
+ * `g` = group selects the nibble of the shared words.
+ */
+static void srom11_decode_5g_40(struct bcm4360_phy *phy, const struct srom11_out *o, u32 g,
+				const s8 *ofdm20, const s8 *vht20, const s8 *ofdm40b,
+				const s8 *vht40)
+{
+	const struct bcm4360_phy_srom_po *po = &phy->txpwr.po;
+	u32 lo = srom11_nib(po->sb20in40lrpo, g);
+	u32 hi = srom11_nib(po->sb20in40hrpo, g);
+	s8 ofdm20in40[PPR_OFDM_RATES], vht20in40[PPR_VHT_RATES], ofdm40[PPR_OFDM_RATES];
+
+	srom11_adj8(ofdm20, lo, hi, ofdm20in40);
+	srom11_adj10(vht20, lo, hi, vht20in40);
+	srom11_adj8(ofdm40b, srom11_nib(po->dot11agduplrpo, g), srom11_nib(po->dot11agduphrpo, g),
+		    ofdm40);
+
+	srom11_set_ofdm(o, PPR_TXBW_40, ofdm40);
+	srom11_set_vht(o, PPR_TXBW_40, vht40);
+	srom11_set_ofdm(o, PPR_TXBW_20IN40, ofdm20in40);
+	srom11_set_vht(o, PPR_TXBW_20IN40, vht20in40);
+}
+
+/*
+ * acphy-api-txpower.md, Q3, "5 GHz", 80 MHz: the groups of selectors 2, 4
+ * and 5; `g` = group, i = g - 1 the low/mid/high word.
+ */
+static void srom11_decode_5g_80(struct bcm4360_phy *phy, const struct srom11_out *o,
+				u16 chanspec, u32 g, u8 maxpwr, const s8 *ofdm20,
+				const s8 *vht20, const s8 *ofdm40b, const s8 *vht40)
+{
+	const struct bcm4360_phy_srom_po *po = &phy->txpwr.po;
+	u32 i = g - 1;
+	u32 x = srom11_nib(po->mcslr5gpo[i], 2);
+	u32 duplo = srom11_nib(po->dot11agduplrpo, g);
+	u32 duphi = srom11_nib(po->dot11agduphrpo, g);
+	u32 sblo = po->sb20in80and160lr5gpo[i];
+	u32 sbhi = po->sb20in80and160hr5gpo[i];
+	u16 sb = chanspec & BCM4360_CHANSPEC_CTL_SB;
+	s8 vht80[PPR_VHT_RATES], ofdm80[PPR_OFDM_RATES], ofdm40in80[PPR_OFDM_RATES];
+	s8 ofdm20in80[PPR_OFDM_RATES], vht20in80[PPR_VHT_RATES], vht40in80[PPR_VHT_RATES];
+
+	srom11_vht10(po->mcs_5g[SROM11_5G_BW80_VHT][i], x, maxpwr, vht80);
+	srom11_hb(vht80, po->sb40and80hr5gpo[i] >> SROM11_HB_5G_BW80, phy->flags.bf3_bit11);
+	srom11_ofdm8(po->mcs_5g[SROM11_5G_BW80_OFDM][i], x, maxpwr, ofdm80);
+	srom11_adj8(ofdm80, duplo, duphi, ofdm80);
+	srom11_adj8(ofdm40b, duplo, duphi, ofdm40in80);
+
+	srom11_adj8(ofdm20, srom11_nib(sblo, 0), srom11_nib(sbhi, 0), ofdm20in80);
+	srom11_adj10(vht20, srom11_nib(sblo, 0), srom11_nib(sbhi, 0), vht20in80);
+	if (sb == CHANSPEC_SB_LL || sb == CHANSPEC_SB_UU) {
+		/* the outer 20 MHz channels: again, with bits 2..5 of the two words */
+		u32 lo = (sblo >> SROM11_SB20IN80_OUTER_SHIFT) & SROM11_NIBBLE;
+		u32 hi = (sbhi >> SROM11_SB20IN80_OUTER_SHIFT) & SROM11_NIBBLE;
+
+		srom11_adj8(ofdm20in80, lo, hi, ofdm20in80);
+		srom11_adj10(vht20in80, lo, hi, vht20in80);
+	}
+	srom11_adj10(vht40, srom11_nib(po->sb40and80lr5gpo[i], 0),
+		     srom11_nib(po->sb40and80hr5gpo[i], 0), vht40in80);
+
+	srom11_set_ofdm(o, PPR_TXBW_80, ofdm80);
+	srom11_set_vht(o, PPR_TXBW_80, vht80);
+	srom11_set_ofdm(o, PPR_TXBW_20IN80, ofdm20in80);
+	srom11_set_vht(o, PPR_TXBW_20IN80, vht20in80);
+	srom11_set_vht(o, PPR_TXBW_40IN80, vht40in80);
+	srom11_set_ofdm(o, PPR_TXBW_40IN80, ofdm40in80);
+}
+
+/* acphy-api-txpower.md, Q3, "5 GHz" (chanspec & 0xc000 = 0xc000), group 1..3 */
+static void srom11_decode_5g(struct bcm4360_phy *phy, const struct srom11_out *o, u16 chanspec,
+			     u32 g, u8 maxpwr)
+{
+	const struct bcm4360_phy_srom_po *po = &phy->txpwr.po;
+	u32 i = g - 1;
+	u32 lr5 = po->mcslr5gpo[i];
+	u32 hb = po->sb40and80hr5gpo[i];
+	bool flag = phy->flags.bf3_bit11;
+	u16 bw = chanspec & BCM4360_CHANSPEC_BW;
+	s8 ofdm20[PPR_OFDM_RATES], vht20[PPR_VHT_RATES];
+	s8 ofdm40b[PPR_OFDM_RATES], vht40[PPR_VHT_RATES];
+
+	/* always first */
+	srom11_ofdm8(po->mcs_5g[SROM11_5G_BW20_OFDM][i], srom11_nib(lr5, 0), maxpwr, ofdm20);
+	srom11_vht10(po->mcs_5g[SROM11_5G_BW20_VHT][i], srom11_nib(lr5, 0), maxpwr, vht20);
+	srom11_hb(vht20, hb >> SROM11_HB_5G_BW20, flag);
+
+	if (bw == BCM4360_CHANSPEC_BW_20) {
+		srom11_set_ofdm(o, PPR_TXBW_20, ofdm20);
+		srom11_set_vht(o, PPR_TXBW_20, vht20);
+		return;
+	}
+	if (bw != BCM4360_CHANSPEC_BW_40 && bw != BCM4360_CHANSPEC_BW_80)
+		return;
+
+	/* 40 or 80 MHz, first */
+	srom11_vht10(po->mcs_5g[SROM11_5G_BW40_VHT][i], srom11_nib(lr5, 1), maxpwr, vht40);
+	srom11_hb(vht40, hb >> SROM11_HB_5G_BW40, flag);
+	srom11_ofdm8(po->mcs_5g[SROM11_5G_BW40_OFDM][i], srom11_nib(lr5, 1), maxpwr, ofdm40b);
+
+	if (bw == BCM4360_CHANSPEC_BW_40)
+		srom11_decode_5g_40(phy, o, g, ofdm20, vht20, ofdm40b, vht40);
+	else
+		srom11_decode_5g_80(phy, o, chanspec, g, maxpwr, ofdm20, vht20, ofdm40b, vht40);
+}
+
+/*
+ * acphy-api-txpower.md, "Corrections and answers", Q3
+ * (wlc_phy_txpwr_apply_srom11): fill `ppr` with the per-rate power limit
+ * decoded from the SROM-11 power offsets for `chanspec`, `maxpwr` minus the
+ * offsets. Only the selectors of the chanspec's bandwidth and the chain
+ * counts up to N are written; every other group keeps what the ppr held.
+ * `group` (0 = 2.4 GHz, 1..3 = 5 GHz low, mid, high) selects the 5 GHz word.
+ * AC-PHY only (pi+0x160 = 11, always so here).
+ */
+static void phy_txpwr_apply_srom11(struct bcm4360_phy *phy, u8 group, u16 chanspec, u8 maxpwr,
+				   void *ppr)
+{
+	struct srom11_out o = { ppr, phy_cores(phy) };
+
+	switch (chanspec & BCM4360_CHANSPEC_BAND) {
+	case BCM4360_CHANSPEC_BAND_2G:
+		srom11_decode_2g(phy, &o, chanspec, maxpwr);
+		break;
+	case BCM4360_CHANSPEC_BAND_5G:
+		if (group >= 1 && group <= BCM4360_PHY_PO_RANGES_5G)
+			srom11_decode_5g(phy, &o, chanspec, group, maxpwr);
+		break;
+	default:
+		break;
+	}
+}
+
+/*
+ * acphy-txpower.md, section 19 (wlc_phy_txpower_sromlimit_get_acphy), as
+ * corrected in acphy-api-txpower.md, Q3, "The wrapper": the highest power the
+ * board allows for every rate on `chanspec`, for core `core`, into `out` (made
+ * by the caller for the bandwidth of the chanspec).
  */
 static void phy_txpower_sromlimit_get(struct bcm4360_phy *phy, u16 chanspec, void *out, u8 core)
 {
@@ -1262,20 +1556,20 @@ static void phy_txpower_sromlimit_get(struct bcm4360_phy *phy, u16 chanspec, voi
 	if (band >= BCM4360_PHY_BANDS)
 		return;
 
-	/* step 2: the smallest maxp of the three cores (unsigned) */
+	/* step 2: maxpwr, the smallest maxp of cores 0, 1, 2 (unsigned), whatever N is */
 	m = tx->maxp[0][band];
 	for (c = 1; c < BCM4360_PHY_CORES_MAX; c++)
 		if (tx->maxp[c][band] < m)
 			m = tx->maxp[c][band];
 
-	g = (band < 4) ? band : band - 1;				/* step 3 */
-	phy_txpwr_apply_srom11(phy, g, m, out);				/* step 4 */
+	g = (band < 4) ? band : band - 1;			/* step 3: r - 1 + (r < 4) */
+	phy_txpwr_apply_srom11(phy, g, chanspec, m, out);		/* step 4 */
 
 	maxp = (core < BCM4360_PHY_CORES_MAX) ? tx->maxp[core][band] : 0;
 	d = (s8)(maxp - m);						/* step 5 */
 	if (d > 0)
 		bcm4360_ppr_plus_cmn_val(out, d);
-	bcm4360_ppr_apply_max(out, (s8)maxp);				/* step 6 */
+	bcm4360_ppr_apply_max(out, (s8)maxp);				/* step 6: a ceiling */
 }
 
 /*
@@ -1301,10 +1595,12 @@ void bcm4360_phy_txpower_sromlimit(struct bcm4360_phy *phy, u16 chanspec, s8 *mi
 }
 
 /*
- * acphy-api-txpower.md, "sub_0b8ca4: the per-rate limit merge", step 3: the
- * offsets ppr pi+0x1c8, made again when its bandwidth is not `bw`.
+ * acphy-api-txpower.md, "Corrections and answers", Q4 (step 3 of the merge):
+ * the offsets ppr pi+0x1c8. Deleted if it was made for another bandwidth
+ * selector than `bw`, made (again) if there is none, and then cleared on every
+ * merge. False if it cannot be made.
  */
-static void phy_txpower_offsets_ppr(struct bcm4360_phy *phy, u8 bw)
+static bool phy_txpower_offsets_ppr(struct bcm4360_phy *phy, u8 bw)
 {
 	struct bcm4360_phy_txpwr *tx = &phy->txpwr;
 
@@ -1312,89 +1608,112 @@ static void phy_txpower_offsets_ppr(struct bcm4360_phy *phy, u8 bw)
 		bcm4360_ppr_delete(phy->hw, tx->ppr);
 		tx->ppr = NULL;
 	}
-	if (!tx->ppr)
+	if (!tx->ppr) {
 		tx->ppr = bcm4360_ppr_create(phy->hw, bw);
+		if (!tx->ppr)
+			return false;
+	}
+	bcm4360_ppr_clear(tx->ppr);
+	return true;
 }
 
 /*
- * acphy-api-txpower.md, "sub_0b8ca4: the per-rate limit merge", step 5: the
- * limits and targets of core `core`. `l` is the regulatory limit, `a` and `b`
- * the two working objects.
+ * acphy-api-txpower.md, "Further corrections to sub_0b8ca4", step 5: the
+ * limits and targets of core `core` on `chanspec`. `l` is the regulatory
+ * limit, `a` and `b` the two working objects, `min` the minimum power byte
+ * (set to 0 once by the caller, overwritten by every sromlimit call).
  */
-static void phy_txpower_merge_core(struct bcm4360_phy *phy, u32 core, void *l, void *a, void *b,
-				   void *reg_ppr)
+static void phy_txpower_merge_core(struct bcm4360_phy *phy, u16 chanspec, u32 core, void *l,
+				   void *a, void *b, void *reg_ppr, s8 *min)
 {
 	struct bcm4360_phy_txpwr *tx = &phy->txpwr;
-	s8 min = 0;
+	s8 m;
 
 	bcm4360_ppr_set_cmn_val(a, (s8)tx->user_target);			/* 5.1 */
-	phy_txpower_sromlimit(phy, phy->radio_chanspec, &min, b, (u8)core);		/* 5.2 */
+	phy_txpower_sromlimit(phy, chanspec, min, b, (u8)core);			/* 5.2 */
 	bcm4360_ppr_compare_min(b, l);						/* 5.3 */
 	bcm4360_ppr_minus_cmn_val(b, (s8)tx->txpwrbckof);			/* 5.4 */
 	bcm4360_ppr_compare_min(a, b);						/* 5.5 */
-	bcm4360_ppr_force_disabled(a, min);					/* 5.6 */
-	if (tx->percent < TXPOWER_PERCENT_FULL)					/* 5.7 */
+	if (tx->percent < TXPOWER_PERCENT_FULL)					/* 5.6 */
 		bcm4360_ppr_multiply_percentage(a, tx->percent);
+	bcm4360_ppr_force_disabled(a, *min);					/* 5.7 */
 
 	tx->target_max[core] = bcm4360_ppr_get_max(a);				/* 5.8 */
-	tx->target_min[core] = bcm4360_ppr_get_min(a, min);
-	tx->ovr_value = tx->target_min[core];
+	m = bcm4360_ppr_get_min(a, *min);
+	tx->target_min[core] = m;
+	tx->ovr_value = m;
 	tx->ovr_neg = 0;
 
-	if (core == 0 && reg_ppr)						/* 5.9 */
-		bcm4360_ppr_copy(a, reg_ppr);
-
-	if (!tx->ovr_active) {							/* 5.10 */
-		bcm4360_ppr_cmn_val_minus(a, tx->target_max[core]);
-		if (tx->ppr)
-			bcm4360_ppr_compare_max(tx->ppr, a);
+	if (core == 0) {							/* 5.9 */
+		tx->pi_0x21e = 0;
+		if (reg_ppr)
+			bcm4360_ppr_copy(a, reg_ppr);
 	}
+
+	bcm4360_ppr_cmn_val_minus(a, tx->target_max[core]);			/* 5.10 */
+	bcm4360_ppr_compare_max(tx->ppr, a);					/* 5.11 */
 }
 
 /*
- * acphy-api-txpower.md, "sub_0b8ca4: the per-rate limit merge": the per-rate
- * limits the PHY enforces and the targets of every core, from the regulatory
- * limit `in_ppr` (may be NULL) and the board limit. `reg_ppr` (may be NULL)
- * gets the limited set of core 0; without it the targets are applied.
+ * acphy-api-txpower.md, "sub_0b8ca4: the per-rate limit merge", in the order
+ * of "Further corrections to sub_0b8ca4": the per-rate limits the PHY
+ * enforces and the targets of every core, from the regulatory limit `in_ppr`
+ * (may be NULL) and the board limit. `reg_ppr` (may be NULL) gets the limited
+ * set of core 0; without it the targets are applied (the callback pi+0x40,
+ * wlc_phy_txpower_recalc_target_acphy).
  */
 static void phy_txpower_merge(struct bcm4360_phy *phy, void *in_ppr, void *reg_ppr)
 {
-	u8 bw = ppr_bw_sel(phy->radio_chanspec);				/* step 1 */
+	u16 chanspec = phy->radio_chanspec;
+	u8 bw = ppr_bw_sel(chanspec);
 	void *l, *a, *b;
+	s8 min = 0;
 	u32 c;
 
-	l = bcm4360_ppr_create(phy->hw, bw);
+	l = bcm4360_ppr_create(phy->hw, bw);					/* step 1 */
 	if (!l)
 		return;
 	if (in_ppr)
 		bcm4360_ppr_copy(in_ppr, l);
 
 	a = bcm4360_ppr_create(phy->hw, bw);					/* step 2 */
+	if (!a) {
+		bcm4360_ppr_delete(phy->hw, l);
+		return;
+	}
 	b = bcm4360_ppr_create(phy->hw, bw);
-
-	phy_txpower_offsets_ppr(phy, bw);					/* step 3 */
-
-	if (a && b) {
-		for (c = 0; c < phy_cores(phy); c++)				/* step 5 */
-			phy_txpower_merge_core(phy, c, l, a, b, reg_ppr);
+	if (!b) {
+		bcm4360_ppr_delete(phy->hw, l);
+		bcm4360_ppr_delete(phy->hw, a);
+		return;
 	}
 
-	bcm4360_ppr_delete(phy->hw, l);						/* step 6 */
-	if (a)
+	if (!phy_txpower_offsets_ppr(phy, bw)) {				/* step 3 */
+		bcm4360_ppr_delete(phy->hw, l);
 		bcm4360_ppr_delete(phy->hw, a);
-	if (b)
 		bcm4360_ppr_delete(phy->hw, b);
-	if (!reg_ppr)
-		bcm4360_phy_txpower_recalc_target_acphy(phy);
+		return;
+	}
+
+	/* step 4: the channel-table value cR is used by the LCN PHYs only */
+
+	for (c = 0; c < phy_cores(phy); c++)					/* step 5 */
+		phy_txpower_merge_core(phy, chanspec, c, l, a, b, reg_ppr, &min);
+
+	bcm4360_ppr_delete(phy->hw, l);						/* step 6 */
+	bcm4360_ppr_delete(phy->hw, a);
+	bcm4360_ppr_delete(phy->hw, b);
+	if (reg_ppr)
+		return;
+	bcm4360_phy_txpower_recalc_target_acphy(phy);
 }
 
 /*
- * acphy-api-txpower.md, "Entry points", wlc_phy_txpower_limit_set and
- * wlc_phy_txpower_set (sub_0b72a4, the transmit-power recalculation tick; the
- * watchdog calls it too, acphy-api-watchdog.md step 12). No specification
- * describes its body: written as no hardware access, no service, result false,
- * which is what the whole-session test shows at its first call (see
- * docs/re/questions/phy-api-txpower.md).
+ * acphy-api-txpower.md, "Corrections and answers", Q5 (sub_0b72a4,
+ * wlc_phy_cal_txpower_recalc_sw, the transmit-power recalculation tick called
+ * by wlc_phy_txpower_limit_set, wlc_phy_txpower_set and the watchdog step 12):
+ * for the AC-PHY (pi+0x160 = 11) it returns false at once, without an access,
+ * a service call or a change of state.
  */
 bool bcm4360_phy_txpower_recalc_tick(struct bcm4360_phy *phy)
 {
@@ -1513,17 +1832,21 @@ s32 bcm4360_phy_txpower_core_offset_set(struct bcm4360_phy *phy, const void *off
 }
 
 /*
- * acphy-api-txpower.md, "Entry points": wlc_phy_get_est_pout, the estimated
- * output power per core from the control status (acphy-txpower.md, section
- * 12) with the MAC suspended.
+ * acphy-api-txpower.md, Q6 (wlc_phy_get_est_pout): the estimated output power
+ * per core from the control status (acphy-txpower.md, section 12): est_pout
+ * from PHY(0x642 + 0x200c), est_pout_adj from PHY(0x640 + 0x200c), with the
+ * MAC suspended and inside the phyreg bracket. est_pout_cck is cleared first;
+ * the object writes one byte there.
  */
 void bcm4360_phy_get_est_pout(struct bcm4360_phy *phy, u8 *est_pout, u8 *est_pout_adj,
 			      u16 *est_pout_cck)
 {
-	bcm4360_mac_suspend(phy->hw);
-	phy_txpwr_est_pwr(phy, est_pout_adj, est_pout);
 	if (est_pout_cck)
-		*est_pout_cck = 0;
+		*(u8 *)est_pout_cck = 0;
+	bcm4360_mac_suspend(phy->hw);
+	phy_reg_enter(phy);
+	phy_txpwr_est_pwr(phy, est_pout, est_pout_adj);
+	phy_reg_exit(phy);
 	bcm4360_mac_enable(phy->hw);
 }
 

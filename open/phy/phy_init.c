@@ -729,7 +729,7 @@ void bcm4360_phy_init(struct bcm4360_phy *phy, u16 chanspec)
 
 	phy->radio_chanspec = chanspec;				/* step 2 */
 	phy->init_running = true;
-	phy->noise_reason = 0;					/* pi+0x18f */
+	phy->noise_pending = 0;					/* pi+0x18f */
 
 	bcm4360_phy_chanspec_shm_set(phy, chanspec);		/* step 3 */
 	(void)d11_read32(phy->hw, D11_REG_0x120);		/* step 4 */

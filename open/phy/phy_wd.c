@@ -20,14 +20,6 @@
 #include <bcm4360/phy.h>
 #include <bcm4360/phy_env.h>
 
-/* step 3: the PHY register pairs the three overrides go to */
-#define ACPHY_REG_0x45a		0x45a
-#define ACPHY_REG_0x45c		0x45c
-#define ACPHY_REG_0x44c		0x44c
-#define ACPHY_REG_0x448		0x448
-#define ACPHY_REG_0x446		0x446
-#define ACPHY_REG_0x44a		0x44a
-
 /* acphy-rxgain.md section 8: the front-end control BT/WLAN override */
 #define ACPHY_REG_FEMCTRL_OVR	0x418
 #define FEMCTRL_OVR_VAL		0x0001
@@ -48,12 +40,11 @@
 #define WD_HOLD_NO_NOISE	0x20e	/* step 10 */
 #define WD_HOLD_NO_PERIODIC	0x20f	/* step 13 */
 
-/* step 10: the reasons of the noise-sample requests (acphy-desense.md C4: 4) */
-#define WD_NOISE_REASON		1
-#define WD_NOISE_REASON_CRSMIN	4
-
-/* step 11: a pending noise sample is forgotten after this many seconds */
-#define WD_NOISE_STALE_S	6
+/*
+ * step 11: pending noise samples are forgotten when more seconds than this
+ * have passed since the request (acphy-api-watchdog.md, Q3: "> 5")
+ */
+#define WD_NOISE_STALE_S	5
 /* step 13.2: the reason "periodic" of wlc_phy_cal_perical */
 #define WD_CAL_PERIODIC		2
 
@@ -200,9 +191,12 @@ static void wd_desense_aci_engine(struct bcm4360_phy *phy)
 		return;
 	}
 
-	/* step 2: histories 1 (narrow), 4 (narrow, x2), 2 (wide), 3 (wide, x2) */
-	m_narrow = daci_latest(&h[1]) + 2 * daci_latest(&h[4]);
-	m_wide = daci_latest(&h[2]) + 2 * daci_latest(&h[3]);
+	/*
+	 * step 2: narrow = pi+0x3fa (H3) + 2 * pi+0x41c (H5), wide = pi+0x3f6
+	 * (H2) + 2 * pi+0x414 (H4) (acphy-api-watchdog.md, Q5)
+	 */
+	m_narrow = daci_latest(&h[BCM4360_WD_H3]) + 2 * daci_latest(&h[BCM4360_WD_H5]);
+	m_wide = daci_latest(&h[BCM4360_WD_H2]) + 2 * daci_latest(&h[BCM4360_WD_H4]);
 	rec->narrow_ring[rec->ring_idx] = m_narrow;
 	rec->wide_ring[rec->ring_idx] = m_wide;
 	rec->ring_idx = (u8)((rec->ring_idx + 1) % DACI_RINGS);
@@ -385,12 +379,11 @@ static void wd_watchdog_acphy(struct bcm4360_phy *phy)
 
 	/*
 	 * wlc_phy_noise_sample_request_crsmincal (acphy-desense.md C4): the
-	 * common request sub_0baff6 with reason 4, which does nothing while a
-	 * sample is pending (docs/re/questions/phy-api-watchdog.md, Q3)
+	 * common request sub_0baff6 with reason 4, refused while a sample is
+	 * pending (acphy-api-watchdog.md, "Corrections and answers", Q3)
 	 */
 	if (phy->crsmincal.enable)
-		bcm4360_phy_noise_sample_request(phy, WD_NOISE_REASON_CRSMIN,
-						 phy->radio_chanspec & BCM4360_CHANSPEC_CHANNEL);
+		bcm4360_phy_noise_sample_request_crsmincal(phy);
 	bcm4360_mac_suspend(phy->hw);
 	bcm4360_phy_mod(&phy->io, ACPHY_REG_0x520, ACPHY_0x520_CORE,
 			(u16)(phy->watchdog_core << ACPHY_0x520_CORE_SHIFT));
@@ -398,62 +391,104 @@ static void wd_watchdog_acphy(struct bcm4360_phy *phy)
 	bcm4360_mac_enable(phy->hw);
 }
 
-/* step 3: an override value, if set, into its pair of PHY registers */
-static void wd_reg_override(struct bcm4360_phy *phy, u16 val, u16 a, u16 b)
+/*
+ * step 3, as corrected in acphy-api-watchdog.md ("Correction of step 3"): an
+ * override value, if not 0, copied into its pair of pi fields; no access
+ */
+static void wd_override(u16 val, u16 *a, u16 *b)
 {
 	if (!val)
 		return;
-	bcm4360_phy_write(&phy->io, a, val);
-	bcm4360_phy_write(&phy->io, b, val);
-}
-
-/* step 5: push a non-negative per-tick delta into a two-deep history */
-static void wd_hist_push(struct bcm4360_phy_wd_hist *h, s32 delta)
-{
-	if (delta < 0)
-		return;
-	h->sum -= h->ring[h->next];
-	h->ring[h->next] = (u16)delta;
-	h->sum += (u16)delta;
-	h->next = (u8)((h->next + 1) % BCM4360_PHY_WD_HIST_DEPTH);
-	h->avg = (u16)(h->sum >> 1);
+	*a = val;
+	*b = val;
 }
 
 /*
- * step 5: the glitch / bad-PLCP statistics. Three SHM counters, their deltas
- * since the last tick, folded by band into the four per-tick deltas. No
- * hardware access other than the three reads.
+ * acphy-api-watchdog.md, "Corrections and answers", Q5: push `v` into a
+ * two-deep history (the running sum modulo 2^16, its half, the previous half).
+ */
+static void wd_hist_push(struct bcm4360_phy_wd_hist *h, s32 v)
+{
+	u16 old = h->ring[h->next];
+
+	h->prev_avg = h->avg;
+	h->sum = (u16)(h->sum - old + (u16)v);
+	h->avg = h->sum >> 1;
+	h->ring[h->next] = (u16)v;
+	h->next = (h->next + 1 >= BCM4360_PHY_WD_HIST_DEPTH) ? 0 : h->next + 1;
+}
+
+/* Q5, pushes 3: H2 and H3 from D0 and D2 */
+static void wd_push_h2_h3(struct bcm4360_phy *phy, s32 d0, s32 d2)
+{
+	struct bcm4360_phy_wd_hist *h = phy->wd_stats.hist;
+
+	if (!wd_is_2g(phy)) {
+		if (d0 >= 0)
+			wd_hist_push(&h[BCM4360_WD_H2], d0);
+		if (d2 >= 0)
+			wd_hist_push(&h[BCM4360_WD_H3], d2);
+	} else if (d0 >= 0) {
+		if (d2 >= 0) {
+			wd_hist_push(&h[BCM4360_WD_H2], d0 - d2);	/* even if negative */
+			wd_hist_push(&h[BCM4360_WD_H3], d2);
+		}
+	} else if (d2 >= 0) {
+		wd_hist_push(&h[BCM4360_WD_H3], d2);
+	}
+}
+
+/* Q5, pushes 4: H4 and H5 from D1 and the correction p (0 on this chip) */
+static void wd_push_h4_h5(struct bcm4360_phy *phy, s32 d1, s32 p)
+{
+	struct bcm4360_phy_wd_hist *h = phy->wd_stats.hist;
+
+	if (!wd_is_2g(phy)) {
+		if (d1 >= 0)
+			wd_hist_push(&h[BCM4360_WD_H4], d1);
+		if (-p >= 0)
+			wd_hist_push(&h[BCM4360_WD_H5], -p);
+	} else if (d1 >= 0) {
+		if (-p >= 0) {
+			wd_hist_push(&h[BCM4360_WD_H4], d1 + p);
+			wd_hist_push(&h[BCM4360_WD_H5], -p);
+		}
+	} else if (-p >= 0) {
+		wd_hist_push(&h[BCM4360_WD_H5], -p);
+	}
+}
+
+/*
+ * step 5, as replaced in acphy-api-watchdog.md, "Corrections and answers",
+ * Q5: the glitch / bad-PLCP statistics. Three SHM counters, their deltas
+ * since the last tick, pushed by band into the six histories. No hardware
+ * access other than the three reads.
  */
 static void wd_statistics(struct bcm4360_phy *phy)
 {
 	struct bcm4360_phy_wd_stats *st = &phy->wd_stats;
 	struct bcm4360_phy_wd_hist *h = st->hist;
-	u16 v;
-	s32 d0, d1, d2;
+	u16 c0, c1, c2;
+	s32 d0, d1, d2, p;
 
-	v = bcm4360_shm_read(phy->hw, SHM_WD_CNT_0x10e);
-	d0 = (s32)v - st->shm_0x10e;
-	st->shm_0x10e = v;
-	v = bcm4360_shm_read(phy->hw, SHM_WD_CNT_0x10c);
-	d1 = (s32)v - st->shm_0x10c;
-	st->shm_0x10c = v;
-	v = bcm4360_shm_read(phy->hw, SHM_WD_CNT_0x158);
-	d2 = (s32)v - st->shm_0x158;
-	st->shm_0x158 = v;
+	c0 = bcm4360_shm_read(phy->hw, SHM_WD_CNT_0x10e);
+	d0 = (s32)((u32)c0 - st->shm_0x10e);	/* the u16 value minus the stored u32 */
+	st->shm_0x10e = c0;
+	c1 = bcm4360_shm_read(phy->hw, SHM_WD_CNT_0x10c);
+	d1 = (s16)c1 - (s16)st->shm_0x10c;
+	st->shm_0x10c = c1;
+	c2 = bcm4360_shm_read(phy->hw, SHM_WD_CNT_0x158);
+	d2 = (s16)c2 - (s16)st->shm_0x158;
+	st->shm_0x158 = c2;
+	p = st->pi_0x302;
+	st->pi_0x302 = 0;
 
-	wd_hist_push(&h[0], d0);
-	if (wd_is_2g(phy)) {
-		/* 2.4 GHz: the second and third counters folded into the first and fourth */
-		wd_hist_push(&h[1], d0 + d1);
-		wd_hist_push(&h[2], 0);
-		wd_hist_push(&h[3], 0);
-		wd_hist_push(&h[4], d2);
-	} else {
-		wd_hist_push(&h[1], d0);
-		wd_hist_push(&h[2], d1);
-		wd_hist_push(&h[3], d2);
-		wd_hist_push(&h[4], 0);
-	}
+	if (d0 >= 0)						/* 1 */
+		wd_hist_push(&h[BCM4360_WD_H0], d0);
+	if (d1 >= 0)						/* 2 */
+		wd_hist_push(&h[BCM4360_WD_H1], d1);
+	wd_push_h2_h3(phy, d0, d2);				/* 3 */
+	wd_push_h4_h5(phy, d1, p);				/* 4 */
 }
 
 /* step 6: the ACI/noise engines of the AC-PHY by the interference mode */
@@ -538,9 +573,9 @@ void bcm4360_phy_watchdog(struct bcm4360_phy *phy)
 		return;
 
 	/* step 3 */
-	wd_reg_override(phy, phy->wd_ovr_0x1136, ACPHY_REG_0x45a, ACPHY_REG_0x45c);
-	wd_reg_override(phy, phy->wd_ovr_0x113a, ACPHY_REG_0x44c, ACPHY_REG_0x448);
-	wd_reg_override(phy, phy->wd_ovr_0x1138, ACPHY_REG_0x446, ACPHY_REG_0x44a);
+	wd_override(phy->wd_ovr_0x1136, &phy->pi_0x45a, &phy->pi_0x45c);
+	wd_override(phy->wd_ovr_0x113a, &phy->pi_0x44c, &phy->pi_0x448);
+	wd_override(phy->wd_ovr_0x1138, &phy->pi_0x446, &phy->pi_0x44a);
 
 	/* steps 4 to 8 */
 	if (!(phy->hold & WD_HOLD_NO_STATS)) {
@@ -559,12 +594,12 @@ void bcm4360_phy_watchdog(struct bcm4360_phy *phy)
 
 	/* step 10 */
 	if (!(phy->hold & WD_HOLD_NO_NOISE))
-		bcm4360_phy_noise_sample_request(phy, WD_NOISE_REASON,
+		bcm4360_phy_noise_sample_request(phy, BCM4360_PHY_NOISE_REASON_WATCHDOG,
 						 phy->radio_chanspec & BCM4360_CHANSPEC_CHANNEL);
 
-	/* step 11 */
-	if (phy->noise_reason && phy->now - phy->noise_time > WD_NOISE_STALE_S)
-		phy->noise_reason = 0;
+	/* step 11: (u32)(sh+0x34 - pi+0x190) > 5 clears the whole byte */
+	if (phy->noise_pending && (u32)(phy->now - phy->noise_time) > WD_NOISE_STALE_S)
+		phy->noise_pending = 0;
 
 	wd_txpower_tick(phy);					/* step 12 */
 

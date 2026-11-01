@@ -1288,16 +1288,14 @@ void bcm4360_phy_crs_min_pwr_cal_acphy(struct bcm4360_phy *phy, u8 restore)
 
 /*
  * acphy-desense.md C4 (wlc_phy_noise_sample_request_crsmincal): request a noise
- * sample with reason 4 for the current channel. The actual request helper
- * sub_0baff6 is in wlc_phy_cmn.c and out of scope; only the per-core result
- * words it clears are reproduced here. Not reached in any compared scenario.
+ * sample with reason 4 for the current channel, through the common request
+ * sub_0baff6 (open/phy/phy_rx.c; acphy-api-watchdog.md, "Corrections and
+ * answers", Q3), which refuses it while a sample is pending.
  */
 void bcm4360_phy_noise_sample_request_crsmincal(struct bcm4360_phy *phy)
 {
-	u32 c;
-
-	for (c = 0; c < 2 * BCM4360_PHY_CORES_MAX; c++)
-		bcm4360_shm_write(phy->hw, (u16)(0x308 + 2 * c), 0);
+	bcm4360_phy_noise_sample_request(phy, BCM4360_PHY_NOISE_REASON_CRSMIN,
+					 phy->radio_chanspec & BCM4360_CHANSPEC_CHANNEL);
 }
 
 /*

@@ -354,15 +354,61 @@ void bcm4360_phy_mute_upd(struct bcm4360_phy *phy, bool mute, u32 flags)
 
 /* ----------------------------------------------------- A9: cal_init, cal_perical */
 
+/* acphy-cal-tx.md, section 8, steps 3 and 4: the start values of the watchdog histories */
+#define CALINIT_H0_VALUE	100	/* pi+0x488, 0x48a and the entries pi+0x492.. */
+#define CALINIT_H0_SUM		200	/* pi+0x490 (AC-PHY) */
+#define CALINIT_HIST_VALUE	10	/* the averages, previous averages and entries */
+#define CALINIT_HIST_SUM	0x14	/* the running sums (AC-PHY) */
+
+/*
+ * acphy-cal-tx.md, section 8, steps 3 and 4: the part of the search
+ * parameters that the watchdog's statistics use as its six histories
+ * (acphy-api-watchdog.md, "Corrections and answers", Q5). The fields not
+ * set here (the indices of H0 to H3, the entries of H1) keep their value.
+ */
+static void cal_init_wd_stats(struct bcm4360_phy_wd_stats *st)
+{
+	struct bcm4360_phy_wd_hist *h;
+	u32 i, k;
+
+	st->shm_0x10e = 0;					/* pi+0x48c */
+	st->shm_0x158 = 0;					/* pi+0x3f0 */
+	st->shm_0x10c = 0;					/* pi+0x300 */
+	st->pi_0x302 = 0;
+
+	h = &st->hist[BCM4360_WD_H0];
+	h->avg = CALINIT_H0_VALUE;
+	h->prev_avg = CALINIT_H0_VALUE;
+	h->sum = CALINIT_H0_SUM;
+	for (k = 0; k < BCM4360_PHY_WD_HIST_DEPTH; k++)
+		h->ring[k] = CALINIT_H0_VALUE;
+
+	for (i = BCM4360_WD_H1; i < BCM4360_PHY_WD_HISTS; i++) {
+		h = &st->hist[i];
+		h->avg = CALINIT_HIST_VALUE;
+		h->prev_avg = CALINIT_HIST_VALUE;
+		h->sum = CALINIT_HIST_SUM;
+		if (i == BCM4360_WD_H1)
+			continue;			/* pi+0x2ea.. is not set */
+		for (k = 0; k < BCM4360_PHY_WD_HIST_DEPTH; k++)
+			h->ring[k] = CALINIT_HIST_VALUE;
+	}
+	st->hist[BCM4360_WD_H4].next = 0;			/* pi+0x418 */
+	st->hist[BCM4360_WD_H5].next = 0;			/* pi+0x420 */
+}
+
 /*
  * acphy-cal-tx.md, section 8 (wlc_phy_cal_init): set the generic search
  * parameters once. On the AC-PHY it makes no hardware access; the search
  * parameters the transmit calibration reads are computed by that code itself,
- * so here only the "initialised" flag matters.
+ * so here only the "initialised" flag and the watchdog histories matter.
  */
 void bcm4360_phy_cal_init(struct bcm4360_phy *phy)
 {
-	phy->cal.init_done = true;
+	if (phy->cal.init_done)					/* step 2 */
+		return;
+	cal_init_wd_stats(&phy->wd_stats);			/* steps 3, 4 */
+	phy->cal.init_done = true;				/* step 6 */
 }
 
 /* acphy-cal-tx.md, sections 4 and 6: arm / reset the multi-phase timer */
