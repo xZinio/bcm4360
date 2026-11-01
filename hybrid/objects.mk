@@ -20,3 +20,7 @@ hybrid-phy-objs := hybrid/phy.o \
                    open/phy/phy_desense.o open/phy/phy_init.o open/phy/phy_rxgain.o \
                    open/phy/phy_txpower.o open/phy/radio2069.o \
                    open/phy/phy_rx.o open/phy/phy_wd.o
+
+# Layers written but not yet in the module (tools/re/hybrid.py links them for
+# the emulator as soon as their sources exist): the regulatory database.
+hybrid-new-objs := hybrid/clm.o open/lib/clm.o

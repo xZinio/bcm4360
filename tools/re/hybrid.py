@@ -42,7 +42,7 @@ ROOT = ab.ROOT
 OUT = os.environ.get('HYBRID_OUT') or os.path.join(ROOT, 're-out', 'hybrid')
 BLOB = os.path.join(ROOT, 'lib', 'wlc_hybrid.o_shipped')
 CORE = os.path.join(OUT, 'core.o')
-LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils')   # the switches bcm4360_open_<layer>
+LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils', 'clm')   # the switches bcm4360_open_<layer>
 
 CHANNELS = ['1', '6', '11', '36', '36/40', '36/80', '149/80', '157/40', '165']
 SESSION = (['attach', 'mpc 0', 'up'] + CHANNELS +
@@ -70,12 +70,14 @@ UNDEFINED_TBL = {('W', 'tbl.14', 0x33, 6): 0xffffffff}
 STACK_ZEROED = ('wlc_update_txppr_offset',)
 
 
-def objects(variables=('hybrid-objs', 'hybrid-phy-objs')):
+def objects(variables=('hybrid-objs', 'hybrid-phy-objs', 'hybrid-new-objs')):
     """The objects of the hybrid build: hybrid/objects.mk, with the PHY layer."""
     text = open(os.path.join(ROOT, 'hybrid', 'objects.mk')).read()
     out = []
     for var in variables:
         m = re.search(var + r'\s*:=((?:.*\\\n)*.*)', text)
+        if not m:
+            continue
         out += [o for o in m.group(1).replace('\\\n', ' ').split()
                 if o.endswith('.o') and o not in out]
     return out

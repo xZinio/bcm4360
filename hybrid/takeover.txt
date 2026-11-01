@@ -64,6 +64,24 @@ take bcm_bitcount
 take hndcrc8
 use nvram_get
 
+# --- regulatory database (hybrid/clm.c -> open/lib/clm.c, docs/re/spec/clm.md)
+take clm_init
+take clm_set_inc_data
+take clm_iter_init
+take clm_limits_params_init
+take clm_country_channels
+take clm_country_flags
+take clm_limits
+take clm_regulatory_limit
+take clm_get_base_app_version_string
+take clm_get_inc_app_version_string
+take clm_agg_country_lookup
+take clm_agg_country_map_lookup
+take clm_country_lookup
+take clm_country_iter
+take clm_country_def
+take clm_country_advertised_cc
+
 # --- PHY (hybrid/phy.c -> open/phy, docs/re/spec/acphy-api.md): all 79 entry points
 # of the MAC into the PHY
 take wlc_phy_shared_attach
