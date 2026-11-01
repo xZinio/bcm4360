@@ -254,6 +254,12 @@ static void phy_force_rfseq(struct bcm4360_phy *phy, u8 cmd)
 	bcm4360_phy_write(io, ACPHY_REG_0x19e, s19e);
 }
 
+/* acphy-init.md, H6: the same for the other PHY files (acphy-desense.md H2) */
+void bcm4360_phy_force_rfseq(struct bcm4360_phy *phy, u8 cmd)
+{
+	phy_force_rfseq(phy, cmd);
+}
+
 /*
  * acphy-init.md, H4 (wlc_phy_stay_in_carriersearch_acphy): make the receiver
  * "deaf" (or let it hear again) through a nesting counter.
@@ -663,6 +669,7 @@ static void phy_init_acphy(struct bcm4360_phy *phy)
 
 	/* steps 8, 9: run the channel function with the "init" flag set */
 	phy->init_chan = true;
+	phy->femctrl_ovrd = -1;		/* pi_ac+0x32e = 0xff (read by the watchdog) */
 	bcm4360_phy_chanspec_set_acphy(phy, phy->radio_chanspec);
 	phy->init_chan = false;					/* step 10 */
 	phy->init_done = true;
@@ -722,6 +729,7 @@ void bcm4360_phy_init(struct bcm4360_phy *phy, u16 chanspec)
 
 	phy->radio_chanspec = chanspec;				/* step 2 */
 	phy->init_running = true;
+	phy->noise_reason = 0;					/* pi+0x18f */
 
 	bcm4360_phy_chanspec_shm_set(phy, chanspec);		/* step 3 */
 	(void)d11_read32(phy->hw, D11_REG_0x120);		/* step 4 */

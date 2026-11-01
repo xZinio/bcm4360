@@ -634,6 +634,36 @@ struct bcm4360_phy_cal {
 	s32 rxcal_digfilt[BCM4360_PHY_CORES_MAX];	/* pi_ac+0x8c8 + 4c: digital-filter slope */
 };
 
+/*
+ * The glitch / bad-PLCP statistics of the watchdog
+ * (docs/re/spec/acphy-api-watchdog.md, step 5): the last values of three SHM
+ * counters and two-deep circular histories of their per-tick deltas, each
+ * with a running sum and its half. No hardware access; the shape is the
+ * implementation's (the spec allows it), the object places named per field.
+ */
+#define BCM4360_PHY_WD_HIST_DEPTH	2
+#define BCM4360_PHY_WD_HISTS		5
+
+struct bcm4360_phy_wd_hist {
+	u16 ring[BCM4360_PHY_WD_HIST_DEPTH];
+	u8 next;		/* slot written next */
+	u32 sum;		/* sum of the ring */
+	u16 avg;		/* sum / 2 */
+};
+
+struct bcm4360_phy_wd_stats {
+	u16 shm_0x10e;		/* pi+0x48c: SHM(0x10e) at the last tick */
+	u16 shm_0x10c;		/* pi+0x300: SHM(0x10c) at the last tick */
+	u16 shm_0x158;		/* pi+0x3f0: SHM(0x158) at the last tick */
+	/*
+	 * Histories (the object's ring / sum / half): 0: pi+0x492 / 0x490 /
+	 * 0x488 (index pi+0x4a4); 1: pi+0x2ea / 0x2e4 / 0x2fc; 2: pi+0x3ea /
+	 * 0x3f2 / 0x400; 3: pi+0x410 / 0x40a / 0x418; 4: pi+0x412 / 0x408 / 0x420
+	 * (the spec's triples, see docs/re/questions/phy-api-watchdog.md)
+	 */
+	struct bcm4360_phy_wd_hist hist[BCM4360_PHY_WD_HISTS];
+};
+
 /* the state of the PHY of one card */
 struct bcm4360_phy {
 	/*
@@ -799,6 +829,19 @@ struct bcm4360_phy {
 	u8 rx_antdiv;		/* sh+0x95: `rx_antdiv` (bcm), wlc_phy_ant_rxdiv_set; not at attach */
 	u8 noise_reason;	/* pi+0x18f: reason of the pending noise sample (sub_0baff6), 0: none */
 	u32 noise_time;		/* pi+0x190: sh+0x34 when that noise sample was requested */
+
+	/*
+	 * The watchdog (docs/re/spec/acphy-api-watchdog.md, open/phy/phy_wd.c).
+	 * Zero after attach; the three register overrides are set only by an
+	 * iovar (not in open/).
+	 */
+	u16 wd_ovr_0x1136;	/* pi+0x1136: when not 0 written to PHY(0x45a), PHY(0x45c) (step 3) */
+	u16 wd_ovr_0x113a;	/* pi+0x113a: PHY(0x44c), PHY(0x448) */
+	u16 wd_ovr_0x1138;	/* pi+0x1138: PHY(0x446), PHY(0x44a) */
+	u8 pi_0x199;		/* pi+0x199: not 0: no periodic calibration (acphy-cal-tx.md) */
+	u32 txpwr_tick_time;	/* pi+0xc44: sh+0x34 of the last tx-power recalc tick (step 12) */
+	u16 bt_period;		/* pi+0xfa4: Bluetooth period (wlapi_bmac_btc_period_get, step 13.5) */
+	struct bcm4360_phy_wd_stats wd_stats;	/* step 5 */
 };
 
 /*
@@ -887,6 +930,7 @@ void bcm4360_phy_set_reg_on_reset_acphy(struct bcm4360_phy *phy);		/* section 5 
 void bcm4360_phy_hirssi_set_ucode_params(struct bcm4360_phy *phy);		/* section 3a */
 void bcm4360_phy_stay_in_carriersearch(struct bcm4360_phy *phy, bool enable);	/* H4 */
 void bcm4360_phy_resetcca(struct bcm4360_phy *phy);				/* H5 */
+void bcm4360_phy_force_rfseq(struct bcm4360_phy *phy, u8 cmd);			/* H6 */
 void bcm4360_phy_rxcore_setstate(struct bcm4360_phy *phy, u8 rxmask);		/* H7 */
 void bcm4360_phy_deaf(struct bcm4360_phy *phy, bool mode);			/* H9 */
 bool bcm4360_phy_hirssi_shmem_read_clear(struct bcm4360_phy *phy);		/* H11 (sub_092500) */
@@ -933,6 +977,8 @@ void bcm4360_phy_dig_lpf_override_acphy(struct bcm4360_phy *phy, u8 mode);
 /* acphy-desense: receive gain control and desense (leaves of the channel function) */
 void *bcm4360_phy_desense_getset_chanidx_acphy(struct bcm4360_phy *phy, u16 chanspec,
 					       bool set);			/* sub_092efb */
+/* E1/E3: the current channel's record (looked up, created if absent) */
+struct bcm4360_phy_interf_record *bcm4360_phy_desense_chan_record(struct bcm4360_phy *phy);
 void bcm4360_phy_desense_calc_total_acphy(struct bcm4360_phy *phy);		/* sub_0909fd */
 void bcm4360_phy_rxgainctrl_set_gaintbls_acphy(struct bcm4360_phy *phy, bool init,
 					       bool bandchg, bool bwchg);	/* sub_09af05 */

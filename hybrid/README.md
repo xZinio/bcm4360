@@ -82,6 +82,16 @@ is the real card.
 | object alone (1.0.3) | 200,461 bytes (100 %) | - | 0 % |
 | hybrid, PMU open | 197,888 bytes (98.7 %) | 2,716 bytes | - |
 | hybrid, PMU, register access, MAC control, utilities open | 194,769 bytes (97.2 %) | 15,765 bytes | **33.0 %** |
+| the same + the open PHY (`--on phy`, not yet identical, see below) | 123,171 bytes (61.5 %) | 64,378 bytes | 37.5 % |
+
+With the open PHY switched on (emulator only; the PHY layer is not in the
+module yet) the whole session now runs: all entry points of the PHY API it
+reaches exist in `open/` (control, transmit power, watchdog; the receive
+group is still open). The watchdog ticks match the object access for access;
+the session as a whole does not yet: from the transmit-power update of a later
+channel on, the power offsets the open PHY hands the MAC differ (open
+questions in `docs/re/questions/phy-api-txpower.md`), and the MAC's rate table
+writes follow from that.
 
 The last column weighs code by how often it runs: the register access
 primitives and the variable lookup are small but run constantly (`getvar`

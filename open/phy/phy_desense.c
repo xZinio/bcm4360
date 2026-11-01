@@ -974,6 +974,23 @@ void *bcm4360_phy_desense_getset_chanidx_acphy(struct bcm4360_phy *phy, u16 chan
 }
 
 /*
+ * acphy-desense.md, E (the record the periodic engines work on): the record of
+ * the current channel, stored as the current record. An existing record is
+ * only looked up; the whole-session test shows no clock read in the
+ * watchdog's engines (docs/re/questions/phy-api-watchdog.md).
+ */
+struct bcm4360_phy_interf_record *bcm4360_phy_desense_chan_record(struct bcm4360_phy *phy)
+{
+	struct bcm4360_phy_interf_record *rec;
+
+	rec = bcm4360_phy_desense_getset_chanidx_acphy(phy, phy->radio_chanspec, false);
+	if (!rec)
+		rec = bcm4360_phy_desense_getset_chanidx_acphy(phy, phy->radio_chanspec, true);
+	phy->desense.cur = rec;
+	return rec;
+}
+
+/*
  * acphy-chanspec.md A4 (sub_0909fd, wlc_phy_desense_calc_total_acphy): build the
  * wanted desense set from the channel's record (or the baseline) and the
  * Bluetooth-coexistence set. No hardware access.
@@ -1323,8 +1340,8 @@ void bcm4360_phy_ed_thres_acphy(struct bcm4360_phy *phy, s32 *val, bool set)
  * higher level means more gain-limit desense. Called once per watchdog tick.
  * The measured registers read 0 in the model, so the detector decisions are
  * degenerate (both detectors report no interference); the level still steps
- * from 0 to 1 unconditionally on the first tick. Not reached in a compared
- * scenario (the watchdog is not compared).
+ * from 0 to 1 unconditionally on the first tick. Compared through the watchdog
+ * in the whole-session test (tools/re/hybrid.py).
  */
 void bcm4360_phy_hwaci_engine_acphy(struct bcm4360_phy *phy)
 {
@@ -1344,8 +1361,7 @@ void bcm4360_phy_hwaci_engine_acphy(struct bcm4360_phy *phy)
 		return;
 
 	/* step 2 */
-	rec = bcm4360_phy_desense_getset_chanidx_acphy(phy, phy->radio_chanspec, true);
-	phy->desense.cur = rec;
+	rec = bcm4360_phy_desense_chan_record(phy);
 	if (rec->hwaci_settle != 0) {
 		rec->hwaci_settle--;
 		return;
