@@ -50,6 +50,7 @@
 /* per-core power-control registers, core 0; core c adds c * ACPHY_CORE_STEP */
 #define ACPHY_REG_0x640		0x640	/* status: index the loop is at (bits 8..14) */
 #define ACPHY_REG_0x641		0x641	/* TSSI visible threshold */
+#define ACPHY_REG_0x642		0x642	/* status: second power estimate (bits 0..7) */
 #define ACPHY_REG_0x644		0x644	/* start index of the loop (bits 0..6) */
 #define ACPHY_REG_0x645		0x645	/* idle TSSI (bits 0..9) */
 #define ACPHY_REG_0x646		0x646	/* target power (bits 0..7) */
@@ -100,6 +101,10 @@
 
 /* PHY(0x644): start index of the loop (section 8, 9) */
 #define ACPHY_0x644_INDEX	0x007f
+
+/* the valid bits of the two power estimates (section 12) */
+#define ACPHY_0x640_VALID	0x8000
+#define ACPHY_0x642_VALID	0x0100
 
 /* the estimated-power table has 128 entries (section 13 step 15) */
 #define ESTPWR_ENTRIES		128
@@ -308,6 +313,30 @@ void bcm4360_phy_txpwrctrl_enable_acphy(struct bcm4360_phy *phy, bool on)
 
 		if (i != TXPWR_INDEX_NONE)
 			phy_txpwrctrl_set_cur_index(phy, i, c);
+	}
+}
+
+/*
+ * acphy-txpower.md, section 12 (wlc_phy_txpwr_est_pwr_acphy): the two power
+ * estimates of the hardware per core. `out1` from PHY(0x642 + c * 0x200)
+ * (valid: bit 8), `out2` from PHY(0x640 + c * 0x200) (valid: bit 15); a valid
+ * register is read a second time and its low byte taken, otherwise 0.
+ */
+static void phy_txpwr_est_pwr(struct bcm4360_phy *phy, u8 *out1, u8 *out2)
+{
+	struct bcm4360_phy_io *io = &phy->io;
+	u32 c;
+
+	for (c = 0; c < phy_cores(phy); c++) {
+		u16 r642 = core_reg(ACPHY_REG_0x642, c);
+		u16 r640 = core_reg(ACPHY_REG_0x640, c);
+
+		out1[c] = 0;						/* step 1 */
+		if (bcm4360_phy_read(io, r642) & ACPHY_0x642_VALID)
+			out1[c] = (u8)bcm4360_phy_read(io, r642);
+		out2[c] = 0;						/* step 2 */
+		if (bcm4360_phy_read(io, r640) & ACPHY_0x640_VALID)
+			out2[c] = (u8)bcm4360_phy_read(io, r640);
 	}
 }
 
@@ -985,31 +1014,267 @@ void bcm4360_phy_precal_txgain_acphy(struct bcm4360_phy *phy, u8 *records)
 }
 
 /* ===================================================================
- * MAC-facing transmit-power entry points (docs/re/spec/acphy-api-txpower.md).
- * The ppr-merge path (limit_set/set/sromlimit) is separate; these are the
- * small getters and stores the bring-up and the MAC query.
+ * The MAC-facing transmit-power entry points
+ * (docs/re/spec/acphy-api-txpower.md, "Entry points"): the per-rate limit
+ * path - the SROM-11 decode, the board limit, the merge - and the small stores
+ * and getters. The per-rate power structures (ppr_t) belong to the MAC; the
+ * PHY only calls the bcm4360_ppr_* services on them (phy_env.h).
  * =================================================================== */
 
-/* acphy-api-txpower.md: wlc_phy_txpower_ipa_ison - 0 for the AC-PHY */
-bool bcm4360_phy_txpower_ipa_ison(struct bcm4360_phy *phy)
+/* ppr bandwidth selectors (acphy-api-txpower.md, "The ppr structure is a service") */
+#define PPR_BW_20		0
+#define PPR_BW_40		1
+#define PPR_BW_80		2
+
+/* D11(0x120), the MAC control register: bit 0, the MAC is enabled (bmac-init.md) */
+#define D11_MACCONTROL_EN_MAC	0x00000001
+
+/* wlc_phy_txpower_set: the result for a qdbm of 0x80 and above */
+#define TXPOWER_SET_BADARG	5
+#define TXPOWER_QDBM_LIMIT	0x80
+
+/* wlc_phy_txpower_get: the flag of the override form of the result */
+#define TXPOWER_GET_OVERRIDE	0x40000000
+
+/* wlc_phy_txpower_get_target_min: the start of the minimum search */
+#define TXPOWER_TARGET_MIN_START	0x7f
+
+/* wlc_phy_txpower_set: the hold flag that blocks the recalculation (a scan) */
+#define TXPOWER_HOLD_SCAN	BCM4360_PHY_HOLD_SCAN
+
+/* the percentage below which the merge scales the limits */
+#define TXPOWER_PERCENT_FULL	100
+
+/*
+ * acphy-api-txpower.md, "sub_0b8ca4", step 1: the ppr bandwidth selector of a
+ * chanspec (0x2000: 80 MHz, 0x1800: 40 MHz, anything else: 20 MHz).
+ */
+static u8 ppr_bw_sel(u16 chanspec)
+{
+	switch (chanspec & BCM4360_CHANSPEC_BW) {
+	case BCM4360_CHANSPEC_BW_80:
+		return PPR_BW_80;
+	case BCM4360_CHANSPEC_BW_40:
+		return PPR_BW_40;
+	default:
+		return PPR_BW_20;
+	}
+}
+
+/*
+ * acphy-api-txpower.md, "wlc_phy_txpwr_apply_srom11": fill `out` with the
+ * per-rate power limit of one core for the rate-offset group `group` (0 =
+ * 2.4 GHz, 1..3 = 5 GHz low, mid, high), `maxpwr` minus the offsets of the
+ * SROM-11 power-offset variables.
+ */
+static void phy_txpwr_apply_srom11(struct bcm4360_phy *phy, u8 group, u16 chanspec, u8 maxpwr,
+				   void *out)
+{
+	(void)phy;
+	(void)group;
+	(void)chanspec;
+	bcm4360_ppr_set_cmn_val(out, (s8)maxpwr);
+}
+
+/*
+ * acphy-txpower.md, section 19 (wlc_phy_txpower_sromlimit_get_acphy): the
+ * highest power the board allows for every rate on `chanspec`, for core
+ * `core`, into `out` (made by the caller for the bandwidth of the chanspec).
+ */
+static void phy_txpower_sromlimit_get(struct bcm4360_phy *phy, u16 chanspec, void *out, u8 core)
+{
+	const struct bcm4360_phy_txpwr *tx = &phy->txpwr;
+	u8 band, m, g, maxp;
+	s8 d;
+	u32 c;
+
+	band = bcm4360_phy_get_chan_freq_range(phy, chanspec & BCM4360_CHANSPEC_CHANNEL); /* 1 */
+	if (band >= BCM4360_PHY_BANDS)
+		return;
+
+	/* step 2: the smallest maxp of the three cores (unsigned) */
+	m = tx->maxp[0][band];
+	for (c = 1; c < BCM4360_PHY_CORES_MAX; c++)
+		if (tx->maxp[c][band] < m)
+			m = tx->maxp[c][band];
+
+	g = (band < 4) ? band : band - 1;				/* step 3 */
+	phy_txpwr_apply_srom11(phy, g, chanspec, m, out);		/* step 4 */
+
+	maxp = (core < BCM4360_PHY_CORES_MAX) ? tx->maxp[core][band] : 0;
+	d = (s8)(maxp - m);						/* step 5 */
+	if (d > 0)
+		bcm4360_ppr_plus_cmn_val(out, d);
+	bcm4360_ppr_apply_max(out, (s8)maxp);				/* step 6 */
+}
+
+/*
+ * acphy-api-txpower.md, "Entry points" (wlc_phy_txpower_sromlimit): the
+ * lowest power allowed (quarter dBm) into `min_pwr` and the board limit per
+ * rate of core `core` into `max_pwr`; either may be NULL.
+ */
+void bcm4360_phy_txpower_sromlimit(struct bcm4360_phy *phy, u16 chanspec, s8 *min_pwr,
+				   void *max_pwr, u8 core)
+{
+	if (min_pwr)
+		*min_pwr = (s8)(u8)(phy->txpwr.min_power << 2);
+	if (max_pwr)
+		phy_txpower_sromlimit_get(phy, chanspec, max_pwr, core);
+}
+
+/*
+ * acphy-api-txpower.md, "sub_0b8ca4: the per-rate limit merge", step 3: the
+ * offsets ppr pi+0x1c8, made again when its bandwidth is not `bw`.
+ */
+static void phy_txpower_offsets_ppr(struct bcm4360_phy *phy, u8 bw)
+{
+	struct bcm4360_phy_txpwr *tx = &phy->txpwr;
+
+	if (tx->ppr && bcm4360_ppr_get_ch_bw(tx->ppr) != bw) {
+		bcm4360_ppr_delete(phy->hw, tx->ppr);
+		tx->ppr = NULL;
+	}
+	if (!tx->ppr)
+		tx->ppr = bcm4360_ppr_create(phy->hw, bw);
+}
+
+/*
+ * acphy-api-txpower.md, "sub_0b8ca4: the per-rate limit merge", step 5: the
+ * limits and targets of core `core`. `l` is the regulatory limit, `a` and `b`
+ * the two working objects.
+ */
+static void phy_txpower_merge_core(struct bcm4360_phy *phy, u32 core, void *l, void *a, void *b,
+				   void *reg_ppr)
+{
+	struct bcm4360_phy_txpwr *tx = &phy->txpwr;
+	s8 min = 0;
+
+	bcm4360_ppr_set_cmn_val(a, (s8)tx->user_target);			/* 5.1 */
+	bcm4360_phy_txpower_sromlimit(phy, phy->radio_chanspec, &min, b, (u8)core);	/* 5.2 */
+	bcm4360_ppr_compare_min(b, l);						/* 5.3 */
+	bcm4360_ppr_minus_cmn_val(b, (s8)tx->txpwrbckof);			/* 5.4 */
+	bcm4360_ppr_compare_min(a, b);						/* 5.5 */
+	bcm4360_ppr_force_disabled(a, min);					/* 5.6 */
+	if (tx->percent < TXPOWER_PERCENT_FULL)					/* 5.7 */
+		bcm4360_ppr_multiply_percentage(a, tx->percent);
+
+	tx->target_max[core] = bcm4360_ppr_get_max(a);				/* 5.8 */
+	tx->target_min[core] = bcm4360_ppr_get_min(a, min);
+	tx->ovr_value = tx->target_min[core];
+	tx->ovr_neg = 0;
+
+	if (core == 0 && reg_ppr)						/* 5.9 */
+		bcm4360_ppr_copy(a, reg_ppr);
+
+	if (!tx->ovr_active) {							/* 5.10 */
+		bcm4360_ppr_cmn_val_minus(a, tx->target_max[core]);
+		if (tx->ppr)
+			bcm4360_ppr_compare_max(tx->ppr, a);
+	}
+}
+
+/*
+ * acphy-api-txpower.md, "sub_0b8ca4: the per-rate limit merge": the per-rate
+ * limits the PHY enforces and the targets of every core, from the regulatory
+ * limit `in_ppr` (may be NULL) and the board limit. `reg_ppr` (may be NULL)
+ * gets the limited set of core 0; without it the targets are applied.
+ */
+static void phy_txpower_merge(struct bcm4360_phy *phy, void *in_ppr, void *reg_ppr)
+{
+	u8 bw = ppr_bw_sel(phy->radio_chanspec);				/* step 1 */
+	void *l, *a, *b;
+	u32 c;
+
+	l = bcm4360_ppr_create(phy->hw, bw);
+	if (!l)
+		return;
+	if (in_ppr)
+		bcm4360_ppr_copy(in_ppr, l);
+
+	a = bcm4360_ppr_create(phy->hw, bw);					/* step 2 */
+	b = bcm4360_ppr_create(phy->hw, bw);
+
+	phy_txpower_offsets_ppr(phy, bw);					/* step 3 */
+
+	if (a && b) {
+		for (c = 0; c < phy_cores(phy); c++)				/* step 5 */
+			phy_txpower_merge_core(phy, c, l, a, b, reg_ppr);
+	}
+
+	bcm4360_ppr_delete(phy->hw, l);						/* step 6 */
+	if (a)
+		bcm4360_ppr_delete(phy->hw, a);
+	if (b)
+		bcm4360_ppr_delete(phy->hw, b);
+	if (!reg_ppr)
+		bcm4360_phy_txpower_recalc_target_acphy(phy);
+}
+
+/*
+ * acphy-api-txpower.md, "Entry points", wlc_phy_txpower_limit_set and
+ * wlc_phy_txpower_set (sub_0b72a4, the transmit-power recalculation tick):
+ * no hardware access and no service on the AC-PHY; result false.
+ */
+bool bcm4360_phy_txpower_recalc_tick(struct bcm4360_phy *phy)
 {
 	(void)phy;
 	return false;
 }
 
-/* acphy-api-txpower.md: wlc_phy_txpower_hw_ctrl_get */
-bool bcm4360_phy_txpower_hw_ctrl_get(struct bcm4360_phy *phy)
+/* acphy-api-txpower.md, "Entry points": wlc_phy_txpower_limit_set */
+void bcm4360_phy_txpower_limit_set(struct bcm4360_phy *phy, void *txpwr)
 {
-	return phy->txpwr.hwpwrctrl;
+	bcm4360_mac_suspend(phy->hw);
+	phy_txpower_merge(phy, txpwr, NULL);
+	bcm4360_phy_txpower_recalc_tick(phy);
+	bcm4360_mac_enable(phy->hw);
 }
 
-/* acphy-api-txpower.md: wlc_phy_txpwr_percent_set */
-void bcm4360_phy_txpwr_percent_set(struct bcm4360_phy *phy, u8 percent)
+/* acphy-api-txpower.md, "Entry points": wlc_phy_txpower_set */
+s32 bcm4360_phy_txpower_set(struct bcm4360_phy *phy, u32 qdbm, bool override, void *reg_pwr)
 {
-	phy->txpwr.percent = percent;
+	struct bcm4360_phy_txpwr *tx = &phy->txpwr;
+	bool suspend, hwctrl;
+
+	(void)override;
+	if (qdbm >= TXPOWER_QDBM_LIMIT)
+		return TXPOWER_SET_BADARG;
+
+	tx->user_target = (u8)qdbm;
+	tx->ovr_got = 0;
+	if (!phy->up || (phy->hold & TXPOWER_HOLD_SCAN))
+		return 0;
+
+	suspend = d11_read32(phy->hw, D11_REG_MACCONTROL) & D11_MACCONTROL_EN_MAC;
+	if (suspend)
+		bcm4360_mac_suspend(phy->hw);
+	hwctrl = tx->hwpwrctrl;
+	bcm4360_phy_txpwrctrl_enable_acphy(phy, false);
+	phy_txpower_merge(phy, reg_pwr, NULL);
+	bcm4360_phy_txpower_recalc_tick(phy);
+	bcm4360_phy_txpwrctrl_enable_acphy(phy, hwctrl);
+	if (suspend)
+		bcm4360_mac_enable(phy->hw);
+	return 0;
 }
 
-/* acphy-api-txpower.md: wlc_phy_txpower_get_target_max (over the active chains) */
+/* acphy-api-txpower.md, "Entry points": wlc_phy_txpower_get */
+s32 bcm4360_phy_txpower_get(struct bcm4360_phy *phy, u32 *qdbm, u8 *override)
+{
+	const struct bcm4360_phy_txpwr *tx = &phy->txpwr;
+
+	*qdbm = tx->user_target;
+	if (tx->ovr_active)
+		*qdbm = (u32)(-(s32)tx->ovr_value) | TXPOWER_GET_OVERRIDE;
+	if (override)
+		*override = tx->ovr_got;
+	return 0;
+}
+
+/*
+ * acphy-api-txpower.md, "Entry points": wlc_phy_txpower_get_target_max, the
+ * highest target over the cores of the mask sh+0xa7.
+ */
 u8 bcm4360_phy_txpower_get_target_max(struct bcm4360_phy *phy)
 {
 	u8 m = 0;
@@ -1022,10 +1287,13 @@ u8 bcm4360_phy_txpower_get_target_max(struct bcm4360_phy *phy)
 	return m;
 }
 
-/* acphy-api-txpower.md: wlc_phy_txpower_get_target_min */
+/*
+ * acphy-api-txpower.md, "Entry points": wlc_phy_txpower_get_target_min, the
+ * lowest target over the cores of the mask sh+0xa7, from 0x7f.
+ */
 u8 bcm4360_phy_txpower_get_target_min(struct bcm4360_phy *phy)
 {
-	u8 m = 0x7f;
+	u8 m = TXPOWER_TARGET_MIN_START;
 	u32 c;
 
 	for (c = 0; c < phy_cores(phy); c++)
@@ -1035,23 +1303,53 @@ u8 bcm4360_phy_txpower_get_target_min(struct bcm4360_phy *phy)
 	return m;
 }
 
-/* acphy-api-txpower.md: wlc_phy_txpower_get */
-s32 bcm4360_phy_txpower_get(struct bcm4360_phy *phy, u32 *qdbm, u8 *override)
+/* acphy-api-txpower.md, "Entry points": wlc_phy_txpower_hw_ctrl_get, pi+0xfa0 */
+bool bcm4360_phy_txpower_hw_ctrl_get(struct bcm4360_phy *phy)
 {
-	*qdbm = phy->txpwr.user_target;
-	if (phy->txpwr.ovr_active) {
-		u32 v = (u32)(s32)phy->txpwr.ovr_value;
-
-		if (phy->txpwr.ovr_neg)
-			v = (u32)(-(s32)v) | 0x40000000;
-		*qdbm = v;
-	}
-	if (override)
-		*override = phy->txpwr.ovr_got;
-	return 0;
+	return phy->txpwr.hwpwrctrl;
 }
 
-/* acphy-api-txpower.md: wlc_phy_get_olpc_pwroffset */
+/* acphy-api-txpower.md, "Entry points": wlc_phy_txpower_ipa_ison, 0 for the AC-PHY */
+bool bcm4360_phy_txpower_ipa_ison(struct bcm4360_phy *phy)
+{
+	(void)phy;
+	return false;
+}
+
+/* acphy-api-txpower.md, "Entry points": wlc_phy_txpwr_percent_set, pi+0x184 */
+void bcm4360_phy_txpwr_percent_set(struct bcm4360_phy *phy, u8 percent)
+{
+	phy->txpwr.percent = percent;
+}
+
+/*
+ * acphy-api-txpower.md, "Entry points": wlc_phy_txpower_core_offset_set, the
+ * AC function through its slot (acphy-txpower.md, section 18).
+ */
+s32 bcm4360_phy_txpower_core_offset_set(struct bcm4360_phy *phy, const void *offsets)
+{
+	return bcm4360_phy_txpower_core_offset_set_acphy(phy, offsets);
+}
+
+/*
+ * acphy-api-txpower.md, "Entry points": wlc_phy_get_est_pout, the estimated
+ * output power per core from the control status (acphy-txpower.md, section
+ * 12) with the MAC suspended.
+ */
+void bcm4360_phy_get_est_pout(struct bcm4360_phy *phy, u8 *est_pout, u8 *est_pout_adj,
+			      u16 *est_pout_cck)
+{
+	bcm4360_mac_suspend(phy->hw);
+	phy_txpwr_est_pwr(phy, est_pout_adj, est_pout);
+	if (est_pout_cck)
+		*est_pout_cck = 0;
+	bcm4360_mac_enable(phy->hw);
+}
+
+/*
+ * acphy-api-txpower.md, "Entry points": wlc_phy_get_olpc_pwroffset, the
+ * byte pi_ac+0x8de, 0x8df, 0x8e0 for the bandwidth 20, 40, 80 MHz.
+ */
 s8 bcm4360_phy_get_olpc_pwroffset(struct bcm4360_phy *phy, u16 bw)
 {
 	switch (bw) {
@@ -1066,21 +1364,17 @@ s8 bcm4360_phy_get_olpc_pwroffset(struct bcm4360_phy *phy, u16 bw)
 	}
 }
 
-/* acphy-api-txpower.md: wlc_phy_tssivisible_thresh */
+/*
+ * acphy-api-txpower.md, "Entry points": wlc_phy_tssivisible_thresh, the AC
+ * function (acphy-txpower.md, section 16).
+ */
 s32 bcm4360_phy_tssivisible_thresh(struct bcm4360_phy *phy)
 {
-	return (s8)bcm4360_phy_tssivisible_thresh_acphy(phy);
+	return bcm4360_phy_tssivisible_thresh_acphy(phy);
 }
 
-/* acphy-api-txpower.md: wlc_phy_clear_tssi - no effect on the AC-PHY */
+/* acphy-api-txpower.md, "Entry points": wlc_phy_clear_tssi, no effect on the AC-PHY */
 void bcm4360_phy_clear_tssi(struct bcm4360_phy *phy)
 {
 	(void)phy;
-}
-
-/* acphy-api-txpower.md: wlc_phy_txpower_core_offset_set (via the AC function) */
-s32 bcm4360_phy_txpower_core_offset_set(struct bcm4360_phy *phy, const void *offsets)
-{
-	bcm4360_phy_txpower_core_offset_set_acphy(phy, offsets);
-	return 0;
 }

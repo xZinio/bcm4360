@@ -51,6 +51,12 @@ void bcm4360_mac_mctrl(struct bcm4360_hw *hw, u32 mask, u32 val);
 /* wlapi_bmac_btc_mode_get: mode of the Bluetooth coexistence */
 u32 bcm4360_mac_btc_mode(struct bcm4360_hw *hw);
 
+/*
+ * wlapi_bmac_btc_period_get: the current Bluetooth period and a state byte
+ * (docs/re/spec/acphy-api-watchdog.md, "New services")
+ */
+void bcm4360_mac_btc_period_get(struct bcm4360_hw *hw, u16 *period, u8 *state);
+
 /* wlapi_bmac_ucode_wake_override_phyreg_set, .._clear */
 void bcm4360_mac_wake_override_set(struct bcm4360_hw *hw);
 void bcm4360_mac_wake_override_clear(struct bcm4360_hw *hw);
@@ -64,6 +70,13 @@ void bcm4360_mac_update_phy_mode(struct bcm4360_hw *hw, u32 mode);
 
 /* wlapi_high_update_txppr_offset: the power offsets per rate have changed */
 void bcm4360_mac_update_txppr_offset(struct bcm4360_hw *hw, const void *offsets);
+
+/*
+ * wlapi_get_wlc_info, then wlc_ol_noise_avg_offload: the noise average of the
+ * on-chip ARM offload in dBm, 0 when no offload answers (as on the 4360).
+ * docs/re/spec/acphy-api-rx.md, "Noise: avg, sample, request".
+ */
+s8 bcm4360_mac_ol_noise_avg(struct bcm4360_hw *hw);
 
 /*
  * Timers: wlapi_init_timer, wlapi_add_timer, wlapi_del_timer,
