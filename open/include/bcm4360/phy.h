@@ -399,8 +399,8 @@ struct bcm4360_phy_temp {
 	/*
 	 * pi_ac+0x8dc: the last measured temperature, written by
 	 * wlc_phy_tempsense_acphy (acphy-cal-rx section 3). Init from rawtempsense
-	 * at attach; here zero until the first tempsense (the RSSI path that reads
-	 * it is not exercised by the tests). Added by the calibrations task.
+	 * at attach (P6.20); read by the RSSI path (open/phy/phy_rx.c). Added by
+	 * the calibrations task.
 	 */
 	s16 measured_temp;
 	u8 cal_delta;		/* pi+0xf9c: variable phycal_tempdelta, procedure 4 */

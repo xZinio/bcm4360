@@ -5,9 +5,9 @@
  * the desense-aci engine (acphy-desense.md E3), the high-RSSI eLNA-bypass
  * engine (acphy-desense.md H1, H2), wlc_phy_stop_bt_toggle_acphy
  * (acphy-rxgain.md section 8) and the AC-PHY part of the watchdog behind the
- * function pointer pi+0x100 (acphy-attach.md, "Function pointer table"); and a
- * stand-in for the noise-sample request of the receive group, which is not
- * written yet (wd_noise_sample_request).
+ * function pointer pi+0x100 (acphy-attach.md, "Function pointer table"). The
+ * noise-sample request is the receive group's (open/phy/phy_rx.c,
+ * bcm4360_phy_noise_sample_request).
  *
  * Where the whole-session test (tools/re/hybrid.py) and the specification
  * disagree the code follows the test; docs/re/questions/phy-api-watchdog.md
@@ -52,10 +52,6 @@
 #define WD_NOISE_REASON		1
 #define WD_NOISE_REASON_CRSMIN	4
 
-/* the noise-sample request (acphy-desense.md C4) */
-#define SHM_NOISE_RESULT	0x308	/* per-core result words, 0x308..0x312 */
-#define D11_REG_0x124		0x124
-#define D11_0x124_NOISE		0x00000010	/* starts the measurement */
 /* step 11: a pending noise sample is forgotten after this many seconds */
 #define WD_NOISE_STALE_S	6
 /* step 13.2: the reason "periodic" of wlc_phy_cal_perical */
@@ -379,31 +375,6 @@ static void wd_stop_bt_toggle(struct bcm4360_phy *phy)
 /* ------------------------------------------- the watchdog */
 
 /*
- * Stand-in for sub_0baff6, the noise-sample request (acphy-api-rx.md), until
- * the receive group (open/phy/phy_rx.c, bcm4360_phy_noise_sample_request)
- * exists. What it does here: the bookkeeping steps 10 and 11 of the watchdog
- * rely on (reason and time of the pending sample, pi+0x18f/pi+0x190), the AC
- * accesses of acphy-desense.md C4 (clear the per-core result words
- * SHM(0x308..0x312), start the measurement with D11(0x124) bit 4), and - as the
- * whole-session test shows - nothing while a sample is pending. See
- * docs/re/questions/phy-api-watchdog.md.
- */
-static void wd_noise_sample_request(struct bcm4360_phy *phy, u8 reason, u8 channel)
-{
-	u32 c, v;
-
-	(void)channel;
-	if (phy->noise_reason)
-		return;
-	phy->noise_reason = reason;
-	phy->noise_time = phy->now;
-	for (c = 0; c < 2 * BCM4360_PHY_CORES_MAX; c++)
-		bcm4360_shm_write(phy->hw, (u16)(SHM_NOISE_RESULT + 2 * c), 0);
-	v = d11_read32(phy->hw, D11_REG_0x124);
-	d11_write32(phy->hw, D11_REG_0x124, v | D11_0x124_NOISE);
-}
-
-/*
  * acphy-attach.md, "Function pointer table", slot 0x100 (sub_09737d,
  * wlc_phy_watchdog_acphy): request the CRS min-power noise sample and step the
  * core selected in PHY(0x520).
@@ -412,10 +383,14 @@ static void wd_watchdog_acphy(struct bcm4360_phy *phy)
 {
 	u32 n = phy->ver.cores;
 
-	/* wlc_phy_noise_sample_request_crsmincal (acphy-desense.md C4) */
+	/*
+	 * wlc_phy_noise_sample_request_crsmincal (acphy-desense.md C4): the
+	 * common request sub_0baff6 with reason 4, which does nothing while a
+	 * sample is pending (docs/re/questions/phy-api-watchdog.md, Q3)
+	 */
 	if (phy->crsmincal.enable)
-		wd_noise_sample_request(phy, WD_NOISE_REASON_CRSMIN,
-					phy->radio_chanspec & BCM4360_CHANSPEC_CHANNEL);
+		bcm4360_phy_noise_sample_request(phy, WD_NOISE_REASON_CRSMIN,
+						 phy->radio_chanspec & BCM4360_CHANSPEC_CHANNEL);
 	bcm4360_mac_suspend(phy->hw);
 	bcm4360_phy_mod(&phy->io, ACPHY_REG_0x520, ACPHY_0x520_CORE,
 			(u16)(phy->watchdog_core << ACPHY_0x520_CORE_SHIFT));
@@ -584,8 +559,8 @@ void bcm4360_phy_watchdog(struct bcm4360_phy *phy)
 
 	/* step 10 */
 	if (!(phy->hold & WD_HOLD_NO_NOISE))
-		wd_noise_sample_request(phy, WD_NOISE_REASON,
-					phy->radio_chanspec & BCM4360_CHANSPEC_CHANNEL);
+		bcm4360_phy_noise_sample_request(phy, WD_NOISE_REASON,
+						 phy->radio_chanspec & BCM4360_CHANSPEC_CHANNEL);
 
 	/* step 11 */
 	if (phy->noise_reason && phy->now - phy->noise_time > WD_NOISE_STALE_S)

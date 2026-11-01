@@ -201,6 +201,15 @@ void bcm4360_mac_update_phy_mode(struct bcm4360_hw *hw, u32 mode)
 	wlapi_high_update_phy_mode(hyb_sh_of_hw(hw)->p.physhim, mode);
 }
 
+void *wlapi_get_wlc_info(void *physhim);
+u32 wlc_ol_noise_avg_offload(void *wlc);
+
+/* phy_env.h: the noise average of the on-chip ARM's offload (0: none answers) */
+s8 bcm4360_mac_ol_noise_avg(struct bcm4360_hw *hw)
+{
+	return (s8)wlc_ol_noise_avg_offload(wlapi_get_wlc_info(hyb_sh_of_hw(hw)->p.physhim));
+}
+
 void wlapi_bmac_btc_period_get(void *physhim, u16 *period, u8 *state);
 
 void bcm4360_mac_btc_period_get(struct bcm4360_hw *hw, u16 *period, u8 *state)

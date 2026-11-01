@@ -880,6 +880,7 @@ static bool acphy_attach_temp_ref(struct bcm4360_phy *phy)
 	s32 t = sext((u32)phy_getint(phy, "rawtempsense", 0), 9);
 
 	phy->temp.rawtempsense = (t == -1) ? 255 : (s16)t;
+	phy->temp.measured_temp = phy->temp.rawtempsense;	/* pi_ac+0x8dc: the same value */
 	return t == -1;
 }
 

@@ -72,6 +72,13 @@ void bcm4360_mac_update_phy_mode(struct bcm4360_hw *hw, u32 mode);
 void bcm4360_mac_update_txppr_offset(struct bcm4360_hw *hw, const void *offsets);
 
 /*
+ * wlc_ol_noise_avg_offload(wlapi_get_wlc_info(physhim)): the noise average of
+ * the on-chip offload, 0 when no offload answers (docs/re/spec/acphy-api-rx.md,
+ * "Noise", wlc_phy_noise_avg step 1)
+ */
+s8 bcm4360_mac_ol_noise_avg(struct bcm4360_hw *hw);
+
+/*
  * Timers: wlapi_init_timer, wlapi_add_timer, wlapi_del_timer,
  * wlapi_free_timer. A timer calls fn(arg) in a context in which the hardware
  * may be accessed.
