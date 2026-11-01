@@ -155,6 +155,7 @@ use wlapi_bmac_phyclk_fgc
 use wlapi_bmac_mhf
 use wlapi_bmac_mctrl
 use wlapi_bmac_btc_mode_get
+use wlapi_bmac_btc_period_get
 use wlapi_bmac_ucode_wake_override_phyreg_set
 use wlapi_bmac_ucode_wake_override_phyreg_clear
 use wlapi_update_bt_chanspec

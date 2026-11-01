@@ -51,6 +51,12 @@ void bcm4360_mac_mctrl(struct bcm4360_hw *hw, u32 mask, u32 val);
 /* wlapi_bmac_btc_mode_get: mode of the Bluetooth coexistence */
 u32 bcm4360_mac_btc_mode(struct bcm4360_hw *hw);
 
+/*
+ * wlapi_bmac_btc_period_get: the current Bluetooth period and a state byte
+ * (docs/re/spec/acphy-api-watchdog.md, "New services")
+ */
+void bcm4360_mac_btc_period_get(struct bcm4360_hw *hw, u16 *period, u8 *state);
+
 /* wlapi_bmac_ucode_wake_override_phyreg_set, .._clear */
 void bcm4360_mac_wake_override_set(struct bcm4360_hw *hw);
 void bcm4360_mac_wake_override_clear(struct bcm4360_hw *hw);

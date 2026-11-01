@@ -201,6 +201,13 @@ void bcm4360_mac_update_phy_mode(struct bcm4360_hw *hw, u32 mode)
 	wlapi_high_update_phy_mode(hyb_sh_of_hw(hw)->p.physhim, mode);
 }
 
+void wlapi_bmac_btc_period_get(void *physhim, u16 *period, u8 *state);
+
+void bcm4360_mac_btc_period_get(struct bcm4360_hw *hw, u16 *period, u8 *state)
+{
+	wlapi_bmac_btc_period_get(hyb_sh_of_hw(hw)->p.physhim, period, state);
+}
+
 void bcm4360_mac_update_txppr_offset(struct bcm4360_hw *hw, const void *offsets)
 {
 	wlapi_high_update_txppr_offset(hyb_sh_of_hw(hw)->p.physhim, (void *)offsets);
