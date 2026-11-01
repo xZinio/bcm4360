@@ -17,7 +17,7 @@ bool bcm4360_open_pmu = true;
 bool bcm4360_open_access = true;
 bool bcm4360_open_mac = true;
 bool bcm4360_open_utils = true;
-bool bcm4360_open_clm;		/* off until the open CLM is verified */
+bool bcm4360_open_clm = true;
 
 #ifdef __KERNEL__
 module_param_named(open_pmu, bcm4360_open_pmu, bool, 0444);
@@ -29,7 +29,7 @@ MODULE_PARM_DESC(open_mac, "MAC control, suspend/enable, host flags: open code (
 module_param_named(open_utils, bcm4360_open_utils, bool, 0444);
 MODULE_PARM_DESC(open_utils, "board variables, number parsing, CRC-8: open code (1, default) or Broadcom's (0)");
 module_param_named(open_clm, bcm4360_open_clm, bool, 0444);
-MODULE_PARM_DESC(open_clm, "regulatory database lookup: open code (1) or Broadcom's (0, default)");
+MODULE_PARM_DESC(open_clm, "regulatory database lookup: open code (1, default) or Broadcom's (0)");
 #endif
 
 #define HYB_CARDS		4

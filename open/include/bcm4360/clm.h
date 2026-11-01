@@ -35,14 +35,60 @@ struct bcm4360_clm_limits_params {
 #define BCM4360_CLM_NUMRATES	336	/* entries of the limits array */
 #define BCM4360_CLM_CHANVEC	25	/* bytes of a channel bit vector */
 
+#define BCM4360_CLM_BANDS	2	/* 2.4 GHz, 5 GHz */
+#define BCM4360_CLM_BWS		5	/* 20, 40, 80, 160, 80+80 MHz */
+#define BCM4360_CLM_LOC_TYPES	4	/* base 2.4, base 5, HT 2.4, HT 5 GHz */
+
+/* clm.md, "Channel combs": the (first, last, step) triples of a band and bandwidth */
+struct bcm4360_clm_comb {
+	u32 count;
+	const u8 *triples;
+};
+
+/*
+ * clm.md, "State of the layer": one data-set slot. Pointers are stored
+ * relocated (the database's pointer plus `delta`).
+ */
+struct bcm4360_clm_set {
+	const u8 *root;		/* the set's root table, NULL when not loaded */
+	u32 delta;		/* relocation delta of the set */
+	struct bcm4360_clm_comb comb[BCM4360_CLM_BANDS][BCM4360_CLM_BWS];
+	bool has_comb_tables;
+	s32 rev_hi_idx;		/* extra-byte indices of a country record, -1: none */
+	u32 country_size;
+	const u8 *header;	/* the header as passed (not relocated) */
+	bool has_160_rules;
+	const u8 *ranges[BCM4360_CLM_BWS];
+	const u8 *ratesets[BCM4360_CLM_BANDS][BCM4360_CLM_BWS];
+	s32 loc_hi1_idx;
+	s32 loc_hi2_idx;
+	s32 flags_idx;
+	u32 region_fmt;
+	const u8 *ext_ratesets[BCM4360_CLM_BANDS][BCM4360_CLM_BWS];
+	u32 flag24;		/* root flags bit 24, not used */
+	const u8 *rev_remap;
+
+	/*
+	 * clm.md, "Notes for an implementation": cache of the locale walk, per
+	 * locale type the last record reached (index and address); dropped
+	 * when the set is loaded.
+	 */
+	bool walk_valid[BCM4360_CLM_LOC_TYPES];
+	u32 walk_idx[BCM4360_CLM_LOC_TYPES];
+	const u8 *walk_rec[BCM4360_CLM_LOC_TYPES];
+};
+
+#define BCM4360_CLM_RATE_CLASS_BYTES	((BCM4360_CLM_NUMRATES + 3) / 4)
+
 /*
  * The state of the layer: the two data sets (clm.md, "State of the layer"),
  * slot 0 incremental, slot 1 base, and what the specification keeps beside
  * them. The caller provides one, zeroed, per driver.
  */
 struct bcm4360_clm {
-	/* the implementation's fields (implementer: replace this placeholder) */
-	u64 placeholder;
+	struct bcm4360_clm_set set[2];
+	/* 2 bits per rate index: 0 DSSS, 1 OFDM, 2 HT/VHT; rebuilt by every load */
+	u8 rate_class[BCM4360_CLM_RATE_CLASS_BYTES];
 };
 
 /* clm.md, "Loading" */

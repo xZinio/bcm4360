@@ -8,7 +8,8 @@ hybrid-objs := hybrid/card.o \
                hybrid/pmu.o open/chip/pmu.o \
                hybrid/access.o open/hw/access.o \
                hybrid/mac.o open/mac/bmac_ctrl.o open/mac/bmac_mhf.o \
-               hybrid/utils.o open/lib/utils.o
+               hybrid/utils.o open/lib/utils.o \
+               hybrid/clm.o open/lib/clm.o
 
 # The PHY layer (hybrid/phy.c, switch open_phy, default off): the adapter and
 # the open PHY (its register access, open/hw/access.o, is in the list above).
@@ -21,6 +22,3 @@ hybrid-phy-objs := hybrid/phy.o \
                    open/phy/phy_txpower.o open/phy/radio2069.o \
                    open/phy/phy_rx.o open/phy/phy_wd.o
 
-# Layers written but not yet in the module (tools/re/hybrid.py links them for
-# the emulator as soon as their sources exist): the regulatory database.
-hybrid-new-objs := hybrid/clm.o open/lib/clm.o

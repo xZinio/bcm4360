@@ -32,6 +32,7 @@ layer has a module parameter that switches it back to Broadcom's code:
 | Register access: PHY, radio, PHY tables, shared memory (15 functions) | `open_access` | on |
 | MAC control, suspend/enable, microcode host flags (6 functions of `wlc_bmac.c`) | `open_mac` | on |
 | Board variables, number parsing, CRC-8 (7 functions of `bcmutils.c`) | `open_utils` | on |
+| Regulatory database lookup (16 functions of `wlc_clm.c`; the database itself stays Broadcom's data) | `open_clm` | on |
 | **PHY and radio** (all 79 entry points of the PHY: bring-up, channels, transmit power, calibrations, watchdog, receive measurements) | `open_phy` | **off** |
 
 `open_phy=1` replaces Broadcom's whole AC-PHY with the open one: in the
@@ -46,7 +47,7 @@ moment; `scripts/swap-test.sh` can do this with automatic rollback):
 
 and remove the file to go back.
 
-With all of them on, a third of everything the driver executes during
+With the default switches, about two thirds (64.7 %) of everything the driver executes during
 bring-up and channel changes is open code (measured in the emulator,
 `tools/re/hybrid.py share`). Not yet confirmed on the card for the last three:
 if Wi-Fi misbehaves, switch a layer off, e.g.

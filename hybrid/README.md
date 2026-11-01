@@ -38,6 +38,7 @@ was compared there.
 | register access | `open_access` | on | 15: `phy_reg_read/write/mod/and/or`, `read/write/mod/and/or/xor_radio_reg`, `wlc_phy_table_write/read_acphy`, `wlc_bmac_read/write_shm` | `access.c` -> `open/hw/access.c` | [access](../docs/re/spec/access.md) |
 | MAC control | `open_mac` | on | 6: `wlc_bmac_mctrl`, `wlc_ucode_wake_override_set/clear`, `wlc_bmac_suspend_mac_and_wait`, `wlc_bmac_enable_mac`, `wlc_bmac_mhf` | `mac.c` -> `open/mac/bmac_ctrl.c`, `bmac_mhf.c` | [bmac-init](../docs/re/spec/bmac-init.md) A1-A9 |
 | PHY and radio | `open_phy` | **off** | all 79 entry points of the MAC into the PHY (takeover.txt) | `phy.c` -> `open/phy/*` (+ `open/hw/access.c`) | [acphy-api](../docs/re/spec/acphy-api.md) and the `acphy-*` specs |
+| regulatory database | `open_clm` | on | 16 `clm_*` entry points of `wlc_clm.c` (the database stays Broadcom's data) | `clm.c` -> `open/lib/clm.c` | [clm](../docs/re/spec/clm.md) |
 | utilities | `open_utils` | on | 7: `getvar`, `getintvar`, `getintvararray`, `getintvararraysize`, `bcm_strtoul`, `bcm_bitcount`, `hndcrc8` (the global NVRAM, `nvram_get`, stays Broadcom's) | `utils.c` -> `open/lib/utils.c` | [utils](../docs/re/spec/utils.md) |
 
 The switches are read when a card is attached (`open_access`, `open_mac` and
@@ -84,6 +85,8 @@ is the real card.
 | hybrid, PMU open | 197,888 bytes (98.7 %) | 2,716 bytes | - |
 | hybrid, PMU, register access, MAC control, utilities open | 194,769 bytes (97.2 %) | 15,765 bytes | **33.0 %** |
 | the same + the open PHY (`open_phy=1`) | 123,127 bytes (61.4 %) | 69,061 bytes | 37.6 % |
+| default since the CLM layer: PMU, access, MAC, utilities, regulatory database | 187,114 bytes (93.4 %) | 25,831 bytes | **64.7 %** |
+| the same + the open PHY (`open_phy=1`) | 115,520 bytes (57.6 %) | 79,127 bytes | **78.6 %** |
 
 With the open PHY switched on, the whole session is identical to the object
 (41,416 accesses: attach, up, nine channel changes in both bands and all
