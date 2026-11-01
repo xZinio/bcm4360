@@ -37,6 +37,7 @@ was compared there.
 | PMU, clocks | `open_pmu` | on | 16: `si_pmu_init`, `si_pmu_pll_init`, `si_pmu_res_init`, `si_pmu_measure_alpclk`, the clock queries, OTP power, radio supply, the indirect PMU registers | `pmu.c` -> `open/chip/pmu.c` | [pmu](../docs/re/spec/pmu.md) |
 | register access | `open_access` | on | 15: `phy_reg_read/write/mod/and/or`, `read/write/mod/and/or/xor_radio_reg`, `wlc_phy_table_write/read_acphy`, `wlc_bmac_read/write_shm` | `access.c` -> `open/hw/access.c` | [access](../docs/re/spec/access.md) |
 | MAC control | `open_mac` | on | 6: `wlc_bmac_mctrl`, `wlc_ucode_wake_override_set/clear`, `wlc_bmac_suspend_mac_and_wait`, `wlc_bmac_enable_mac`, `wlc_bmac_mhf` | `mac.c` -> `open/mac/bmac_ctrl.c`, `bmac_mhf.c` | [bmac-init](../docs/re/spec/bmac-init.md) A1-A9 |
+| PHY and radio | `open_phy` | **off** | all 79 entry points of the MAC into the PHY (takeover.txt) | `phy.c` -> `open/phy/*` (+ `open/hw/access.c`) | [acphy-api](../docs/re/spec/acphy-api.md) and the `acphy-*` specs |
 | utilities | `open_utils` | on | 7: `getvar`, `getintvar`, `getintvararray`, `getintvararraysize`, `bcm_strtoul`, `bcm_bitcount`, `hndcrc8` (the global NVRAM, `nvram_get`, stays Broadcom's) | `utils.c` -> `open/lib/utils.c` | [utils](../docs/re/spec/utils.md) |
 
 The switches are read when a card is attached (`open_access`, `open_mac` and
@@ -82,16 +83,20 @@ is the real card.
 | object alone (1.0.3) | 200,461 bytes (100 %) | - | 0 % |
 | hybrid, PMU open | 197,888 bytes (98.7 %) | 2,716 bytes | - |
 | hybrid, PMU, register access, MAC control, utilities open | 194,769 bytes (97.2 %) | 15,765 bytes | **33.0 %** |
-| the same + the open PHY (`--on phy`, not yet identical, see below) | 123,171 bytes (61.5 %) | 64,378 bytes | 37.5 % |
+| the same + the open PHY (`open_phy=1`) | 123,127 bytes (61.4 %) | 69,061 bytes | 37.6 % |
 
-With the open PHY switched on (emulator only; the PHY layer is not in the
-module yet) the whole session now runs: all entry points of the PHY API it
-reaches exist in `open/` (control, transmit power, watchdog; the receive
-group is still open). The watchdog ticks match the object access for access;
-the session as a whole does not yet: from the transmit-power update of a later
-channel on, the power offsets the open PHY hands the MAC differ (open
-questions in `docs/re/questions/phy-api-txpower.md`), and the MAC's rate table
-writes follow from that.
+With the open PHY switched on, the whole session is identical to the object
+(41,416 accesses: attach, up, nine channel changes in both bands and all
+bandwidths, watchdog, down, up, down, detach), also with each of the other
+layers switched off. All 79 entry points exist; the receive measurements
+(RSSI per frame, noise interrupt) are not reached by the session and are
+written from their specification, not compared. The PHY layer is in the
+module with `open_phy` off by default until it has run on a card. The
+(much larger) static share falls because the whole AC-PHY of Broadcom's
+object stops running; the share of execution counting repetitions is
+dominated by Broadcom's regulatory database lookup (`wlc_clm.c`, about 46 %),
+the largest closed part still running and the next candidate for a
+specification.
 
 The last column weighs code by how often it runs: the register access
 primitives and the variable lookup are small but run constantly (`getvar`

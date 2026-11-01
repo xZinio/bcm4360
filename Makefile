@@ -31,7 +31,7 @@ ccflags-y += -I$(src)/src/wl/sys -I$(src)/src/shared/bcmwifi/include
 ifeq ($(HYBRID),1)
 # the adapters and the open code they use
 include $(src)/hybrid/objects.mk
-bcm4360-objs += $(hybrid-objs)
+bcm4360-objs += $(hybrid-objs) $(hybrid-phy-objs)
 ccflags-y += -DBCM4360_HYBRID -DBCM4360_OSL -I$(src)/open/include
 
 # Broadcom's core with the functions the open code takes over made weak

@@ -17,7 +17,11 @@ emulator: the PMU (16 functions of `hndpmu.c`), the register access primitives
 (15), the MAC control primitives (6) and the utilities of `bcmutils.c` (7:
 board variables, number parsing, CRC-8) are taken over and verified identical
 over a full session, with each layer's fallback too; a third of everything the
-driver executes in that session is now open code. The AC-PHY is wired to be taken over the
+driver executes in that session is now open code. **The open AC-PHY now
+takes over all 79 entry points of Broadcom's PHY** (module parameter
+`open_phy`, off by default until it has run on a card): with it switched on
+the whole session is identical to the object, and the Broadcom code that runs
+falls to 61 % of the object alone. (Before this:) the AC-PHY is wired to be taken over the
 same way at its 79 MAC-facing entry points ([spec/acphy-api.md](spec/acphy-api.md)),
 with the open side being completed. `tools/re/hybrid.py` is the whole-session
 A/B for that build.

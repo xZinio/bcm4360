@@ -32,6 +32,19 @@ layer has a module parameter that switches it back to Broadcom's code:
 | Register access: PHY, radio, PHY tables, shared memory (15 functions) | `open_access` | on |
 | MAC control, suspend/enable, microcode host flags (6 functions of `wlc_bmac.c`) | `open_mac` | on |
 | Board variables, number parsing, CRC-8 (7 functions of `bcmutils.c`) | `open_utils` | on |
+| **PHY and radio** (all 79 entry points of the PHY: bring-up, channels, transmit power, calibrations, watchdog, receive measurements) | `open_phy` | **off** |
+
+`open_phy=1` replaces Broadcom's whole AC-PHY with the open one: in the
+emulator the full session (bring-up, nine channel changes in both bands and
+all bandwidths, watchdog, down/up, detach) is identical to Broadcom's, and
+the Broadcom code that runs falls to about 61 % of what it was. It has not
+run on a card yet, so it is off by default. To try it (Wi-Fi goes down for a
+moment; `scripts/swap-test.sh` can do this with automatic rollback):
+
+    echo "options bcm4360 open_phy=1" | sudo tee /etc/modprobe.d/bcm4360-phy.conf
+    sudo rmmod bcm4360; sudo modprobe bcm4360
+
+and remove the file to go back.
 
 With all of them on, a third of everything the driver executes during
 bring-up and channel changes is open code (measured in the emulator,
