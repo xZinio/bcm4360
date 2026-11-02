@@ -788,16 +788,31 @@ the core.
 `(pi, d[3])`. Fills the per-core LOFT (LO-feedthrough) compensation tables with
 the calibrated LO-comp words `d[0..2]` (one per core, the e/f results collected
 in step E.6). Only when the radio id `pi+0x16a` != 0x30b (true for radio 2069).
-Table access bracket; per core it computes a "high channel" flag (channel
-number >= {200, 0x95, 100} for core 0/1/2) and writes 128 entries:
+Exactly (completed by the coordinator from the code, 2026-11-02, phy-soak Q8):
 
-* core 0: `TBL(0x42)[i]` = `d[0]` for all i.
-* cores 1, 2: 2.4 GHz: `TBL(0x62)[i]`/`TBL(0x82)[i]` = `d[c]` for all i.
-  5 GHz: `d[c]` plus a small per-index delta (from the constant arrays
-  hi = {..,0xec,0xf6,0xf6,0xf8,0xf6,0xfa} and lo = {..,0,0xfb,0xf2,0xfc,0xf6,
-  0xfb}, indexed by the high-channel flag and whether i is below the threshold
-  {0x80,0x80,0x20,0x80,0x1a,0x1c}). The high byte of `d[c]` gets the hi delta,
-  the low byte the lo delta.
+Constants (bytes): threshold `T[6]` = {0x80, 0x80, 0x20, 0x80, 0x1a, 0x1c};
+`HI[12]` = {0, 0, 0, 0, 0, 0, 0xec, 0xf6, 0xf6, 0xf8, 0xf6, 0xfa};
+`LO[12]` = {0, 0, 0, 0, 0, 0, 0, 0xfb, 0xf2, 0xfc, 0xf6, 0xfb}; channel limits
+`L[3]` = {200, 0x95 (149), 100}.
+
+1. s = `PHY(0x19e)` (read); `mod(PHY(0x19e), 0x0002, 0x0002)`.
+2. n = `pi+0x168` (the number of cores); ch = the low byte of the chanspec
+   `pi+0x17e` (for 40/80 MHz the centre channel, e.g. 0x9b for 149/80, 0x2a
+   for 36/80). For c < n: `flag[c]` = 1 if `L[c]` <= ch, else 0.
+3. For i = 0 .. 127 (outer loop), for c = 0 .. n-1 (inner loop), one 16-bit
+   entry each (`wlc_phy_table_write_acphy`, width 16, one entry at offset i):
+   * c = 0: `TBL(0x42)[i]` = `d[0]`.
+   * c = 1 or 2 (table `0x62` for core 1, `0x82` for core 2):
+     * 2.4 GHz (`pi+0x17e & 0xc000` = 0): the entry = `d[c]`.
+     * 5 GHz: k = 4*c + 2*`flag[c]` + (1 if i <= `T[c + 3*flag[c]]` else 0);
+       the entry = `((d[c] >> 8) + HI[k]) & 0xff) << 8 | ((d[c] & 0xff) +
+       LO[k]) & 0xff` (each byte added modulo 256, no carry between them).
+   * c >= 3: nothing.
+4. `mod(PHY(0x19e), 0x0002, s & 0x0002)`.
+
+Example: 149/80 on core 1: `flag[1]` = 1 (149 <= 155), so i <= 0x1a uses k = 7
+(`HI` 0xf6, `LO` 0xfb: with `d[1]` = 0 the entry is 0xf6fb) and i > 0x1a uses
+k = 6 (0xec, 0: 0xec00). 36/80: `flag[1]` = 0, k = 5 for every i (delta 0).
 
 These tables are the static `acphy_loft_lut_core0/1/2_rev0` sets of
 `acphy-init.md` (Data, offset 0x42/0x62/0x82); the calibration overwrites them
