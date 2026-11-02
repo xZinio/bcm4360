@@ -155,9 +155,7 @@ take wlc_bmac_rate_shm_offset
 take wlc_bmac_stf_get_rateset_shm_offset
 take wlc_bmac_stf_set_rateset_shm_offset
 take wlc_bmac_read_tsf
-# Bluetooth coexistence (hybrid/mac_btc.c -> open/mac/bmac_btc.c, bmac-run.md R3). Until
-# open/mac/bmac_btc.c exists these takes keep Broadcom's bodies (staged:
-# hybrid-new-macbtc-objs).
+# Bluetooth coexistence (hybrid/mac_btc.c -> open/mac/bmac_btc.c, bmac-run.md R3).
 take wlc_bmac_btc_mode_set
 take wlc_bmac_btc_wire_set
 take wlc_bmac_btc_wire_get

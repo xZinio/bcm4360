@@ -14,6 +14,7 @@ hybrid-objs := hybrid/card.o \
                hybrid/mac_updown.o open/mac/bmac_updown.o \
                hybrid/mac_chan.o open/mac/bmac_chan.o \
                hybrid/mac_runtime.o open/mac/bmac_runtime.o \
+               hybrid/mac_btc.o open/mac/bmac_btc.o \
                hybrid/utils.o open/lib/utils.o \
                hybrid/clm.o open/lib/clm.o \
                hybrid/ppr.o open/lib/ratepwr.o \
@@ -24,9 +25,6 @@ hybrid-objs := hybrid/card.o \
 # Being written, one variable hybrid-new*-objs per layer: each is linked by
 # tools/re/hybrid.py for the emulator once ALL its sources exist, not yet in
 # the module.
-
-# MAC Bluetooth coexistence (task docs/re/tasks/bmac-btc.md, switch open_mac)
-hybrid-new-macbtc-objs := hybrid/mac_btc.o open/mac/bmac_btc.o
 
 # The PHY layer (hybrid/phy.c, switch open_phy, default off): the adapter and
 # the open PHY (its register access, open/hw/access.o, is in the list above).

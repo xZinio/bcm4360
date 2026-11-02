@@ -773,10 +773,11 @@ void bcm4360_bmac_set_extlna_pwrsave_shmem(struct bcm4360_mac *mac)
 }
 
 /*
- * docs/re/spec/bmac-init.md, E10, sub_06106b (wlc_bmac_btc_gpio_enable): hand
- * the GPIO lines of the coexistence to it; nothing without a GPIO mask.
+ * docs/re/spec/bmac-init.md, E10, sub_06106b (wlc_bmac_btc_gpio_enable; also
+ * docs/re/spec/bmac-run.md R3): hand the GPIO lines of the coexistence to it;
+ * nothing without a GPIO mask.
  */
-static void wlc_bmac_btc_gpio_enable(struct bcm4360_mac *mac)
+void bcm4360_bmac_btc_gpio_enable(struct bcm4360_mac *mac)
 {
 	u16 v;
 
@@ -822,11 +823,11 @@ static bool btc_apple_board(struct bcm4360_mac *mac)
 }
 
 /*
- * docs/re/spec/bmac-init.md, E10, sub_062b79 (wlc_bmac_btc_flags_to_mhf):
- * the coexistence flags word to host flag bits, all of the 2.4 GHz band
- * except one.
+ * docs/re/spec/bmac-init.md, E10, sub_062b79 (wlc_bmac_btc_flags_to_mhf; also
+ * docs/re/spec/bmac-run.md R3): the coexistence flags word to host flag bits,
+ * all of the 2.4 GHz band except one.
  */
-static void wlc_bmac_btc_flags_to_mhf(struct bcm4360_mac *mac)
+void bcm4360_bmac_btc_flags_to_mhf(struct bcm4360_mac *mac)
 {
 	u16 a = 0, v;
 
@@ -896,7 +897,7 @@ void bcm4360_bmac_bsinit(struct bcm4360_mac *mac, u16 chanspec, bool bandswitch)
 			 MHF_BANDS_ALL);
 
 	/* step 13 */
-	wlc_bmac_btc_gpio_enable(mac);
+	bcm4360_bmac_btc_gpio_enable(mac);
 
 	/* step 14: chips 0xa9a7/0x4331 in 5 GHz with package 9 or 11; not this chip */
 
@@ -1123,7 +1124,7 @@ static void bmac_init_btc_params(struct bcm4360_mac *mac)
 	v = bcm4360_bmac_env_getvar(mac, "btc_flags");
 	if (v) {
 		mac->btc_flags = (u16)bcm4360_strtoul(v, NULL, 0);
-		wlc_bmac_btc_flags_to_mhf(mac);
+		bcm4360_bmac_btc_flags_to_mhf(mac);
 	}
 
 	/* step 32.4 */
@@ -1154,7 +1155,7 @@ static void bmac_init_ucode_and_lists(struct bcm4360_mac *mac, u8 *scratch9)
 
 	/* step 12 */
 	if (mac->btc_valid && mac->btc_gpio_out != 0)
-		wlc_bmac_btc_gpio_enable(mac);
+		bcm4360_bmac_btc_gpio_enable(mac);
 
 	/* step 13 */
 	bmac_init_antsel_gpio(mac);
