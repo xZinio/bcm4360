@@ -59,6 +59,31 @@ sudo rmmod bcm4360; sudo modprobe bcm4360; sudo systemctl restart wpa_supplicant
 
 `make HYBRID=0` builds the module without any of this, exactly as 1.0.3.
 
+## Testing on the card
+
+Nothing of the open code has run on a real BCM4360 yet. `scripts/layer-test.sh`
+takes the module through three configurations, each a run of
+`scripts/swap-test.sh` (it loads the module, waits for NetworkManager to
+reconnect, checks the link, the gateway, DNS and the kernel log, and goes back
+to the previous driver if anything fails):
+
+1. every switch off (`open_pmu=0 ... open_dma=0`): the hybrid build running
+   Broadcom's own functions - tests the build mechanism itself;
+2. the defaults: every layer open except the PHY;
+3. the defaults with the open PHY (`open_phy=1`).
+
+```sh
+sudo systemd-run --unit=bcm4360-layers --collect \
+    systemd-inhibit --what=sleep:idle --why="Wi-Fi driver test" \
+    "$PWD/scripts/layer-test.sh"        # or: layer-test.sh /path/to/bcm4360.ko
+less /var/log/bcm4360-swap-test.log    # each step ends with RESULT: PASS / FAIL
+```
+
+The log shows the switches each run really had. It stops at the first failing
+step; to find the layer at fault, repeat with one layer switched off at a
+time, e.g. `swap-test.sh bcm4360 --params "open_dma=0"`, for each switch in
+the table above. `swap-test.sh --params` passes any module parameters.
+
 ## How it is tested
 
 `tools/re/hybrid.py` makes the same core for the emulator (`mkhybrid.sh`, the

@@ -5,11 +5,15 @@
 # check the link end to end and roll back automatically if anything fails.
 #
 #   swap-test.sh NEW [--settle SECONDS] [--reconnects N] [--log FILE] [--fallback MOD]
+#                    [--params "PARAM=VALUE ..."]
 #
 # NEW is a module name (bcm4360, wl) or the path of a .ko file; a .ko with the
 # same name as the running module replaces it (new build). On failure the
 # previous module is reloaded, or --fallback (default: wl) when the previous
-# one cannot be reloaded by name. Needs root.
+# one cannot be reloaded by name. --params are module parameters for NEW, for
+# instance the switches of the hybrid build ("open_phy=1", "open_dma=0",
+# hybrid/README.md); with --params a running module of the same name is
+# reloaded instead of tested in place. Needs root.
 # The Wi-Fi link goes down while it runs, so start it detached, e.g.
 #
 #   systemd-run --unit=bcm4360-swap --collect \
@@ -25,12 +29,14 @@ settle=60
 reconnects=0
 log=/var/log/bcm4360-swap-test.log
 fallback=wl
+params=
 while [ $# -gt 0 ]; do
 	case $1 in
 	--settle) settle=$2; shift 2 ;;
 	--reconnects) reconnects=$2; shift 2 ;;
 	--log) log=$2; shift 2 ;;
 	--fallback) fallback=$2; shift 2 ;;
+	--params) params=$2; shift 2 ;;
 	*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
 done
@@ -46,10 +52,23 @@ module_name() {
 	esac
 }
 load() {
+	# $params is split into words on purpose: one module parameter each
+	# shellcheck disable=SC2086
 	case $1 in
-	*.ko|*.ko.*) insmod "$1" ;;
-	*) modprobe "$1" ;;
+	*.ko|*.ko.*) insmod "$1" $params ;;
+	*) modprobe "$1" $params ;;
 	esac
+}
+# The hybrid build's switches as the loaded module has them.
+show_switches() {
+	local p v line=
+	for p in /sys/module/"$1"/parameters/open_*; do
+		[ -r "$p" ] || continue
+		v=$(cat "$p" 2>/dev/null)
+		line="$line ${p##*/}=$v"
+	done
+	[ -n "$line" ] && say "switches:$line"
+	return 0
 }
 running_broadcom() { lsmod | awk '$1 == "wl" || $1 == "bcm4360" { print $1; exit }'; }
 wifi_iface() {
@@ -155,6 +174,8 @@ say "current driver: $old (${old_ko:-loaded from a file}), interface: ${iface:-n
 
 in_place=0
 case $new in *.ko|*.ko.*) ;; *) [ "$old" = "$new_mod" ] && in_place=1 ;; esac
+# module parameters only take effect on a fresh load
+[ -n "$params" ] && in_place=0
 # Go back to the old module if modprobe can find it and it is not the one
 # being replaced, else to the fallback.
 restore=$old
@@ -170,7 +191,7 @@ else
 	say "unloading $old"
 	rmmod "$old" || { say "cannot unload $old"; say "RESULT: FAIL (nothing changed)"; exit 1; }
 	swapped=1
-	say "loading $new"
+	say "loading $new${params:+ with parameters: $params}"
 	if ! load "$new"; then
 		say "FAIL: loading $new failed"
 		rollback
@@ -179,6 +200,7 @@ else
 	fi
 fi
 t0=${t0:-$(date +%s)}
+show_switches "$new_mod"
 
 result=0
 if wait_connected "$settle"; then
