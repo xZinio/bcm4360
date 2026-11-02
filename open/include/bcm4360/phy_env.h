@@ -79,6 +79,13 @@ void bcm4360_mac_update_txppr_offset(struct bcm4360_hw *hw, const void *offsets)
 s8 bcm4360_mac_ol_noise_avg(struct bcm4360_hw *hw);
 
 /*
+ * wlapi_noise_cb(physhim, chan, v): a noise sample the MAC asked for (an
+ * "external" request) is complete - channel `chan`, value `v` in dBm
+ * (docs/re/spec/acphy-api-rx.md, "Noise, completed", N4 step 2)
+ */
+void bcm4360_mac_noise_cb(struct bcm4360_hw *hw, u8 chan, s8 v);
+
+/*
  * Timers: wlapi_init_timer, wlapi_add_timer, wlapi_del_timer,
  * wlapi_free_timer. A timer calls fn(arg) in a context in which the hardware
  * may be accessed.

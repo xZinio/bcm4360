@@ -210,6 +210,13 @@ s8 bcm4360_mac_ol_noise_avg(struct bcm4360_hw *hw)
 	return (s8)wlc_ol_noise_avg_offload(wlapi_get_wlc_info(hyb_sh_of_hw(hw)->p.physhim));
 }
 
+void wlapi_noise_cb(void *physhim, u8 chan, s8 v);
+
+void bcm4360_mac_noise_cb(struct bcm4360_hw *hw, u8 chan, s8 v)
+{
+	wlapi_noise_cb(hyb_sh_of_hw(hw)->p.physhim, chan, v);
+}
+
 void wlapi_bmac_btc_period_get(void *physhim, u16 *period, u8 *state);
 
 void bcm4360_mac_btc_period_get(struct bcm4360_hw *hw, u16 *period, u8 *state)

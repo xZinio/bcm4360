@@ -281,6 +281,7 @@ use wlapi_bmac_btc_mode_get
 use wlapi_bmac_btc_period_get
 use wlapi_get_wlc_info
 use wlc_ol_noise_avg_offload
+use wlapi_noise_cb
 use wlapi_bmac_ucode_wake_override_phyreg_set
 use wlapi_bmac_ucode_wake_override_phyreg_clear
 use wlapi_update_bt_chanspec

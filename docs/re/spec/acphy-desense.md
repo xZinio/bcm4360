@@ -146,12 +146,12 @@ Copies of the set:
 
 | Field | Meaning |
 |---|---|
-| `pi_ac+0x14 + c` (s8) | per-core measured input of the calibration (interpretation: a recent per-core received/noise level; reads 0 in the model) |
+| `pi_ac+0x14 + c` (s8) | per-core input of the calibration: the newest noise level of core c, **`compute_dB(power >> 9) - 37` = noise dBm + 67**, written by `sub_0b701e` (acphy-api-rx.md "Noise, completed" N2) at every noise reading whose total power is not 0 (corrected by phy-noise; the first version said "writer not located, reads 0") |
 | `pi_ac+0x18 + 4*sb + c` (s8) | per-sub-band, per-core reference level; `sb` = `wlc_phy_get_chan_freq_range_acphy` (0..4) |
-| `pi_ac+0x2c .. 0x3b` | 4-deep ring buffer (4 slots of 4 bytes), each slot per-core (`pi_ac+0x14+c` + 1) |
+| `pi_ac+0x2c .. 0x3b` | 4-deep ring buffer (4 slots of 4 bytes, slot k at `0x2c + 4k`), each slot per-core (`pi_ac+0x14+c` + 1, i.e. noise dBm + 68). A 0 byte means "empty" - also when it was pushed as 0 (a level of -1, noise -68 dBm) |
 | `pi_ac+0x3c` (u8) | ring write index (modulo 4) |
 | `pi_ac+0x3d + c` (s8) | per-core averaged value of the last calibration |
-| `pi_ac+0x41` (u8) | run the calibration on every noise sample (a "keep calibrating" enable) |
+| `pi_ac+0x41` (u8) | the last reason-4 ("for the crs calibration") noise request was refused because another sample was pending; written by `sub_0baff6` on every call (0, then 1 when refused). While it is set, every noise reading runs the calibration (corrected by phy-noise; it is not an enable) |
 | `pi_ac+0x42` (u8) | applied minimum power (max over cores); 0x36 after attach; the floor of `v` in A7 step 3.6 |
 | `pi_ac+0x43` (u8) | count of calibrations done |
 | `pi_ac+0x44` (u8) | channel number of the last calibration |
@@ -229,7 +229,7 @@ All are measured, and read 0 in the model.
 | desense-aci level clamp | b-PHY (narrow) <= 24, OFDM (wide) <= 48 |
 | desense-aci ring reset on change | 100 (narrow), 300 (wide) |
 | ED-threshold register scale | `reg = (dBm*640000 + 73045696) / 30103` (first eight registers); `+69205696` instead (second eight, 6.0 dB lower) |
-| CRS reference default (`pi_ac+0x18`) | 0xe2 = -30 (set at attach), which maps back to the 0x36 minimum power |
+| CRS reference default (`pi_ac+0x18`) | 0xe2 = -30 (set at attach), which maps back to the 0x36 minimum power **at 20 MHz only** (index 4 = 54); at 40 MHz to 56 (index 6), at 80 MHz to 57 (index 7) - observed 57 on 36/80 (corrected by phy-noise) |
 
 CRS minimum-power lookup tables, 15 bytes, index 0..14 (`.rodata`):
 
@@ -329,29 +329,43 @@ Steps:
 1. **Only if `restore = 0`**, push the newest measurement into the ring: for
    each present core c, `pi_ac[0x2c + c + 4*pi_ac[0x3c]] = pi_ac[0x14+c] + 1`;
    then advance the ring index `pi_ac[0x3c] = (pi_ac[0x3c] + 1) mod 4`.
-2. For each present core c (in rising order, counting processed cores in a
-   variable used as the "any core done" flag):
-   1. **`restore = 0`:** `d = pi_ac[0x2c+c]` (newest ring slot). If `d = 0`
-      the ring is empty for this core: **return** (nothing calibrated yet).
+2. For each present core c (in rising order, counting **the cores whose
+   reference changed** - corrected by phy-noise, the first version said
+   "processed cores"):
+   1. **`restore = 0`:** `d = pi_ac[0x2c+c]` - ring **slot 0**, a fixed
+      position, not the newest slot (corrected by phy-noise). If `d = 0`:
+      **return from the function at once** - nothing is programmed and none
+      of the step-3 fields is written, but the push of step 1 and the
+      reference updates of the cores already done in this loop stay.
       Average up to the four ring slots `pi_ac[0x2c+c]`, `[0x30+c]`, `[0x34+c]`,
-      `[0x38+c]` that are non-zero (stop at the first zero), integer division by
-      the count. `local_48[c]` = this average.
+      `[0x38+c]` that are non-zero (stop at the first zero), as a signed sum
+      divided by the count with truncation toward zero. `local_48[c]` = this
+      average (s8).
       Compute the bandwidth-adjusted reference `r = pi_ac[0x18+4*sb+c]` for
-      20 MHz, `+3` for 40 MHz, `+7` for 80 MHz. If `|r - average| >= cVar16`
-      (3 for PHY rev 0/1, 2 for rev >= 2) **or** `pi_ac[0x33d] != 0`: mark a
-      change, and store the new reference `pi_ac[0x18+4*sb+c]` = `average`
+      20 MHz, `+3` for 40 MHz, `+7` for every other bandwidth (80 MHz), as a
+      byte. If `|r - average| >= cVar16` (the difference taken as a signed
+      byte; 3 for PHY rev 0/1, 2 for rev >= 2) **or** `pi_ac[0x33d] != 0`: count
+      a change, and store the new reference `pi_ac[0x18+4*sb+c]` = `average`
       (20 MHz), `average - 3` (40 MHz) or `average - 7` (80 MHz).
    2. **`restore != 0`:** `local_48[c]` = `pi_ac[0x18+4*sb+c]` adjusted for the
       bandwidth exactly as `r` above (read back, no measurement, no ring, no
       change mark).
    3. Common: `idx = local_48[c] + 0x22` (20 MHz), `+0x21` (40 MHz) or `+0x1e`
-      (80 MHz); clamp `idx` to 0..14 (values above 14 become 14 if positive, 0
-      if negative as a signed byte). `local_58[c]` = table[idx] from the 20/40/80
-      MHz table. If c = 1: `off1 = local_58[1] - local_58[0]`; if c = 2:
-      `off2 = local_58[2] - local_58[0]`.
+      (other, 80 MHz), as a byte; clamp `idx` to 0..14 (a byte above 14 becomes
+      14 if it is positive as a signed byte, 0 if negative). `local_58[c]` =
+      table[idx] from the 20/40/80 MHz table (for a bandwidth that is none of
+      20/40/80, `local_58[c]` keeps its start value - not on this card). If
+      c = 1: `off1 = local_58[1] - local_58[0]`; if c = 2:
+      `off2 = local_58[2] - local_58[0]` (bytes; `local_58[0]` is still 0x36
+      if core 0 is not present).
 3. Finalise:
-   1. If no core was processed and `restore = 0`: **return**. If a change was
-      marked and `restore = 0`: `pi_ac[0x33d] = 0` (clear the force flag).
+   1. If **no reference changed** and `restore = 0`: **return** - the
+      thresholds are not reprogrammed and `pi_ac+0x33e`, `+0x42`, `+0x43`,
+      `+0x44`, `+0x3d..` are not written (the ring push and the averages are
+      the only effect). (Corrected by phy-noise: the first version returned
+      only when no core was processed; observed, see "Corrections
+      (phy-noise)".) If a change was counted
+      and `restore = 0`: `pi_ac[0x33d] = 0` (clear the force flag).
    2. `pi_ac[0x33e] = 1`.
    3. `local_58[1] = max(local_58[1], local_58[2])`;
       `pi_ac[0x42] = max(local_58[0], local_58[1])` (the applied minimum power).
@@ -369,13 +383,17 @@ cores fit in `0x18..0x2b`, below the ring at `0x2c`). It is initialised to 0xe2
 power (index 4 of the 20 MHz table = 54). On the **restore** path
 (`sub_0a4adc` on a channel not yet calibrated) that default is read back and
 `sub_08f41b(pi, 0x36, 0, 0)` is applied (verified: registers stay 0x36).
-On the **calibrate** path the model returns 0 for `pi_ac+0x14`, so every ring
-slot is 1, the average is 1, the reference is pulled from -30 to 1, `idx` is
-clamped to 14, and `local_58[c]` = the last table entry (80/76/67 for 20/40/80
-MHz); the emulator confirms `pi_ac+0x42 = 0x50` and `sub_08f41b(pi, 0x50, 0, 0)`
-after a calibrate on channel 1. The writer of `pi_ac+0x14` was not located; it
-is the per-core input this calibration averages, and with a realistic value it
-would land on a lower table index than the model's degenerate 0.
+On the **calibrate** path called directly with no measurement since attach
+(`pi_ac+0x14` = 0), every ring slot is 1, the average is 1, the reference is
+pulled from -30 to 1, `idx` is clamped to 14, and `local_58[c]` = the last
+table entry (80/76/67 for 20/40/80 MHz); the emulator confirms `pi_ac+0x42 =
+0x50` and `sub_08f41b(pi, 0x50, 0, 0)` after a calibrate on channel 1. In the
+driver the calibrate path runs only after a noise reading, which has written
+`pi_ac+0x14` first: its writer is `sub_0b701e` (acphy-api-rx.md "Noise,
+completed" N2), value `compute_dB(power >> 9) - 37`, so a typical noise of
+-95 dBm gives -28, a pushed -27, an index of -27 + 0x22 = 7 at 20 MHz (63).
+(The sentence "the writer of `pi_ac+0x14` was not located" of the first version
+is answered.)
 
 #### C2. sub_08f41b (.text+0x08f41b, name assigned: wlc_phy_set_crs_thresh_acphy)
 
@@ -423,30 +441,46 @@ value ignored), calls `wlc_phy_noise_read_shmem(pi)`, stores the result byte in
 the shared noise ring `sh[0x96 + sh[0xa0]]`, advances `sh[0xa0]` modulo 8, and
 returns it. Caller: `wlc_phy_noise_avg`.
 
-`wlc_phy_noise_read_shmem(pi)` (only the part that concerns this area): for each
+`wlc_phy_noise_read_shmem(pi)` (only the part that concerns this area; the
+whole function is acphy-api-rx.md "Noise, completed" N3): for each
 core it reads the 32-bit measured noise power from `SHM(0x308 + 4*c)` (low) and
-`SHM(0x30a + 4*c)` (high); converts it to a per-core dBm (via `sub_0b701e`,
-`wlc_phy_cmn.c`; a zero measurement becomes -92 dBm). **If the PHY type is AC
-(`pi+0x160` = 0xb) and (`pi+0x18f` = 4 or `pi_ac+0x41 != 0`): it calls
-`wlc_phy_crs_min_pwr_cal_acphy(pi, 0)` (C1).** That is the only path that runs
-the calibration with a fresh measurement: either the sample was requested for
-the calibration (reason 4, C4) or the "keep calibrating" flag `pi_ac+0x41` is
-set. The rest of the function stores the per-core noise into the `pi`-level
-noise ring and is `wlc_phy_cmn.c`'s business.
+`SHM(0x30a + 4*c)` (high). **Only if the sum of the powers is not 0**, it
+converts them (`sub_0b701e`, N2: per-core dBm = `compute_dB(power >> 9) - 104`,
+and `pi_ac+0x14+c` = `compute_dB(power >> 9) - 37`, the input of C1) and then,
+**if the PHY type is AC (`pi+0x160` = 0xb) and (`pi+0x18f` = 4 or
+`pi_ac+0x41 != 0`): it calls `wlc_phy_crs_min_pwr_cal_acphy(pi, 0)` (C1).** That
+is the only path that runs the calibration with a fresh measurement: either
+the sample was requested for the calibration (reason 4, C4) or the last
+reason-4 request was refused (`pi_ac+0x41`, which is the usual state while
+associated: the watchdog's reason-1 request is accepted first in each tick and
+the reason-4 request of `sub_09737d` is refused right after). (Corrected by
+phy-noise: the first version had a zero measurement become -92 per core and
+no "sum not 0" condition; a core with power 0 becomes -104 when another core
+measured something.)
 
 The model never delivers the "noise measurement done" interrupt, so this
-trigger is not reached in a traced watchdog run; C1 was verified by calling it
-directly (see C1).
+trigger is not reached in a traced watchdog run. It is reached when the
+interrupt handler `wlc_phy_noise_sample_intr` is called (the soak,
+`tools/re/phy_soak.py`, step `noise`), and also from **`wlc_phy_noise_avg`**,
+i.e. from every `WLC_GET_PHY_NOISE` ioctl, which reads the result words again
+through `wlc_phy_noise_sample_acphy` (N6, N7). (Observed by phy-noise.)
 
 #### C4. wlc_phy_noise_sample_request_crsmincal (.text+0x0bb8d1, name original)
 
 `wlc_phy_noise_sample_request_crsmincal(pi)` = `sub_0baff6(pi, 4, low byte of
 pi+0x17e)`: request a noise sample with reason 4 (the reason that C3 turns into
 a calibration) for the current channel. `sub_0baff6` (`wlc_phy_cmn.c`, the
-watchdog's noise-request helper, out of scope here) clears the per-core result
-words `SHM(0x308..0x312)` and pokes `D11(0x124)` to start the measurement (seen
-in the watchdog trace). Callers of the request: `wlc_phy_cals_acphy` and
-`sub_09737d` (the periodic calibration path).
+common request, acphy-api-rx.md N8) - **if no sample is pending** - sets bit 2
+of `pi+0x18f`, clears the per-core result words `SHM(0x308..0x312)` and sets
+bit 4 of `D11(0x124)` to start the measurement; if a sample is pending it only
+sets `pi_ac+0x41` = 1 (corrected by phy-noise: the first version had the
+accesses unconditional). Callers of the request: `wlc_phy_cals_acphy` (in the
+phases 0 and 0x11 of its schedule - the byte at offset 1 of the calibration
+state that `pi+0xf58` points to, acphy-cal-tx; it sets
+`pi_ac+0x33d` = 1 first, so the next calibration updates every core's
+reference) and `sub_09737d` (the AC watchdog callback, every tick while
+`pi_ac+0x33c` is set), both only if `pi_ac+0x33c` (calibration enabled) is
+set.
 
 #### C5. wlc_phy_ed_thres_acphy (.text+0x0912a6, name original)
 
@@ -703,12 +737,62 @@ cores, synthetic 2x2 SROM.
 | Noise-sample request | `run wd0` : `sub_0baff6` in the tick | writes `SHM(0x308..0x312)` (the per-core result words C3 reads) and `D11(0x124)`; the CRS cal is not reached because the model delivers no "noise done" interrupt |
 | R3 desense-apply `on != 0` | reached by forcing a desense change through E1's minimum-level branch (`sub_0909fd`/`sub_0998cc` re-run observed) | `sub_09a539`'s `on != 0` steps run as A7 describes |
 
+## Corrections (phy-noise, 2026-11-02)
+
+Found while specifying the noise path with real noise
+(acphy-api-rx.md "Noise, completed"); the text of C1, C3, C4 and of the Data
+tables above was corrected in place, each place marked "corrected by
+phy-noise". In short:
+
+1. **C1 step 3.1, the early return of the calibrate path**: it returns when
+   **no core's reference changed** (no `|r - average| >= 3` and no force flag),
+   not when no core was processed. In that case nothing is programmed and
+   `pi_ac+0x33e/0x42/0x43/0x44/0x3d..` keep their values. This is the normal
+   case in a steady noise environment: the thresholds are reprogrammed only
+   when a core's averaged noise moved by 3 dB or more from its reference
+   (or after a full calibration, which sets the force flag `pi_ac+0x33d`).
+2. **C1 step 2.1**: the "ring empty" test looks at ring **slot 0** (fixed
+   position), and its failure returns from the whole function (after the
+   push and after the reference updates of the cores already done).
+3. **The input `pi_ac+0x14 + c`** is written by `sub_0b701e` (acphy-api-rx.md
+   N2): `compute_dB(power >> 9) - 37` = noise dBm + 67. The pushed ring value
+   is that + 1; the averages, references and indices are in that unit.
+   Consequently the step from noise to register is: noise dBm `n` ->
+   ring value `n + 68` -> average `a` -> index `a + 0x22 / 0x21 / 0x1e`
+   (20/40/80 MHz) clamped to 0..14 -> table byte -> `PHY(0x321..0x336)` low
+   bytes (core 0), and the difference to core 0 in both bytes of
+   `PHY(0x910..0x913)` (core 1) / `PHY(0xb10..0xb13)` (core 2).
+4. **`pi_ac+0x41`** is the "reason-4 request refused" flag of `sub_0baff6`,
+   not an enable; with it the calibration runs on (nearly) every noise reading
+   while associated.
+5. **C3/C4**: the conversion to dBm, the "sum not 0" condition, the
+   conditional (pending-gated) request accesses, and the second trigger path
+   through `wlc_phy_noise_avg` / `WLC_GET_PHY_NOISE`.
+6. **Constants**: the default reference -30 maps to 54 at 20 MHz only (56 at
+   40 MHz, 57 at 80 MHz).
+
+Verified (phy-noise, harness `re-out/analysis/phy-noise/cmp.py` against the
+independent model `model.py`): 36,300 random cases on the object alone - noise
+interrupt, `wlc_phy_noise_avg`, `WLC_GET_PHY_NOISE` through `wlc_phy_ioctl`,
+and C1 called directly with `restore` 0 and 1,
+two and three cores, every rx chain mask, 25 chanspecs of all five sub-bands
+and three bandwidths, random references, ring, force and desense flags and
+threshold register contents - with 0 differences in every compared field
+(the ring, index, references of all sub-bands, `pi_ac+0x3d..0x44`,
+`+0x33d/+0x33e`, the final values of the 24 threshold registers, the MAC
+suspends). The C1 exits seen: applied, deferred (desense on), "no change",
+"ring slot 0 empty" (each several hundred times). The first version's exit
+rule (and its "push 1") make the same comparison fail (self-test of the
+harness). On the soak's own sequence (`soakcheck.py`, all 150 steps of
+`tools/re/phy_soak.py`, synthetic board and seven board variants, two of them
+with one receive chain) the 42 restore calls of the channel changes and the
+calibrations inside the 18 noise readings match the model as well (480 calls,
+0 differences).
+
 ## Open questions
 
-* The writer of `pi_ac+0x14+c` (the per-core input the CRS calibration averages)
-  was not located; it reads 0 in the model. With a real, non-zero measurement
-  the calibration would pick a lower index of the CRS tables and a lower
-  minimum power than the 0x50/0x4c/0x43 the model produces.
+* (Answered by phy-noise: the writer of `pi_ac+0x14+c` is `sub_0b701e`, see
+  "Corrections (phy-noise)".)
 * The meaning of the carrier-sense registers `PHY(0x321..0x336)` (four
   low-byte/high-byte pairs written by `sub_08f41b`/`sub_08f84d`) and
   `PHY(0x910..0x913)`, and of the energy-detect registers `PHY(0x33a..0x349)`,
