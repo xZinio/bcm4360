@@ -454,3 +454,21 @@ take si_tcm_size
 # adapter's
 take dma_attach
 take dma_addrwidth
+
+# --- chanspecs and channel validity (hybrid/chan.c -> open/lib/channel.c,
+# docs/re/spec/channel.md, switch open_chan): the helpers of bcmwifi_channels.c
+# and the validity checks of wlc_channel.c (the stripped sub_06faf3/sub_06fa51
+# are reached only through wlc_valid_chanspec and wlc_valid_chanspec_db)
+take wf_chspec_malformed
+take wf_chspec_ctlchan
+take wf_chspec_ctlchspec
+take wf_chspec_primary40_chspec
+take wf_chspec_80
+take wf_channel2mhz
+take wlc_valid_channel20_in_band
+take wlc_valid_channel20
+take wlc_valid_channel20_db
+take wlc_valid_40chanspec_in_band
+take wlc_valid_80chanspec_in_band
+take wlc_valid_chanspec
+take wlc_valid_chanspec_db

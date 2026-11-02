@@ -99,5 +99,6 @@ extern bool bcm4360_open_ppr;
 extern bool bcm4360_open_srom;
 extern bool bcm4360_open_si;
 extern bool bcm4360_open_dma;
+extern bool bcm4360_open_chan;
 
 #endif

@@ -42,7 +42,8 @@ ROOT = ab.ROOT
 OUT = os.environ.get('HYBRID_OUT') or os.path.join(ROOT, 're-out', 'hybrid')
 BLOB = os.path.join(ROOT, 'lib', 'wlc_hybrid.o_shipped')
 CORE = os.path.join(OUT, 'core.o')
-LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils', 'clm', 'ppr', 'srom', 'si', 'dma')   # the switches bcm4360_open_<layer>
+LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils', 'clm', 'ppr', 'srom', 'si', 'dma',
+          'chan')   # the switches bcm4360_open_<layer>
 
 CHANNELS = ['1', '6', '11', '36', '36/40', '36/80', '149/80', '157/40', '165']
 SESSION = (['attach', 'mpc 0', 'up'] + CHANNELS +
@@ -388,7 +389,10 @@ def selftest():
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('cmd', choices=('build', 'check', 'share', 'selftest', 'srom'))
+    ap.add_argument('cmd', choices=('build', 'check', 'share', 'selftest', 'srom', 'chan'))
+    ap.add_argument('--model', action='store_true',
+                    help='chan: compare the object with the Python model of the specification '
+                         '(coordinator) instead of the hybrid core')
     ap.add_argument('--off', default='', help='layers to switch off: ' + ', '.join(LAYERS))
     ap.add_argument('--on', default='', help='layers to switch on: ' + ', '.join(LAYERS))
     ap.add_argument('--show', type=int, default=20)
@@ -405,6 +409,9 @@ def main():
     on = [x for x in ns.on.split(',') if x]
     if ns.cmd == 'srom':
         return 1 if srom_check(off, ns.show, on=on) else 0
+    if ns.cmd == 'chan':
+        import chan_scenarios
+        return 1 if chan_scenarios.chan_check(off, ns.show, on=on, model=ns.model) else 0
     return 1 if check(off, ns.show, on=on) else 0
 
 
