@@ -11,10 +11,9 @@
  * register access, docs/re/spec/access.md; for chip 0x4360, AC-PHY revision 0
  * or 1 and radio 2069 major revision 0 (revisions 3 or 4), two cores.
  *
- * Measurements read 0 in the model, so the compensation coefficients compute to
- * zero and some polls run to their bounded time-out; that is expected. What the
- * comparison test checks is the deterministic sequence of commands and register
- * writes.
+ * The receive calibration follows acphy-cal-rx.md X1 to X10 (every bandwidth
+ * and band, any measured values); some polls run to their bounded time-out in
+ * the model, which is expected.
  *
  * The notation PHY(a), RADIO(a), TBL(id)[i], SHM(o), D11(o) and mod() in the
  * comments is the one of access.md.
@@ -458,65 +457,125 @@ static u16 tempsense_w(struct bcm4360_phy *phy)
 /* --------------------------------------------------------------- cordic */
 
 /*
- * acphy-cal-tx section 13 (wlc_phy_cordic): a cosine/sine pair for an angle in
- * Q16 degrees (0x1680000 per full turn), 18-iteration rotation-mode CORDIC,
- * output magnitude ~2^16 (gain seed 0x9b75 = round(2^16 / K), K the CORDIC
- * gain). The arctan table is atan(2^-i) scaled to the angle unit (derived, not
- * taken from the object). The algorithm is standard; its unspecified details
- * were confirmed against the test (see docs/re/questions/phy-cal.md).
+ * acphy-cal-rx.md X3: the integer helpers of wlc_phy_cmn.c. Angles are in
+ * 1/65536 degree (0x1680000 = 360 degrees); T[] is the arctangent table of
+ * .rodata+0x2ce950, atan(2^-i) in that unit.
  */
 #define CORDIC_ITERS		18
 #define CORDIC_SEED		0x9b75
 #define CORDIC_FIX360		0x1680000
 #define CORDIC_FIX180		0x0b40000
-#define CORDIC_FIX90		0x05a0000
+#define CORDIC_DEG90		90
 
 static const s32 cordic_atan[CORDIC_ITERS] = {
-	2949120, 1740967, 919879, 466945, 234379, 117304,
-	58666, 29335, 14668, 7334, 3667, 1833,
-	917, 458, 229, 115, 57, 29,
+	0x2d0000, 0x1a90a7, 0x0e0947, 0x072001, 0x03938b, 0x01ca38, 0x00e52a,
+	0x007297, 0x00394c, 0x001ca6, 0x000e53, 0x000729, 0x000395, 0x0001ca,
+	0x0000e5, 0x000073, 0x000039, 0x00001d,
 };
 
+/* a 32-bit left shift of a signed value, by the count modulo 32 (X3, "Conventions") */
+static s32 shl32(s32 v, s32 n)
+{
+	return (s32)((u32)v << (n & 31));
+}
+
+/* an arithmetic right shift by the count modulo 32 */
+static s32 sar32(s32 v, s32 n)
+{
+	return v >> (n & 31);
+}
+
+/* X3, wlc_phy_nbits: the number of significant bits of |x| (|-2^31| stays negative: 0) */
+static s32 phy_nbits(s32 x)
+{
+	s32 a = (s32)((x < 0) ? (0u - (u32)x) : (u32)x);
+	s32 n = 0;
+
+	while ((a >> n) > 0)
+		n++;
+	return n;
+}
+
+/* X3, wlc_phy_sqrt_int: the square root of v rounded to the nearest integer */
+static u32 phy_sqrt_int(u32 v)
+{
+	u32 r = 0, bit = 1u << 30;
+
+	while (bit) {
+		if (v >= r + bit) {
+			v -= r + bit;
+			r = (r >> 1) | bit;
+		} else {
+			r >>= 1;
+		}
+		bit >>= 2;
+	}
+	return v > r ? r + 1 : r;
+}
+
+/*
+ * X3 / acphy-cal-tx section 13 (wlc_phy_cordic): the sine (*i_out, about
+ * 65536 sin theta) and cosine (*q_out) of theta.
+ */
 static void phy_cordic(s32 theta, s32 *i_out, s32 *q_out)
 {
-	s32 sign = (theta < 0) ? -1 : 1;
-	s32 angle = (((theta % CORDIC_FIX360) + CORDIC_FIX180 * sign) % CORDIC_FIX360)
-		    - CORDIC_FIX180 * sign;
-	s32 x, y;
-	s32 signx = 1;
-	u32 k;
+	s32 s = (theta < 0) ? -1 : 1;
+	s32 t = ((s32)((u32)theta + (u32)(s * CORDIC_FIX180)) % CORDIC_FIX360)
+		- s * CORDIC_FIX180;							/* 1 */
+	s32 d, sign = 1, x = CORDIC_SEED, y = 0, z = 0;
+	u32 i;
 
-	if (angle > CORDIC_FIX90) {
-		angle -= CORDIC_FIX180;
-		signx = -1;
-	} else if (angle < -CORDIC_FIX90) {
-		angle += CORDIC_FIX180;
-		signx = -1;
+	d = (t >= 0) ? ((t >> 15) + 1) >> 1 : -((((-t) >> 15) + 1) >> 1);		/* 2 */
+	if (d > CORDIC_DEG90) {								/* 3 */
+		t -= CORDIC_FIX180;
+		sign = -1;
+	} else if (t < 0 && d < -CORDIC_DEG90) {
+		t += CORDIC_FIX180;
+		sign = -1;
 	}
+	for (i = 0; i < CORDIC_ITERS; i++) {						/* 4 */
+		s32 xn, yn;
 
-	x = CORDIC_SEED;
-	y = 0;
-	for (k = 0; k < CORDIC_ITERS; k++) {
-		s32 xt;
-
-		if (angle >= 0) {
-			xt = x - (y >> k);
-			y = (x >> k) + y;
-			angle -= cordic_atan[k];
+		if (t > z) {
+			z += cordic_atan[i];
+			xn = x - (y >> i);
+			yn = y + (x >> i);
 		} else {
-			xt = x + (y >> k);
-			y = -(x >> k) + y;
-			angle += cordic_atan[k];
+			z -= cordic_atan[i];
+			xn = x + (y >> i);
+			yn = y - (x >> i);
 		}
-		x = xt;
+		x = xn;
+		y = yn;
 	}
-	/*
-	 * The AC-PHY convention (confirmed against the test): the seed sits in the
-	 * cosine register (x), the outputs are I = sine (y) and Q = cosine (x), and
-	 * the magnitude is ~2^16 (the seed 0x9b75 = round(2^16 / K)).
-	 */
-	*i_out = y * signx;
-	*q_out = x * signx;
+	*i_out = sign * y;								/* 5 */
+	*q_out = sign * x;
+}
+
+/* X3, wlc_phy_inv_cordic: the angle of the vector (x, y), x > 0 */
+static s32 phy_inv_cordic(s32 x, s32 y)
+{
+	s32 z = 0;
+	u32 i;
+
+	x = shl32(x, 4);
+	y = shl32(y, 4);
+	for (i = 0; i < CORDIC_ITERS; i++) {
+		s32 xn, yn;
+
+		if (y < 0) {
+			z -= cordic_atan[i];
+			xn = x - (y >> i);
+			yn = y + (x >> i);
+		} else {
+			z += cordic_atan[i];
+			xn = x + (y >> i);
+			yn = y - (x >> i);
+		}
+		x = xn;
+		y = yn;
+	}
+	return z;
 }
 
 /* round(amp * v / 2^16), round toward nearest, halves toward zero (section 12) */
@@ -825,25 +884,56 @@ static void txcal_gainlut_load(struct bcm4360_phy *phy, u16 scale)
 }
 
 /*
+ * acphy-cal-tx section 19 (wlc_phy_populate_tx_loft_comp_tbl_acphy): the
+ * thresholds T, the byte deltas HI / LO by k = 4c + 2 flag + (i <= T[c + 3
+ * flag]), and the channels from which a core counts as "high" (L).
+ */
+#define LOFT_ENTRIES		128
+#define LOFT_RADIO_SKIP		0x30b	/* radio id without the tables */
+#define LOFT_TBL_STEP		0x20	/* TBL(0x42), 0x62, 0x82 for cores 0, 1, 2 */
+
+static const u8 loft_thresh[6] = { 0x80, 0x80, 0x20, 0x80, 0x1a, 0x1c };
+static const u8 loft_hi[12] = { 0, 0, 0, 0, 0, 0, 0xec, 0xf6, 0xf6, 0xf8, 0xf6, 0xfa };
+static const u8 loft_lo[12] = { 0, 0, 0, 0, 0, 0, 0, 0xfb, 0xf2, 0xfc, 0xf6, 0xfb };
+static const u8 loft_high_chan[BCM4360_PHY_CORES_MAX] = { 200, 149, 100 };
+
+/*
  * acphy-cal-tx section 19 (wlc_phy_populate_tx_loft_comp_tbl_acphy): fill the
- * per-core LO-feedthrough tables with the calibrated LO-comp words. 2.4 GHz: the
- * whole table is the word; only for radio id != 0x30b (true for the 2069).
+ * per-core LO-feedthrough tables with the calibrated LO-comp words d[c]; at
+ * 5 GHz cores 1 and 2 get a per-entry delta added byte by byte. Only for radio
+ * id != 0x30b (true for the 2069).
  */
 static void txcal_populate_loft(struct bcm4360_phy *phy, const u16 *d)
 {
 	struct bcm4360_phy_io *io = &phy->io;
+	u32 n = min(phy_cores(phy), (u32)BCM4360_PHY_CORES_MAX);
+	u8 ch = (u8)(phy->radio_chanspec & 0xff);
+	bool is5g = (phy->radio_chanspec & BCM4360_CHANSPEC_BAND) != BCM4360_CHANSPEC_BAND_2G;
+	u8 flag[BCM4360_PHY_CORES_MAX] = { 0 };
 	u16 bracket;
 	u32 c, i;
 
-	if (phy->ver.radio_id == 0x30b)
+	if (phy->ver.radio_id == LOFT_RADIO_SKIP)
 		return;
 
-	bracket = tbl_bracket_enter(io);
-	/* the object writes the per-core tables interleaved by index */
-	for (i = 0; i < 128; i++)
-		for (c = 0; c < phy_cores(phy); c++)
-			tbl_write16(io, TBL_LOFT_CORE0 + c * 0x20, i, d[c]);
-	tbl_bracket_leave(io, bracket);
+	bracket = tbl_bracket_enter(io);				/* 1 */
+	for (c = 0; c < n; c++)						/* 2 */
+		flag[c] = loft_high_chan[c] <= ch;
+	for (i = 0; i < LOFT_ENTRIES; i++) {				/* 3 */
+		for (c = 0; c < n; c++) {
+			u16 v = d[c];
+
+			if (c > 0 && is5g) {
+				u32 k = 4 * c + 2 * flag[c] +
+					(i <= loft_thresh[c + 3 * flag[c]] ? 1 : 0);
+
+				v = (u16)((((v >> 8) + loft_hi[k]) & 0xff) << 8 |
+					  (((v & 0xff) + loft_lo[k]) & 0xff));
+			}
+			tbl_write16(io, TBL_LOFT_CORE0 + c * LOFT_TBL_STEP, i, v);
+		}
+	}
+	tbl_bracket_leave(io, bracket);					/* 4 */
 }
 
 /* the per-core loopback overrides applied in section 15 A.6 (mod reg, mask, val) */
@@ -980,19 +1070,19 @@ static u32 phy_cal_txiqlo(struct bcm4360_phy *phy, u8 sm, u8 mphase, u8 part)
 	bcm4360_phy_write(io, ACPHY_REG_0x382, CAL_ENGINE_ARM);	/* A.9 */
 
 	/*
-	 * B. Seed the coefficients: the intermediate area cal+0x2c from zero
-	 * (sm = 0) or from the final results cal+4 (sm = 1), then the start
-	 * values a,b (selection 0) and, for part 0, d, e, f (selections 1, 2, 3)
-	 * from it. The specification has this "only while cal[1] < 3"; the soak
-	 * shows it in every phase of the multi-phase sequence
-	 * (docs/re/questions/phy-soak.md, Q6).
+	 * B, as corrected (phy-calrx5g): while cal[1] < 3 the intermediate area
+	 * cal+0x2c is loaded from zero (sm = 0) or from the final results cal+4
+	 * (sm = 1); later phases keep it as it is. In every call the start values
+	 * a,b (selection 0) and, for part 0, d, e, f (selections 1, 2, 3) are
+	 * written from it.
 	 */
 	for (c = 0; c < n; c++) {
 		u16 *v = st->coef_inter[c];
 		u32 k;
 
-		for (k = 0; k < BCM4360_CAL_COEFFS; k++)
-			v[k] = sm ? st->coef_final[c][k] : 0;
+		if (st->phase < 3)
+			for (k = 0; k < BCM4360_CAL_COEFFS; k++)
+				v[k] = sm ? st->coef_final[c][k] : 0;
 		phy_cal_coeffs(phy, 1, &v[0], 0, c);
 		if (part == 0) {
 			phy_cal_coeffs(phy, 1, &v[2], 1, c);
@@ -1139,61 +1229,125 @@ static bool phy_is_2g(const struct bcm4360_phy *phy)
 	return (phy->radio_chanspec & BCM4360_CHANSPEC_BAND) == BCM4360_CHANSPEC_BAND_2G;
 }
 
+/* wlc_phy_rx_iq_est_acphy steps 4a/4b: start the estimate and wait for it (SPINWAIT 10 ms) */
+static void phy_rx_iq_est_run(struct bcm4360_phy_io *io)
+{
+	u32 cd = 10000 + 9;
+
+	bcm4360_phy_mod(io, ACPHY_REG_0x270, 0x0001, 0x0001);
+	while ((bcm4360_phy_read(io, ACPHY_REG_0x270) & 0x0001) && cd >= 10) {
+		hw_udelay(10);
+		cd -= 10;
+	}
+}
+
+/* step 4c: core c's three sums {I*Q, I^2, Q^2}, high words first */
+static void phy_rx_iq_est_read(struct bcm4360_phy_io *io, s32 *rec, u32 c)
+{
+	u32 o = c * ACPHY_CORE_STEP;
+
+	rec[1] = (s32)(((u32)bcm4360_phy_read(io, ACPHY_REG_0x6c3 + o) << 16)
+		       | bcm4360_phy_read(io, ACPHY_REG_0x6c2 + o));
+	rec[2] = (s32)(((u32)bcm4360_phy_read(io, ACPHY_REG_0x6c5 + o) << 16)
+		       | bcm4360_phy_read(io, ACPHY_REG_0x6c4 + o));
+	rec[0] = (s32)(((u32)bcm4360_phy_read(io, ACPHY_REG_0x6c1 + o) << 16)
+		       | bcm4360_phy_read(io, ACPHY_REG_0x6c0 + o));
+}
+
+/* X7 step 1: the four front-end registers of a core that is not measured */
+static const u16 iq_est_iso_regs[4] = {
+	ACPHY_REG_0x720, ACPHY_REG_0x728, ACPHY_REG_0x721, ACPHY_REG_0x729,
+};
+
+/*
+ * acphy-cal-rx.md X7 (step 5 of wlc_phy_rx_iq_est_acphy): measure the cores one
+ * after the other, the other present cores' front ends forced meanwhile.
+ */
+static void phy_rx_iq_est_isolated(struct bcm4360_phy *phy, s32 (*est)[3])
+{
+	struct bcm4360_phy_io *io = &phy->io;
+	u32 n = phy_cores(phy), c, d, k;
+
+	for (c = 0; c < n; c++) {
+		u16 addr[BCM4360_PHY_CORES_MAX * 4], val[BCM4360_PHY_CORES_MAX * 4];
+		u32 saved = 0;
+
+		for (d = 0; d < n; d++) {				/* 1 */
+			u16 o = (u16)(d * ACPHY_CORE_STEP);
+
+			if (d == c || !(phy->rxchain & (1u << d)))
+				continue;
+			for (k = 0; k < 4; k++) {
+				addr[saved + k] = iq_est_iso_regs[k] + o;
+				val[saved + k] = bcm4360_phy_read(io, addr[saved + k]);
+			}
+			saved += 4;
+			bcm4360_phy_mod(io, ACPHY_REG_0x720 + o, 0x0001, 0x0001);
+			bcm4360_phy_mod(io, ACPHY_REG_0x728 + o, 0x0001, 0);
+			bcm4360_phy_mod(io, ACPHY_REG_0x721 + o, 0x0004, 0x0004);
+			bcm4360_phy_mod(io, ACPHY_REG_0x729 + o, 0x0002, 0);
+		}
+		hw_udelay(1);						/* 2 */
+		phy_rx_iq_est_run(io);
+		while (saved--)						/* 3 */
+			bcm4360_phy_write(io, addr[saved], val[saved]);
+		if (!(bcm4360_phy_read(io, ACPHY_REG_0x270) & 0x0001))	/* 4 */
+			phy_rx_iq_est_read(io, est[c], c);
+	}
+}
+
 /*
  * acphy-cal-rx (wlc_phy_rx_iq_est_acphy): run the RX IQ-estimate accumulator for
- * `samples` samples and read back the per-core power sums {I*Q, I^2, Q^2}. The
- * model now clears the done bit (PHY(0x270) bit 0), so the poll terminates and
- * the accumulator read runs (the accumulators read 0). The gain-change branch
- * ((g & gain_change) != 0) is not taken on this board.
+ * `samples` samples and read back the per-core power sums {I*Q, I^2, Q^2}; with
+ * `gain_change` set and the band's byte pi_ac+0x900 / 0x901 allowing it, the
+ * cores one after the other (X7).
  */
 static void phy_rx_iq_est(struct bcm4360_phy *phy, s32 (*est)[3], u16 samples,
 			  u8 wait, u8 settle, u8 gain_change)
 {
 	struct bcm4360_phy_io *io = &phy->io;
 	u8 g = phy_is_2g(phy) ? phy->cal.acphy_0x900 : phy->cal.acphy_0x901;
-	u32 c, cd;
+	u32 c;
 
 	phy_gain_pulse(phy);					/* step 2 */
 	bcm4360_phy_write(io, ACPHY_REG_0x272, samples);	/* step 3 */
 	bcm4360_phy_mod(io, ACPHY_REG_0x271, 0x00ff, wait);
 	bcm4360_phy_mod(io, ACPHY_REG_0x270, 0x0002, (u16)((settle * 2) & 0x1fe));
 
-	if ((g & gain_change) != 0)
+	if ((g & gain_change) != 0) {				/* step 5 (X7) */
+		phy_rx_iq_est_isolated(phy, est);
 		return;
-	bcm4360_phy_mod(io, ACPHY_REG_0x270, 0x0001, 0x0001);	/* step 4a: start */
-	cd = 10000 + 9;						/* step 4b: SPINWAIT 10 ms */
-	while ((bcm4360_phy_read(io, ACPHY_REG_0x270) & 0x0001) && cd >= 10) {
-		hw_udelay(10);
-		cd -= 10;
 	}
-	if (!(bcm4360_phy_read(io, ACPHY_REG_0x270) & 0x0001)) {	/* step 4c */
-		for (c = 0; c < phy_cores(phy); c++) {
-			u32 o = c * ACPHY_CORE_STEP;
-
-			est[c][1] = (s32)(((u32)bcm4360_phy_read(io, ACPHY_REG_0x6c3 + o) << 16)
-					  | bcm4360_phy_read(io, ACPHY_REG_0x6c2 + o));
-			est[c][2] = (s32)(((u32)bcm4360_phy_read(io, ACPHY_REG_0x6c5 + o) << 16)
-					  | bcm4360_phy_read(io, ACPHY_REG_0x6c4 + o));
-			est[c][0] = (s32)(((u32)bcm4360_phy_read(io, ACPHY_REG_0x6c1 + o) << 16)
-					  | bcm4360_phy_read(io, ACPHY_REG_0x6c0 + o));
-		}
-	}
+	phy_rx_iq_est_run(io);					/* steps 4a, 4b */
+	if (!(bcm4360_phy_read(io, ACPHY_REG_0x270) & 0x0001))	/* step 4c */
+		for (c = 0; c < phy_cores(phy); c++)
+			phy_rx_iq_est_read(io, est[c], c);
 }
 
 /*
- * acphy-cal-rx (sub_094b1a, wlc_phy_rxcal_radio_setup_acphy): radio TX->RX
- * loopback. The 4360 saves 0x20,0x21,0x22,0x23,0x3a,0x3d and writes 0, then on
- * 2.4 GHz applies the overrides via 0x22/0x3a/0x20 (rev 4: mask-4 bit -> 0).
+ * acphy-cal-rx X10 (sub_094b1a, wlc_phy_rxcal_radio_setup_acphy): radio TX->RX
+ * loopback. The 4360 saves 0x20,0x21,0x22,0x23,0x3a,0x3d and writes 0, then
+ * applies the overrides via 0x22/0x3a/0x20 (2.4 GHz) or 0x23/0x3d/0x21 (5 GHz).
  */
 static const u16 rxcal_radio_regs[6] = {
 	R2069_REG_0x020, R2069_REG_0x021, R2069_REG_0x022, R2069_REG_0x023,
 	R2069_REG_0x03a, R2069_REG_0x03d,
 };
 
+/* X10: the radio revisions that take the first pair of mods on 0x20 / 0x21 */
+static bool rxcal_radio_rev_low(u8 rev)
+{
+	return rev == 2 || rev == 3 || rev == 4 || rev == 8 || rev == 0x12 || rev == 0x18 ||
+	       rev == 0x1a || rev == 0x22;
+}
+
 static void phy_rxcal_radio_setup(struct bcm4360_phy *phy, u16 save[][6])
 {
 	struct bcm4360_phy_io *io = &phy->io;
 	bool is5g = !phy_is_2g(phy);
+	u16 mix = is5g ? R2069_REG_0x023 : R2069_REG_0x022;
+	u16 aux = is5g ? R2069_REG_0x03d : R2069_REG_0x03a;
+	u16 ctl = is5g ? R2069_REG_0x021 : R2069_REG_0x020;
 	u32 c, i;
 
 	phy->cal.rxcal_loopback = 1;
@@ -1204,37 +1358,30 @@ static void phy_rxcal_radio_setup(struct bcm4360_phy *phy, u16 save[][6])
 			save[c][i] = bcm4360_radio_read(io, rxcal_radio_regs[i] | b);
 		for (i = 0; i < 6; i++)
 			bcm4360_radio_write(io, rxcal_radio_regs[i] | b, 0);
-		if (!is5g) {
-			/* 2.4 GHz: registers 0x22 (mixer/loopback), 0x3a, 0x20 */
-			bcm4360_radio_mod(io, R2069_REG_0x022 | b, 0x0100, 0);
-			bcm4360_radio_mod(io, R2069_REG_0x03a | b, 0x0010, 0);
-			bcm4360_radio_mod(io, R2069_REG_0x022 | b, 0x0020, 0);
-			bcm4360_radio_mod(io, R2069_REG_0x022 | b, 0x0004, 0);
-			bcm4360_radio_mod(io, R2069_REG_0x020 | b, 0x0100, 0);
-			bcm4360_radio_mod(io, R2069_REG_0x020 | b, 0x0004, 0x0004);
-			bcm4360_radio_mod(io, R2069_REG_0x022 | b, 0x0200, 0x0200);
-			bcm4360_radio_mod(io, R2069_REG_0x022 | b, 0x0080, 0x0080);
-			bcm4360_radio_mod(io, R2069_REG_0x020 | b, 0x0003, 0);
-			bcm4360_radio_mod(io, R2069_REG_0x022 | b, 0x0006, 0);
+		/*
+		 * X10: 2.4 GHz on 0x22 (mixer/loopback), 0x3a, 0x20; 5 GHz the
+		 * same on 0x23, 0x3d, 0x21, with the loopback pair by PHY revision
+		 */
+		bcm4360_radio_mod(io, mix | b, 0x0100, 0);
+		bcm4360_radio_mod(io, aux | b, 0x0010, 0);
+		bcm4360_radio_mod(io, mix | b, 0x0020, 0);
+		bcm4360_radio_mod(io, mix | b, 0x0040, 0);
+		if (rxcal_radio_rev_low(phy->ver.radio_rev)) {
+			bcm4360_radio_mod(io, ctl | b, 0x0020, 0);
+			bcm4360_radio_mod(io, ctl | b, 0x0004, 0x0004);
 		} else {
-			/*
-			 * 5 GHz: registers 0x23, 0x3d, 0x21. As the soak shows
-			 * (docs/re/questions/phy-soak.md, Q2): bit 0 of 0x23 is set
-			 * before the loopback enable 0x200, and there is no 0x80 mod.
-			 * The register is 0 at that point, so the mask of the bit-0
-			 * mod is not observable; 0x1 is taken.
-			 */
-			bcm4360_radio_mod(io, R2069_REG_0x023 | b, 0x0100, 0);
-			bcm4360_radio_mod(io, R2069_REG_0x03d | b, 0x0010, 0);
-			bcm4360_radio_mod(io, R2069_REG_0x023 | b, 0x0020, 0);
-			bcm4360_radio_mod(io, R2069_REG_0x023 | b, 0x0004, 0);
-			bcm4360_radio_mod(io, R2069_REG_0x021 | b, 0x0100, 0);
-			bcm4360_radio_mod(io, R2069_REG_0x021 | b, 0x0004, 0x0004);
-			bcm4360_radio_mod(io, R2069_REG_0x023 | b, 0x0001, 0x0001);
-			bcm4360_radio_mod(io, R2069_REG_0x023 | b, 0x0200, 0x0200);
-			bcm4360_radio_mod(io, R2069_REG_0x021 | b, 0x0003, 0);
-			bcm4360_radio_mod(io, R2069_REG_0x023 | b, 0x0006, 0);
+			bcm4360_radio_mod(io, ctl | b, 0x0020, 0x0020);
+			bcm4360_radio_mod(io, ctl | b, 0x0004, 0);
 		}
+		if (is5g && phy->ver.phy_rev != 0) {
+			bcm4360_radio_mod(io, mix | b, 0x0001, 0x0001);
+			bcm4360_radio_mod(io, mix | b, 0x0200, 0x0200);
+		} else {
+			bcm4360_radio_mod(io, mix | b, 0x0200, 0x0200);
+			bcm4360_radio_mod(io, mix | b, 0x0080, 0x0080);
+		}
+		bcm4360_radio_mod(io, ctl | b, 0x0003, 0);
+		bcm4360_radio_mod(io, mix | b, 0x0006, 0);
 	}
 }
 
@@ -1253,24 +1400,69 @@ static void phy_rxcal_radio_restore(struct bcm4360_phy *phy, u16 save[][6])
 	}
 }
 
+/* the angle of a sine term s (X4 step 6, X5 step 2.3): inv_cordic(2 sqrt(1 - (s/2)^2), s) */
+static s32 phy_asin_term(s32 s)
+{
+	s32 h = s >> 1;
+	u32 c = phy_sqrt_int(0x40000000u - (u32)h * (u32)h);	/* 32-bit arithmetic */
+
+	return phy_inv_cordic((s32)(2 * c), s);
+}
+
+/* X4 steps 7 and 8: the shift of a value for a scale of m bits around 10 */
+static s32 phy_scale_m(s32 v, s32 m)
+{
+	return m > 10 ? sar32(v, m - 10) : shl32(v, 10 - m);
+}
+
+/* nbits rounded up to even (X4 step 7, X5 step 2.2) */
+static s32 phy_nbits_even(s32 v)
+{
+	s32 m = phy_nbits(v);
+
+	return m + (m & 1);
+}
+
 /*
- * acphy-cal-rx (sub_097809, wlc_phy_calc_iqcc_acphy): from {I*Q, I^2, Q^2}
- * compute {angle, gainratio(Q10), sinterm}. In the model every power reads 0,
- * so this returns {0, 0x400, 0}; that is what feeds the regression. (No register
- * access; the general non-zero arithmetic is documented in the spec.)
+ * acphy-cal-rx X4 (sub_097809, wlc_phy_calc_iqcc_acphy): from {I*Q, I^2, Q^2}
+ * compute {angle, gain ratio (0x400 = 1.0), sine term}. No register access.
  */
 static void phy_calc_iqcc(const s32 *in, s32 *out)
 {
-	if (in[1] == 0 && in[2] == 0 && in[0] == 0) {
-		out[0] = 0;		/* angle */
-		out[1] = 0x400;		/* gain ratio, Q10 = 1.0 */
-		out[2] = 0;		/* sinterm */
-		return;
+	s32 iq = in[0], i2 = in[1], q2 = in[2];
+	s32 niq = phy_nbits(iq);					/* 1 */
+	s32 n = max(phy_nbits(i2), phy_nbits(q2));
+	s32 ri, rq, den, num, sn, d, m, dd, ii;
+
+	if (n <= 30) {							/* 2 */
+		ri = (s32)phy_sqrt_int((u32)shl32(i2, 30 - n));
+		rq = (s32)phy_sqrt_int((u32)shl32(q2, 30 - n));
+	} else {
+		ri = (s32)phy_sqrt_int((u32)sar32(i2, n - 30));
+		rq = (s32)phy_sqrt_int((u32)sar32(q2, n - 30));
 	}
-	/* non-zero measurements do not occur in the model; left unimplemented */
-	out[0] = 0;
-	out[1] = 0x400;
-	out[2] = 0;
+	den = (s32)((u32)ri * (u32)rq);					/* 3 */
+	if (n > niq + 16)
+		den = shl32(den, n - niq - 16);
+	else
+		den = sar32(den, niq + 16 - n);
+	num = shl32((s32)(0u - (u32)iq), 30 - niq);			/* 4 */
+	if (num > 0)
+		num += den >> 1;
+	else
+		num -= den >> 1;
+	sn = den ? num / den : 0;					/* 5 */
+	out[2] = sn;
+	out[0] = phy_asin_term(sn);					/* 6 */
+	d = (s32)((u32)q2 - (u32)i2);					/* 7 */
+	m = phy_nbits_even(d);
+	dd = shl32(d, 30 - m);
+	ii = phy_scale_m(i2, m);
+	if (dd > 0)
+		dd += ii >> 1;
+	else
+		dd -= ii >> 1;
+	out[1] = ii ? (s32)phy_sqrt_int((u32)(dd / ii + 0x100000)) : 0x400;	/* 8 */
 }
 
 /* acphy-cal-rx (sub_090fcb, wlc_phy_rxiqcc_acphy): the RX IQ coeff accessor */
@@ -1290,21 +1482,57 @@ static void phy_rxiqcc(struct bcm4360_phy *phy, u8 mode, u16 *ab, u32 core)
 	}
 }
 
+/* X8: the rows R_0 .. R_10 of the 11-tap filter (.rodata+0x2cc960, DAT_0054da90) */
+#define DIGFILT_TAPS	11
+#define DIGFILT_ROWS	11
+#define ACPHY_REG_0x6a4	0x6a4	/* first of the 11 taps, + c * ACPHY_CORE_STEP */
+
+static const u16 digfilt_rows[DIGFILT_ROWS][DIGFILT_TAPS] = {
+	{ 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0400, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000 },
+	{ 0xfff4, 0x000f, 0xffec, 0x001e, 0xffc4, 0x0400, 0x003d, 0xffe2, 0x0014, 0xfff1, 0x000c },
+	{ 0xffe8, 0x001e, 0xffd8, 0x003c, 0xff88, 0x0400, 0x007a, 0xffc3, 0x0029, 0xffe2, 0x0018 },
+	{ 0xffdc, 0x002d, 0xffc4, 0x005b, 0xff4c, 0x0400, 0x00b8, 0xffa4, 0x003d, 0xffd2, 0x0025 },
+	{ 0xffd6, 0x0034, 0xffbb, 0x0067, 0xff32, 0x0400, 0x00d3, 0xff97, 0x0046, 0xffcc, 0x002a },
+	{ 0xffcc, 0x0041, 0xffaa, 0x0081, 0xff00, 0x0400, 0x0108, 0xff7d, 0x0057, 0xffbf, 0x0034 },
+	{ 0xffc2, 0x004e, 0xff99, 0x009b, 0xfecd, 0x03ff, 0x013f, 0xff62, 0x0069, 0xffb2, 0x003f },
+	{ 0xffb7, 0x005b, 0xff87, 0x00b4, 0xfe9b, 0x03ff, 0x0175, 0xff48, 0x007a, 0xffa4, 0x0049 },
+	{ 0xffad, 0x0068, 0xff76, 0x00ce, 0xfe69, 0x03ff, 0x01ac, 0xff2d, 0x008c, 0xff97, 0x0054 },
+	{ 0xffa3, 0x0075, 0xff65, 0x00e7, 0xfe38, 0x03ff, 0x01e3, 0xff12, 0x009e, 0xff8a, 0x005e },
+	{ 0xff98, 0x0081, 0xff54, 0x0101, 0xfe06, 0x03fe, 0x021b, 0xfef7, 0x00b0, 0xff7c, 0x0069 },
+};
+
 /*
- * acphy-cal-rx (sub_09107b, wlc_phy_rxcal_digfilt_acphy): mode 0 clears
- * PHY(0x211) bit 0 and the per-core slope accumulators. mode 1 (40 MHz only,
- * not exercised at 20 MHz) programs the digital-filter taps.
+ * acphy-cal-rx X8 (sub_09107b, wlc_phy_rxcal_digfilt_acphy): mode 0 clears
+ * PHY(0x211) bit 0 and the per-core slopes; mode 1 (after an 80 MHz
+ * calibration) programs the 11 taps of each core from the row of its clamped
+ * slope, mirrored for a negative slope, and switches the filter on.
  */
 static void phy_rxcal_digfilt(struct bcm4360_phy *phy, u8 mode)
 {
 	struct bcm4360_phy_io *io = &phy->io;
-	u32 c;
+	u32 c, i;
 
 	if (mode == 0) {
 		bcm4360_phy_mod(io, ACPHY_REG_0x211, 0x0001, 0);
 		for (c = 0; c < phy_cores(phy); c++)
 			phy->cal.rxcal_digfilt[c] = 0;
+		return;
 	}
+	for (c = 0; c < phy_cores(phy); c++) {
+		s32 v = phy->cal.rxcal_digfilt[c];
+		s32 a = v * ((v >> 31) | 1);			/* |v| as the object computes it */
+		u32 j = (a < 0 || a > 10) ? 10 : (u32)a;
+		u16 o = (u16)(c * ACPHY_CORE_STEP);
+
+		bcm4360_phy_mod(io, ACPHY_REG_0x210, 0x0007, 4);
+		bcm4360_phy_mod(io, ACPHY_REG_0x211, 0x0004, 0);
+		bcm4360_phy_mod(io, ACPHY_REG_0x211, 0x0002, 0);
+		bcm4360_phy_mod(io, ACPHY_REG_0x212, 0x000f, 10);
+		for (i = 0; i < DIGFILT_TAPS; i++)
+			bcm4360_phy_write(io, ACPHY_REG_0x6a4 + o + i,
+					  digfilt_rows[j][v >= 0 ? i : DIGFILT_TAPS - 1 - i]);
+	}
+	bcm4360_phy_mod(io, ACPHY_REG_0x211, 0x0001, 0x0001);
 }
 
 /*
@@ -1473,165 +1701,253 @@ static void phy_rxcal_phy_restore(struct bcm4360_phy *phy, struct rxcal_save *sv
 }
 
 /*
- * acphy-cal-rx (sub_0ad89a, wlc_phy_rxcal_txgain_setup_acphy): the gain search.
- * The 2.4 GHz gain table is Broadcom data; in the model every estimate reads 0
- * so the search climbs gi to 10 and force-settles. The triple values are filled
- * from the trace. The 5 GHz table (DAT_0054dbe0) is not specified; the 2.4 GHz
- * one stands in for it, which the soak shows to be wrong at 5 GHz
- * (docs/re/questions/phy-soak.md, Q4).
+ * acphy-cal-rx X9 (sub_0ad89a, wlc_phy_rxcal_txgain_setup_acphy): the gain
+ * tables {s3, s7, s5} by gain index, 5 GHz (.rodata+0x2ccab0) and 2.4 GHz
+ * (.rodata+0x2cca60).
  */
-static const s16 rxcal_gain_2g[11][3] = {	/* {s3, s7, s5}; s5 = tx index 10 */
+#define RXCAL_GAINS		11
+#define RXCAL_GI_MAX		10
+#define RXCAL_P_CLIMB		0x0b58	/* dir 1: climb while p is below */
+#define RXCAL_P_LOW		0x0b56	/* dir 0: in the window above */
+#define RXCAL_P_HIGH		0x169e	/* dir 0 / 2: too strong from */
+#define RXCAL_S5_UNITY		0xff	/* low byte of s5: write the unity gain */
+
+static const u16 rxcal_gain_5g[RXCAL_GAINS][3] = {
+	{ 0, 0, 0 }, { 0, 1, 0 }, { 0, 2, 0 }, { 0, 3, 0 }, { 0, 4, 0 },
+	{ 1, 4, 0 }, { 2, 4, 0 }, { 3, 4, 0 }, { 4, 4, 0 }, { 5, 4, 0 },
+	{ 5, 5, 0 },
+};
+
+static const u16 rxcal_gain_2g[RXCAL_GAINS][3] = {
 	{ 0, 0, 10 }, { 0, 1, 10 }, { 0, 2, 10 }, { 0, 3, 10 }, { 0, 4, 10 },
 	{ 0, 5, 10 }, { 1, 5, 10 }, { 2, 5, 10 }, { 3, 5, 10 }, { 4, 5, 10 },
 	{ 5, 5, 10 },
 };
 
+/* the state of the gain search of one core (X9 step 2) */
+struct rxcal_gs {
+	u16 seed;
+	u8 gi;
+	u8 dir;
+	bool done;
+};
+
+/* X9 step 3: apply the gain of index gs->gi to core c */
+static void rxcal_gs_apply(struct bcm4360_phy *phy, const struct rxcal_gs *gs, u32 c,
+			   const u16 (*tab)[3], u16 paldo, u16 u)
+{
+	struct bcm4360_phy_io *io = &phy->io;
+	const u16 *t = tab[gs->gi];
+	u16 b = (u16)(c * ACPHY_CORE_STEP);
+
+	bcm4360_phy_write(io, ACPHY_REG_0x730 + b, (u16)((gs->seed << 6) | (paldo << 3)));
+	bcm4360_phy_write(io, ACPHY_REG_0x731 + b, phy_is_2g(phy) ? 0 : 4);
+	bcm4360_phy_write(io, ACPHY_REG_0x734 + b, (u16)((t[0] << 3) | t[1]));
+	bcm4360_phy_mod(io, ACPHY_REG_0x722 + b, 0x0002, 0x0002);
+	bcm4360_phy_mod(io, ACPHY_REG_0x722 + b, 0x0004, 0x0004);
+	bcm4360_phy_mod(io, ACPHY_REG_0x722 + b, 0x0008, 0x0008);
+	if ((t[2] & 0xff) == RXCAL_S5_UNITY) {	/* not reached with these tables */
+		tbl_write16(io, TBL_GAINCODE, TBL_GAINCODE_LO + c, 0x00ff);
+		tbl_write16(io, TBL_GAINCODE, TBL_GAINCODE_MID + c, 0xffff);
+		tbl_write16(io, TBL_GAINCODE, TBL_GAINCODE_HI + c, u);
+	} else {
+		bcm4360_phy_txpwr_by_index_acphy(phy, (u8)(1u << c), (s8)t[2]);
+	}
+}
+
+/* X9 step 5: one step of a core's walk from its measured power p */
+static void rxcal_gs_step(struct rxcal_gs *gs, u32 p)
+{
+	if (gs->dir == 1) {
+		if (p < RXCAL_P_CLIMB)
+			gs->gi++;
+		else
+			gs->done = true;
+	} else if (gs->dir == 0) {
+		if (p >= RXCAL_P_HIGH) {
+			gs->dir = 2;
+			do {
+				if (gs->gi < 2)
+					break;
+				p >>= 1;
+				gs->gi--;
+			} while (p > RXCAL_P_HIGH - 1);
+		} else if (p > RXCAL_P_LOW) {
+			gs->done = true;
+		} else {
+			gs->dir = 1;
+			if (p != 0) {
+				do {
+					if (gs->gi > 7)
+						break;
+					p *= 2;
+					gs->gi++;
+				} while (p < RXCAL_P_LOW + 1);
+			}
+		}
+	} else {
+		if (p < RXCAL_P_HIGH)
+			gs->done = true;
+		else
+			gs->gi--;
+	}
+	if (gs->gi > RXCAL_GI_MAX)	/* also 255 after a decrement from 0 */
+		gs->done = true;
+}
+
+/*
+ * acphy-cal-rx X9 (sub_0ad89a, wlc_phy_rxcal_txgain_setup_acphy): the gain
+ * search - per core the loopback gain index is walked until the tone's power
+ * lies in the window.
+ */
 static void phy_rxcal_gain_search(struct bcm4360_phy *phy)
 {
 	struct bcm4360_phy_io *io = &phy->io;
 	u32 n = phy_cores(phy);
 	bool is5g = !phy_is_2g(phy);
-	u16 seed[BCM4360_PHY_CORES_MAX];
-	u8 gi[BCM4360_PHY_CORES_MAX], dir[BCM4360_PHY_CORES_MAX], done[BCM4360_PHY_CORES_MAX];
-	u16 paldo = is5g ? 6 : 0;	/* 0 on 2.4 GHz / radio rev 4 (trace) */
-	/*
-	 * the tone frequency: 1000 kHz at 20 MHz (questions/phy-cal.md, 9), 4000
-	 * at 80 MHz (soak); the specification's 4000 / 2000 / 1000 with the
-	 * bandwidth labels the other way round (questions/phy-soak.md, Q3)
-	 */
-	s32 khz = 1000 << phy_bwix(phy);
-	u16 br, br2;
-	u32 c, settled;
+	const u16 (*tab)[3] = is5g ? rxcal_gain_5g : rxcal_gain_2g;
+	u16 paldo = (is5g && phy->ver.phy_rev != 0) ? 6 : 0;		/* 1 */
+	s32 khz = 1000 << phy_bwix(phy);	/* 4: 1000 / 2000 / 4000 for 20 / 40 / 80 MHz */
+	struct rxcal_gs gs[BCM4360_PHY_CORES_MAX];
+	u16 br, br2, u;
+	u32 c;
+	bool more;
 
-	br = tbl_bracket_enter(io);
+	br = tbl_bracket_enter(io);					/* 2 */
 	for (c = 0; c < n; c++) {
-		seed[c] = (u16)((bcm4360_phy_read(io, ACPHY_REG_0x6dc + c * ACPHY_CORE_STEP)
-				 & 0x0780) >> 7);
-		gi[c] = is5g ? 4 : 0;
-		dir[c] = 0;
-		done[c] = 0;
+		gs[c].seed = (u16)((bcm4360_phy_read(io, ACPHY_REG_0x6dc + c * ACPHY_CORE_STEP)
+				    & 0x0780) >> 7);
+		gs[c].gi = is5g ? 4 : 0;
+		gs[c].dir = 0;
+		gs[c].done = false;
 	}
-	br2 = tbl_bracket_enter(io);	/* sub_09868f: prime a default gain word */
+	br2 = tbl_bracket_enter(io);	/* sub_09868f: TBL(0x20)[0x32], one 48-bit entry */
 	{
-		u8 gainword[6];		/* tbl.20[0x32] is one 48-bit entry */
+		u8 gainword[6];
 
 		bcm4360_tbl_read(io, 0x20, 1, 0x32, 0x30, gainword);
+		u = (u16)(gainword[4] | (gainword[5] << 8));	/* its third 16-bit word */
 	}
 	tbl_bracket_leave(io, br2);
 
 	do {
 		s32 est[BCM4360_PHY_CORES_MAX][3] = { { 0 } };
 
-		/* apply the current gi per unsettled core */
-		for (c = 0; c < n; c++) {
-			u32 b = c * ACPHY_CORE_STEP;
-			const s16 *t = rxcal_gain_2g[gi[c] > 10 ? 10 : gi[c]];
+		for (c = 0; c < n; c++)					/* 3 */
+			if (!gs[c].done)
+				rxcal_gs_apply(phy, &gs[c], c, tab, paldo, u);
 
-			if (done[c])
-				continue;
-			bcm4360_phy_write(io, ACPHY_REG_0x730 + b,
-					  (u16)((seed[c] << 6) | (paldo << 3)));
-			bcm4360_phy_write(io, ACPHY_REG_0x731 + b, is5g ? 4 : 0);
-			bcm4360_phy_write(io, ACPHY_REG_0x734 + b,
-					  (u16)(((t[0] & 0x1f) << 3) | (t[1] & 0x7)));
-			bcm4360_phy_mod(io, ACPHY_REG_0x722 + b, 0x0002, 0x0002);
-			bcm4360_phy_mod(io, ACPHY_REG_0x722 + b, 0x0004, 0x0004);
-			bcm4360_phy_mod(io, ACPHY_REG_0x722 + b, 0x0008, 0x0008);
-			if ((t[2] & 0xff) == 0xff) {
-				u16 bracket = tbl_bracket_enter(io);
-
-				tbl_write16(io, TBL_GAINCODE, TBL_GAINCODE_LO + c, 0);
-				tbl_write16(io, TBL_GAINCODE, TBL_GAINCODE_MID + c, 0);
-				tbl_write16(io, TBL_GAINCODE, TBL_GAINCODE_HI + c, 0);
-				tbl_bracket_leave(io, bracket);
-			} else {
-				bcm4360_phy_txpwr_by_index_acphy(phy, (u8)(1u << c), (s8)t[2]);
-			}
-		}
-
-		/* measure */
-		bcm4360_phy_tx_tone_acphy(phy, khz, 0xb5, 0, 0, 0);
+		bcm4360_phy_tx_tone_acphy(phy, khz, 0xb5, 0, 0, 0);	/* 4 */
 		phy_rx_iq_est(phy, est, 0x400, 0x20, 0, 0);
 		bcm4360_phy_stopplayback_acphy(phy);
 
-		for (c = 0; c < n; c++) {
-			s32 p;
+		more = false;
+		for (c = 0; c < n; c++) {				/* 5 */
+			u32 p;
 
-			if (done[c])
+			if (gs[c].done)
 				continue;
-			p = ((est[c][1] + 0x200) >> 10) + ((est[c][2] + 0x200) >> 10);
-			if (dir[c] == 1) {
-				if (p < 0xb58)
-					gi[c]++;
-				else
-					done[c] = 1;
-			} else if (dir[c] == 0) {
-				if (p < 0x169e) {
-					if (p > 0xb56) {
-						done[c] = 1;
-					} else {
-						dir[c] = 1;
-						while (p != 0 && gi[c] < 8) {
-							p <<= 1;
-							gi[c]++;
-						}
-					}
-				} else {
-					dir[c] = 2;
-					while (gi[c] >= 2) {
-						p >>= 1;
-						gi[c]--;
-					}
-				}
-			} else {		/* dir == 2 */
-				if (p >= 0x169e)
-					gi[c]--;
-				else
-					done[c] = 1;
-			}
-			if (gi[c] > 10)
-				done[c] = 1;
+			p = (((u32)est[c][2] + 0x200) >> 10) + (((u32)est[c][1] + 0x200) >> 10);
+			rxcal_gs_step(&gs[c], p);
+			if (!gs[c].done)
+				more = true;
 		}
-
-		settled = 0;
-		for (c = 0; c < n; c++)
-			if (done[c])
-				settled++;
-	} while (settled < n);
+	} while (more);							/* 6 */
 
 	tbl_bracket_leave(io, br);
 }
 
-/*
- * acphy-cal-rx section 3, step 12: build the (a, b) coefficients from the
- * per-tone angle and gain-ratio regression. In the model the measured powers
- * are 0, so all angles are 0, the gain ratio is 0x400 (unity) and the result is
- * a = b = 0; the arithmetic is the object's, so the writes match bit-for-bit.
- */
-static void phy_rxcal_coeffs(struct bcm4360_phy *phy, const s32 *angle,
-			     const s32 *gainr, const s16 *amp, u32 tones, u32 core, u16 *ab)
-{
-	s32 sy = 0, sg = 0, q, w0, w1, gain;
-	u32 k;
+/* X2: the tone amplitudes A_k by bandwidth (`two` set at 80 MHz, and at 40 MHz on rev 3) */
+static const s8 rxcal_tones_20[2] = { 2, -2 };
+static const s8 rxcal_tones_40[2] = { 4, -4 };
+static const s8 rxcal_tones_80[6] = { 8, -8, 24, -24, 32, -32 };
+static const s8 rxcal_tones_40_two[4] = { 4, -4, 15, -15 };	/* rev 3 only */
 
-	(void)phy;
-	(void)core;
-	for (k = 0; k < tones; k++) {
-		sy += angle[k];
-		sg += gainr[k];
-		(void)amp;
+#define RXCAL_TONES_MAX		6
+#define RXCAL_EST_SAMPLES	0x4000
+#define RXCAL_EST_SAMPLES_TWO	0x3000
+#define RXCAL_TONE_AMP		0xb5
+#define RXCAL_IMG_MIN_RATIO	41	/* X5 2.3: below this the image estimate is not used */
+
+/* X2: `two` (pi_ac+0x8c4) and the tone list of the bandwidth */
+static u32 rxcal_tone_list(const struct bcm4360_phy *phy, bool *two, const s8 **amp)
+{
+	u16 bw = phy_bw(phy);
+
+	*two = bw == BCM4360_CHANSPEC_BW_80 ||
+	       (bw == BCM4360_CHANSPEC_BW_40 && phy->ver.phy_rev == 3);
+	if (bw == BCM4360_CHANSPEC_BW_80) {
+		*amp = rxcal_tones_80;
+		return ARRAY_SIZE(rxcal_tones_80);
 	}
-	gain = (sg + (s32)(tones / 2)) / (s32)tones;
-	q = (((sy >> 31) | 1) * (s32)(tones / 2)) + sy;
-	phy_cordic(q / (s32)tones, &w0, &w1);	/* w0 = sine (~0), w1 = cosine (~2^16) */
-	ab[0] = (u16)((((gain * w0) >> 15) + 1) >> 1) & 0x3ff;
-	ab[1] = (u16)((((gain * w1) >> 15) + 1) >> 1) & 0x3ff;
+	if (bw == BCM4360_CHANSPEC_BW_40) {
+		*amp = *two ? rxcal_tones_40_two : rxcal_tones_40;
+		return *two ? ARRAY_SIZE(rxcal_tones_40_two) : ARRAY_SIZE(rxcal_tones_40);
+	}
+	*amp = rxcal_tones_20;
+	return ARRAY_SIZE(rxcal_tones_20);
 }
 
 /*
- * acphy-cal-rx (sub_0addfa, wlc_phy_rxiqcal_acphy): the receive IQ-imbalance
- * calibration. On this board (2.4 GHz, 20 MHz, two cores) the tone list is
- * {+8,-8}, img = 1, and (with zero measured powers) the coefficients are 0.
+ * acphy-cal-rx X5: the angle of tone k on one core from the loopback estimate
+ * e0 and, with img, the image estimate e1; the gain ratio is e0's.
+ */
+static void rxcal_tone_result(const s32 *e0, const s32 *e1, bool img, s32 *angle, s32 *gain)
+{
+	s32 r0[3], r1[3], p0, p1, m, p0s;
+	u32 r;
+
+	phy_calc_iqcc(e0, r0);						/* 1 */
+	*angle = r0[0];
+	*gain = r0[1];							/* 4 */
+	if (!img)							/* 3 */
+		return;
+	phy_calc_iqcc(e1, r1);						/* 2.1 */
+	p1 = (s32)((u32)e1[1] + (u32)e1[2]);				/* 2.2 */
+	p0 = (s32)((u32)e0[1] + (u32)e0[2]);
+	m = phy_nbits_even(p1);
+	p0s = phy_scale_m(p0, m);
+	if (p0s == 0)							/* 2.3 */
+		return;
+	r = phy_sqrt_int((u32)((s32)((u32)(p0s >> 1) + (u32)shl32(p1, 30 - m)) / p0s));
+	if (r <= RXCAL_IMG_MIN_RATIO)
+		return;
+	*angle = phy_asin_term(r0[2] + ((s32)(r * (u32)(r0[2] - r1[2])) >> 10));
+}
+
+/*
+ * acphy-cal-rx X6 steps 1 to 4: the coefficients (a, b) of one core from its
+ * angles and gains over the tones, and with `two` the slope of the digital
+ * filter.
+ */
+static void phy_rxcal_coeffs(struct bcm4360_phy *phy, const s32 *angle, const s32 *gain,
+			     const s8 *amp, u32 cnt, bool two, u32 core, u16 *ab)
+{
+	s32 sxx = 0, sy = 0, sxy = 0, sg = 0, half = (s32)(cnt >> 1), g, q, w0, w1;
+	u32 k;
+
+	for (k = 0; k < cnt; k++) {
+		sxx += amp[k] * amp[k];
+		sy += angle[k];
+		sxy += amp[k] * angle[k];
+		sg += gain[k];
+	}
+	g = (sg + half) / (s32)cnt;					/* 1 */
+	q = sy >= 0 ? sy + half : sy - half;				/* 2 */
+	phy_cordic(q / (s32)cnt, &w0, &w1);
+	ab[0] = (u16)(((((g * w0) >> 15) + 1) >> 1) & 0x3ff);		/* 3 */
+	ab[1] = (u16)(((((g * w1) >> 15) + 1) >> 1) & 0x3ff);
+	if (two) {							/* 4 */
+		u16 bw = phy_bw(phy);
+		s32 kk = bw == BCM4360_CHANSPEC_BW_80 ? 30 : bw == BCM4360_CHANSPEC_BW_40 ? 15 : 8;
+
+		phy->cal.rxcal_digfilt[core] = ((((-sxy * kk) / sxx) >> 14) + 1) >> 1;
+	}
+}
+
+/*
+ * acphy-cal-rx (sub_0addfa, wlc_phy_rxiqcal_acphy) with X1 to X10: the receive
+ * IQ-imbalance calibration at every bandwidth and band.
  */
 static void phy_rxiqcal(struct bcm4360_phy *phy)
 {
@@ -1642,11 +1958,15 @@ static void phy_rxiqcal(struct bcm4360_phy *phy)
 	struct rxcal_save sv;
 	u16 rxgain[BCM4360_PHY_CORES_MAX][2];
 	u16 radio_save[BCM4360_PHY_CORES_MAX][6];
-	s16 tones[6];
-	s32 angle[6][BCM4360_PHY_CORES_MAX], gainr[6][BCM4360_PHY_CORES_MAX];
-	u32 ntones, k, c;
-	/* step 1: the image second estimate, not for PHY revision 1 on 5 GHz */
-	bool img = !(phy->ver.phy_rev == ACPHY_REV_1 && !phy_is_2g(phy));
+	s32 angle[BCM4360_PHY_CORES_MAX][RXCAL_TONES_MAX];
+	s32 gain[BCM4360_PHY_CORES_MAX][RXCAL_TONES_MAX];
+	u16 ab[BCM4360_PHY_CORES_MAX][2];
+	u32 rev = phy->ver.phy_rev, cnt, k, c;
+	const s8 *amp;
+	bool two;
+	/* step 1 (X2): the image second estimate, not for rev 2, 3, 5, 6, nor rev 1 at 5 GHz */
+	bool img = !(rev == 2 || rev == 3 || rev == 5 || rev == 6 ||
+		     (rev == ACPHY_REV_1 && !phy_is_2g(phy)));
 
 	bcm4360_phy_stay_in_carriersearch(phy, true);		/* step 2 */
 	phy_force_rfseq(phy, 2);
@@ -1671,46 +1991,34 @@ static void phy_rxiqcal(struct bcm4360_phy *phy)
 	phy_rxcal_radio_setup(phy, radio_save);			/* step 8 */
 	phy_rxcal_gain_search(phy);				/* step 9 */
 
-	/* step 10: the tone list. On 20 MHz two tones at +/-1000 (trace). */
-	ntones = 2;
-	tones[0] = 1000;
-	tones[1] = -1000;
+	cnt = rxcal_tone_list(phy, &two, &amp);			/* step 10 (X2) */
 
-	for (k = 0; k < ntones; k++) {				/* step 11 */
+	for (k = 0; k < cnt; k++) {				/* step 11 */
 		s32 est0[BCM4360_PHY_CORES_MAX][3] = { { 0 } };
 		s32 est1[BCM4360_PHY_CORES_MAX][3] = { { 0 } };
-		s32 out[3];
+		s32 f = (s16)(amp[k] * 1000) >> 1;		/* A_k * 500 kHz */
 
-		bcm4360_phy_tx_tone_acphy(phy, tones[k], 0xb5, 0, 0, 0);
-		phy_rx_iq_est(phy, est0, 0x4000, 0x20, 0, 0);
+		bcm4360_phy_tx_tone_acphy(phy, f, RXCAL_TONE_AMP, 0, 0, 0);
+		phy_rx_iq_est(phy, est0, two ? RXCAL_EST_SAMPLES_TWO : RXCAL_EST_SAMPLES,
+			      0x20, 0, 1);
 		if (img) {
 			phy_rxcal_radio_restore(phy, radio_save);
-			phy_rx_iq_est(phy, est1, 0x4000, 0x20, 0, 0);
+			phy_rx_iq_est(phy, est1, RXCAL_EST_SAMPLES, 0x20, 0, 1);
 			phy_rxcal_radio_setup(phy, radio_save);
 		}
 		bcm4360_phy_stopplayback_acphy(phy);
-		for (c = 0; c < n; c++) {
-			phy_calc_iqcc(est0[c], out);
-			angle[k][c] = out[0];
-			gainr[k][c] = out[1];
-			if (img)
-				phy_calc_iqcc(est1[c], out);	/* image second estimate */
-		}
+		for (c = 0; c < n; c++)				/* step 11e (X5) */
+			rxcal_tone_result(est0[c], est1[c], img, &angle[c][k], &gain[c][k]);
 	}
 
-	for (c = 0; c < n; c++) {				/* step 12, 13 */
-		s32 a[6], g[6];
-		u16 ab[2];
+	for (c = 0; c < n; c++)					/* step 12 (X6) */
+		phy_rxcal_coeffs(phy, angle[c], gain[c], amp, cnt, two, c, ab[c]);
+	for (c = 0; c < n; c++)					/* step 13 */
+		phy_rxiqcc(phy, 1, ab[c], c);
+	if (two)
+		phy_rxcal_digfilt(phy, 1);
 
-		for (k = 0; k < ntones; k++) {
-			a[k] = angle[k][c];
-			g[k] = gainr[k][c];
-		}
-		phy_rxcal_coeffs(phy, a, g, tones, ntones, c, ab);
-		phy_rxiqcc(phy, 1, ab, c);
-	}
-
-	phy_rxcal_radio_restore(phy, radio_save);		/* step 13 */
+	phy_rxcal_radio_restore(phy, radio_save);
 	phy_rxcal_phy_restore(phy, &sv);
 	for (c = 0; c < n; c++) {
 		if (!(phy->rxchain & (1u << c)))

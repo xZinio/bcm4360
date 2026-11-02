@@ -7,16 +7,20 @@ new `open/phy/phy_noise.h`.
 
 ## Status
 
-`phy_soak.py` on the synthetic board and `--board 1..8`: every step is the
-same except the receive calibration on 5 GHz at 40/80 MHz and what follows
-from it - the `joincal` steps 105 (36/80), 129 (149/80) and 119 (channel 6,
-through Q1 and the `PHY(0x211)` state of Q5), the periodic calibration in
-`wait 130` (131) and `wait 920` (135), and on boards 1, 3, 4, 5 `wait 15`
-(139, on 52l, where the periodic calibration runs too). Each of them is short
-by exactly the receive calibration's 1384 accesses (1288 on the single-chain
-boards 7, 8). These need Q4 and Q5 answered (and Q1). RSSI, Table A1, the
-single-chain boards, the multi-phase calibration and the noise path (with the
-CRS thresholds carried into later steps) are identical.
+Second round (after the answers phy-calrx5g and the fixed soak of 160 steps
+that re-associates for each channel and injects the IQ estimates): Q1 to Q7
+are answered in the specifications and implemented (acphy-cal-rx.md X1-X10:
+`phy_cal.c` - the integer helpers, `sub_097809`, the image combination, the
+fit, the tone lists and `two`, the isolating estimate, `sub_09107b` with its
+table, both gain tables and the exact walk, the loopback by revision;
+acphy-cal-tx.md 15 B: the seed source; acphy-desense.md C2 / E1 step 4,
+including E1's corrected tail). The join calibrations on 36/80, 6 and 36l are
+identical with the injected estimates. After that, `phy_soak.py` (160 steps)
+differed only in core 1's LOFT entries `TBL(0x62)[i]` of the calibrations on
+149/80 (Q8); Q8 is answered and implemented as well (third round).
+
+(First round, kept for the record: the soak then differed only in the
+receive calibration at 5 GHz, 40/80 MHz.)
 
 ## Corrections that needed no question
 
@@ -38,6 +42,10 @@ CRS thresholds carried into later steps) are identical.
 
 ## Q1. `sub_0addfa` step 7: `PHY(0x729)` bit 5 on 2.4 GHz after a 5 GHz calibration
 
+**Answered (acphy-cal-rx.md X1):** the condition is the current band only; the
+soak's later calibrations were on 36/80 because the driver ignored the channel
+changes while associated. Implemented as specified (unchanged).
+
 - Spec (acphy-cal-rx.md, step 7 listing): "5 GHz only: if phytype 0xb &
   phyrev != 0 & band 0xc000: `mod(PHY(b+0x729), 0x20, 0x20)`", between
   `mod(PHY(b+0x720), 2, 2)` and `mod(PHY(b+0x729), 0x200, 0x200)`.
@@ -56,6 +64,9 @@ CRS thresholds carried into later steps) are identical.
 
 ## Q2. `sub_094b1a`: the 5 GHz radio loopback
 
+**Answered (X10):** rev 0 `0x200, 0x80`, rev 1 `1, 0x200`; the fourth mask is
+0x40 and the rev-dependent pair on 0x20/0x21 has masks 0x20 and 4. Implemented.
+
 - Spec (acphy-cal-rx.md, `sub_094b1a`): 5 GHz uses `0x23/0x3d/0x21` with "the
   loopback enable `RADIO(0x23)` mask 0x200 then 0x80/0x80".
 - Soak (36/80): after `mod(RADIO(0x21), 4, 4)` the object sets bit 0 of
@@ -66,6 +77,9 @@ CRS thresholds carried into later steps) are identical.
   not observable: which is it?
 
 ## Q3. Tone frequencies of the receive calibration: bandwidth labels swapped
+
+**Answered (X2, X9):** confirmed; tones {+-2} / {+-4} / {+-8, +-24, +-32} x 500
+kHz for 20 / 40 / 80 MHz. Implemented.
 
 - Spec (acphy-cal-rx.md, `sub_0ad89a`): `F` = 4000 / 2000 / 1000 for "20 /
   0x1800 / 40 MHz". questions/phy-cal.md item 9 already found 1000 at 20 MHz.
@@ -84,6 +98,8 @@ CRS thresholds carried into later steps) are identical.
 
 ## Q4. `sub_0ad89a`: the 5 GHz gain table `DAT_0054dbe0`
 
+**Answered (X9):** both tables and the exact walk. Implemented.
+
 - Spec: "the 5 GHz table `DAT_0054dbe0` was not observed" (phy-cal.md item 9);
   the open code used the 2.4 GHz table for both bands.
 - Soak (36/80, the measurement model's powers): the search starts at `gi` = 4
@@ -97,6 +113,9 @@ CRS thresholds carried into later steps) are identical.
   calibration differs from `gi` = 4 on). Please give the whole table.
 
 ## Q5. `sub_0addfa` at 40 and 80 MHz with measured powers: not enough to implement
+
+**Answered (X2-X8):** implemented as specified; with the soak's injected
+estimates the calibrations on 36/80, 36l and 6 are identical.
 
 With the gain table of Q4 and the tones of Q3 put in temporarily, the 36/80
 calibration still differs in the tone loop and after it. What is missing:
@@ -123,6 +142,9 @@ the later one on channel 6) cannot be made identical from the specification.
 
 ## Q6. `sub_0abc76` B: the coefficients are seeded in every phase
 
+**Answered (acphy-cal-tx.md 15 B):** the writes are made in every call; only
+the copy into `cal+0x2c` is limited to `cal[1]` < 3. Implemented.
+
 - Spec (acphy-cal-tx.md section 15 B): "only while `cal[1]` < 3, i.e. at the
   first mphase step or single-shot".
 - Soak (`wait 130` after `149/80, unquiet, joincal, interf 1`; the periodic
@@ -138,6 +160,9 @@ the later one on channel 6) cannot be made identical from the specification.
   increments), or is there none?
 
 ## Q7. Single-chain boards: C2 and the hwaci wide-band detector use every core
+
+**Answered (acphy-desense.md C2 step 3, E1 step 4):** every core <
+`pi+0x168`, no mask; E1's tail corrected as well. Implemented.
 
 - Spec: acphy-desense.md C2 (`sub_08f41b`) step 3 "for each present core c"
   and E1 step 4 "for each present core, read four registers"; "present" =
@@ -155,6 +180,30 @@ the later one on channel 6) cannot be made identical from the specification.
   C2 would tell; no board of the soak has that. C1 itself (the ring, the
   references, the indices) keeps "present cores": the noise steps are
   identical with it.
+
+## Q8. `wlc_phy_populate_tx_loft_comp_tbl_acphy` at 5 GHz: the per-index deltas
+
+**Answered (acphy-cal-tx.md section 19, completed):** `T[6]`, `HI[12]`,
+`LO[12]`, the high-channel limits {200, 149, 100} against the chanspec's
+channel byte, k = 4c + 2 flag[c] + (i <= T[c + 3 flag[c]]), bytes added modulo
+256, i outer / core inner, inside the `PHY(0x19e)` bracket. Implemented
+(`txcal_populate_loft`); the 149/80 join calibration is identical.
+
+- Spec (acphy-cal-tx.md section 19): cores 1, 2 at 5 GHz get "`d[c]` plus a
+  small per-index delta (from the constant arrays hi = {..,0xec,0xf6,0xf6,0xf8,
+  0xf6,0xfa} and lo = {..,0,0xfb,0xf2,0xfc,0xf6,0xfb}, indexed by the
+  high-channel flag and whether i is below the threshold
+  {0x80,0x80,0x20,0x80,0x1a,0x1c})". The leading elements are elided and the
+  index (which of the six for core c, flag f, entry i) is not given.
+- Soak (after the receive calibration became identical, X1-X10): the join
+  calibrations on 36/80, 36l and 6 are identical (core 1 at 5 GHz with the
+  flag 0 gets `d[1]` unchanged); on 149/80 (core 1's flag = 1, 149 >= 0x95)
+  the object writes `TBL(0x62)[i]` = 0xf6fb (with `d[1]` = 0) where the open
+  code writes 0, in both calls of the calibration (part 0 and 1: 256
+  differences).
+- What I did: nothing (the open code writes `d[c]` for every entry, which is
+  right where the delta is 0). Please give both arrays in full and the index
+  for (core, flag, i), and whether the delta applies at flag 0.
 
 ## Notes on the noise path (task point 6)
 

@@ -719,9 +719,8 @@ static void phy_set_090b77(struct bcm4360_phy *phy, bool nonzero)
  * acphy-desense.md C2 (sub_08f41b, wlc_phy_set_crs_thresh_acphy): the per-core
  * carrier-sense / energy-detect minimum-power threshold registers. Core 0 gets
  * the absolute power; the other cores get the offset of their power relative to
- * core 0. Every core < pi+0x168 is written, also one whose bit is not set in
- * sh+0xa7: the specification says "each present core", the soak's single-chain
- * boards show core 1 written (docs/re/questions/phy-soak.md, Q7).
+ * core 0. Every core < pi+0x168 is written, with no test of a chain mask
+ * (step 3 as corrected by phy-calrx5g).
  */
 static void phy_set_crs_thresh(struct bcm4360_phy *phy, u8 pwr, u8 off1, u8 off2)
 {
@@ -1393,12 +1392,13 @@ void bcm4360_phy_hwaci_engine_acphy(struct bcm4360_phy *phy)
 	bcm4360_mac_suspend(phy->hw);
 
 	/*
-	 * step 4: wide-band detector (measured registers read 0); every core <
-	 * pi+0x168 is read, also one whose bit is not set in sh+0xa7 (single-chain
-	 * boards of the soak; docs/re/questions/phy-soak.md, Q7)
+	 * step 4, as corrected (phy-calrx5g): the wide-band detector. Every core <
+	 * pi+0x168 is read (not only the present ones); unsigned sums, divided by
+	 * the count only if it is above 1; then if D <= 199: D = B and C = A when
+	 * B >= 200, else C = 0; if D >= 200, C and D stay.
 	 */
 	if (mode & BCM4360_INTERFERENCE_W2NB) {
-		s32 sa = 0, sb2 = 0, sc = 0, sd = 0;
+		u32 sa = 0, sb2 = 0, sc = 0, sd = 0;
 		u32 n = phy_cores(phy);
 
 		for (c = 0; c < n; c++) {
@@ -1419,15 +1419,20 @@ void bcm4360_phy_hwaci_engine_acphy(struct bcm4360_phy *phy)
 				sd += bcm4360_phy_read(io, 0xbb1);
 			}
 		}
-		(void)sa;	/* A (PHY(0x7af)/..) is read but not used in the decision */
-		if (n) {
-			sb2 /= (s32)n;
-			sc /= (s32)n;
-			sd /= (s32)n;
+		if (n > 1) {
+			sa /= n;
+			sb2 /= n;
+			sc /= n;
+			sd /= n;
 		}
-		if (sd < 200 && sb2 > 199)
-			sd = sb2;
-		sc = sb2 > 199 ? sb2 : 0;
+		if (sd <= 199) {
+			if (sb2 >= 200) {
+				sd = sb2;
+				sc = sa;
+			} else {
+				sc = 0;
+			}
+		}
 		detw = sc != 0 && sd < 4 * sc;
 	}
 
