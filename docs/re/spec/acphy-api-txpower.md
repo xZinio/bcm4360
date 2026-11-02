@@ -20,6 +20,17 @@ operations on it. So the open PHY does not reimplement `ppr`; it calls these
 as services (`phy_env.h`), which the hybrid module maps to the object's own
 `ppr_*` (`hybrid/takeover.txt`, `use`) and the emulator harness provides.
 
+> **The container is now specified in full in [ppr.md](ppr.md), which
+> corrects this table** (2026-11-02): `ppr_apply_max` is a ceiling
+> (min(rate, v)) and `ppr_apply_min` a floor (max(rate, v), disabled rates
+> included) - the two rows below are swapped;
+> `ppr_minus_cmn_val` clamps at 0; `ppr_force_disabled(p, min)` disables
+> every rate group with a rate below `min`; the second argument of
+> `ppr_get_min` is a value to skip, not a floor; the selector arguments are
+> `(bw, mode, chains)` and `(bw, nss, mode, chains)`. The open PHY calls the
+> services by name and passes its arguments through, so its behaviour does
+> not depend on these descriptions.
+
 A `ppr_t` holds, for a bandwidth selector `s` (0 = 20, 1 = 40, 2 = 80 MHz;
 the first word), groups of per-rate power bytes in quarter-dBm; a byte of
 `-128` (`0x80`) marks a rate **disabled**. The operations observed:
