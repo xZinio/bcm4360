@@ -54,8 +54,7 @@ take wlc_bmac_suspend_mac_and_wait
 take wlc_bmac_enable_mac
 take wlc_bmac_mhf
 # object memories and the setters on them (hybrid/mac_mem.c -> open/mac/bmac_mem.c,
-# bmac-init.md A8, B4-B6, B11, E1, E3, E7, F1, F2); until hybrid/objects.mk links
-# them, Broadcom's own (weak) bodies are the only definitions and run unchanged
+# bmac-init.md A8, B4-B6, B11, E1, E3, E7, F1, F2)
 take wlc_bmac_set_shm
 take wlc_bmac_copyto_objmem
 take wlc_bmac_copyfrom_objmem

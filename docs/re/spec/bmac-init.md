@@ -873,7 +873,11 @@ addresses, `selector` as in A8.
 
 `wlc_bmac_copyfrom_objmem(wlc_hw, offset, buffer, length, selector)`: the
 same with reads (16 bit reads with `sub_06188a`; for the address match table
-32 bit reads of `D11(0x164)`), bytes stored low byte first.
+32 bit reads of `D11(0x164)`), bytes stored low byte first. Both bytes of
+every 16-bit word are stored, so an odd `length` stores one byte beyond it;
+for the address match table with `length & 3` = 3 the remainder is one 16-bit
+word, the third byte is neither read nor written. (The open implementation
+does not store past `length`; the accesses are the same.)
 
 Selector values seen: 0x10000 shared memory, 0x20000 scratch registers of
 the microcode, 0x40000 address match table. Note that for the scratch
@@ -892,7 +896,9 @@ a MAC address and a 16 bit attribute word.
    32 bit reads as in B4 at offset 8 * index) and OR its attribute word into
    `attributes`.
 2. word0 = address[0] | address[1] << 8 | address[2] << 16 | address[3] << 24;
-   word1 = address[4] | address[5] << 8 | attributes << 16.
+   word1 = address[4] | address[5] << 8 | attributes << 16. Bit 15 of
+   `attributes` is not cleared: it is written into the entry (verified: entry
+   63 is written with 0x8008).
 3. `wlc_bmac_copyto_objmem(wlc_hw, 8 * index, {word0, word1}, 8, 0x40000)`:
    `D11(0x160) = 0x40000 | (2 * index)`, read back, `D11(0x164) = word0`;
    `D11(0x160) = 0x40000 | (2 * index + 1)`, read back, `D11(0x164) = word1`.
