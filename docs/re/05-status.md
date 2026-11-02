@@ -21,8 +21,8 @@ emulator: the PMU (16 functions of `hndpmu.c`), the register access primitives
 interpreter (16 of `wlc_clm.c`), the per-rate transmit power container (all 50
 of `wlc_ppr.c`) and the board variables from SROM/OTP (`srom_var_init`) are
 taken over and verified identical over a full session, with each layer's
-fallback too. **As of 2026-11-02, 91.2% of everything the driver executes in
-that session is open code by default** (93.3% with the open PHY switched on). **The open AC-PHY now
+fallback too. **As of 2026-11-02, 92.1% of everything the driver executes in
+that session is open code by default** (94.4% with the open PHY switched on), with the MAC clocks, core reset and initialisation and the backplane functions open too. **The open AC-PHY now
 takes over all 79 entry points of Broadcom's PHY** (module parameter
 `open_phy`, off by default until it has run on a card): with it switched on
 the whole session is identical to the object, and the Broadcom code that runs
@@ -67,10 +67,10 @@ scenarios named.
 | Board variables: lookup, Broadcom's PHY's lookup | `bcmutils.c`, `wlc_phy_cmn.c` | [utils](spec/utils.md) | `open/lib/utils.c` | `hybrid.py check`, 0 differences |
 | Regulatory database interpreter | `wlc_clm.c` | [clm](spec/clm.md) | `open/lib/clm.c` | `clm`: 145,780 results, 0 differences |
 | Per-rate transmit power container | `wlc_ppr.c` | [ppr](spec/ppr.md) | `open/lib/ratepwr.c` | `ppr`: 94,579 calls, 0 differences |
-| Backplane, cores, PCIe bridge | `siutils.c`, `aiutils.c`, `nicpci.c` | - | - | - |
+| Backplane, cores, PCIe bridge | `siutils.c`, `aiutils.c`, `nicpci.c` | [chip](spec/chip.md) | `open/chip/si.c` (core selection, register access, wrapper, GPIO; attach and PCIe bridge still Broadcom's) | `hybrid.py check`: 0 differences |
 | SROM, OTP, variables | `bcmsrom.c`, `bcmotp.c`, `nvram_ro.c` | [srom-otp](spec/srom-otp.md) | `open/chip/srom.c` (PCI path, revision 11; the OTP and backplane functions stay Broadcom's) | `hybrid.py srom`: ten cards, 0 differences |
-| MAC core bring-up (microcode, initial values, buffers) | `wlc_bmac.c` | [bmac-init](spec/bmac-init.md) | `open/mac/bmac_ctrl.c`, `bmac_mhf.c`, `bmac_mem.c` (control, host flags, object memories); clocks and reset being written | `mac-ctrl`, `mac-mhf`, `hybrid.py check`: 0 differences |
-| DMA, FIFOs, interrupts | `hnddma.c`, `wlc_bmac.c` | - | - | - |
+| MAC core bring-up (microcode, initial values, buffers) | `wlc_bmac.c` | [bmac-init](spec/bmac-init.md) | `open/mac/bmac_ctrl.c`, `bmac_mhf.c`, `bmac_mem.c`, `bmac_clk.c`, `bmac_init.c` (control, host flags, object memories, clocks and reset, initialisation with the microcode download) | `mac-ctrl`, `mac-mhf`, `hybrid.py check`: 0 differences |
+| DMA, FIFOs, interrupts | `hnddma.c`, `wlc_bmac.c` | [bmac-data](spec/bmac-data.md) (DMA engine; FIFOs and interrupts still to do) | - | - |
 | Frame formats between driver and MAC core | `wlc.c`, `wlc_bmac.c` | - | - | - |
 | Aggregation and keys in hardware | `wlc_ampdu.c`, `wlc_key.c` | - | - | - |
 
