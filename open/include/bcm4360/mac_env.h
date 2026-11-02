@@ -216,4 +216,15 @@ void bcm4360_bmac_env_set_intstatus(struct bcm4360_mac *mac, u32 v);
 /* E4 step 1: the byte wlc+0x64 is not 0 */
 bool bcm4360_bmac_env_wlc_flag_64(struct bcm4360_mac *mac);
 
+/* --- at run time (bmac-run.md R1, R2; task bmac-runtime) --- */
+
+/* the PHY of the current band (R1 step 4) */
+void bcm4360_bmac_env_phy_scramb_dyn_bw_en(struct bcm4360_mac *mac, bool on);
+							/* wlc_acphy_set_scramb_dyn_bw_en */
+/* the DMA engine of a transmit FIFO (R2; only where the FIFO has an engine,
+ * the suspended query answers false for one without) */
+void bcm4360_bmac_env_dma_txsuspend(struct bcm4360_mac *mac, u32 fifo);	/* slot 0x20 */
+void bcm4360_bmac_env_dma_txresume(struct bcm4360_mac *mac, u32 fifo);	/* slot 0x28 */
+bool bcm4360_bmac_env_dma_txsuspended(struct bcm4360_mac *mac, u32 fifo);	/* slot 0x30 */
+
 #endif

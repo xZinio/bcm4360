@@ -133,7 +133,7 @@ use si_pmu_res_req_timer_clr
 use si_btcgpiowar
 use si_gpiopull
 use wlc_bmac_4360_pcie2_war
-use wlc_bmac_ifsctl_edcrs_set
+# (wlc_bmac_ifsctl_edcrs_set: taken by the run-time group below)
 # the channel and the band, the transmitter mute (hybrid/mac_chan.c -> open/mac/bmac_chan.c,
 # acphy-chanspec.md sections 1-3, bmac-init.md E4). The transmit FIFO suspend/resume stay
 # Broadcom's (services of mac_env.h).
@@ -142,8 +142,21 @@ take wlc_setxband
 take wlc_bmac_bw_set
 take wlc_bmac_bw_reset
 take wlc_bmac_mute
-use wlc_bmac_tx_fifo_suspend
-use wlc_bmac_tx_fifo_resume
+# (wlc_bmac_tx_fifo_suspend/resume: taken by the run-time group below)
+# at run time (hybrid/mac_runtime.c -> open/mac/bmac_runtime.c, bmac-run.md R1, R2, R5,
+# R6, R7): energy detect, transmit FIFO suspend/resume, CCA counters, rate offsets, TSF.
+# Until open/mac/bmac_runtime.c exists these takes keep Broadcom's bodies (staged:
+# hybrid-new-macruntime-objs).
+take wlc_bmac_ifsctl_edcrs_set
+take wlc_bmac_tx_fifo_suspend
+take wlc_bmac_tx_fifo_resume
+take wlc_bmac_tx_fifo_suspended
+take cca_stats_read
+take wlc_bmac_cca_stats_read
+take wlc_bmac_rate_shm_offset
+take wlc_bmac_stf_get_rateset_shm_offset
+take wlc_bmac_stf_set_rateset_shm_offset
+take wlc_bmac_read_tsf
 
 # --- utilities (hybrid/utils.c -> open/lib/utils.c, docs/re/spec/utils.md)
 take getvar

@@ -202,4 +202,28 @@ void bcm4360_bmac_mute(struct bcm4360_mac *mac, bool on, u32 reason);		/* E4 */
 void bcm4360_bmac_mctrl_write(struct bcm4360_mac *mac);				/* A1 */
 void bcm4360_bmac_bsinit(struct bcm4360_mac *mac, u16 chanspec, bool bandswitch); /* B10 */
 
+/*
+ * At run time (docs/re/spec/bmac-run.md R1, R2, R5, R6 and R7's TSF read;
+ * task docs/re/tasks/bmac-runtime.md): the energy detect, the transmit FIFO
+ * suspend/resume, the CCA counters, the rate offsets in shared memory.
+ *
+ * A rate set (R6) is the upper layer's: `count` rates (500 kbit/s units, bit 7
+ * may be set) from `rates`. Its 6-byte entries (`entries`, R6) are in the
+ * byte layout the specification gives: +0 the rate (u8), +2 the offset (u16),
+ * +4 the value (u16), little-endian; byte +1 is never written.
+ */
+void bcm4360_bmac_ifsctl_edcrs_set(struct bcm4360_mac *mac, bool on);		/* R1 */
+void bcm4360_bmac_tx_fifo_suspend(struct bcm4360_mac *mac, u32 fifo);		/* R2 */
+void bcm4360_bmac_tx_fifo_resume(struct bcm4360_mac *mac, u32 fifo);		/* R2 */
+bool bcm4360_bmac_tx_fifo_suspended(struct bcm4360_mac *mac, u32 fifo);		/* R2 */
+void bcm4360_bmac_cca_stats_read(struct bcm4360_mac *mac, u32 out[9]);		/* R5 */
+s32 bcm4360_bmac_cca_stats_get(struct bcm4360_mac *mac, u32 out[9]);
+					/* R5 wlc_bmac_cca_stats_read: the read, result 0 */
+u32 bcm4360_bmac_rate_shm_offset(struct bcm4360_mac *mac, u8 rate);		/* R6 */
+void bcm4360_bmac_stf_get_rateset_shm_offset(struct bcm4360_mac *mac, const u8 *rates,
+					     u32 count, u16 off, u8 *entries);	/* R6 */
+void bcm4360_bmac_stf_set_rateset_shm_offset(struct bcm4360_mac *mac, u32 count, u16 off,
+					     const u8 *entries);		/* R6 */
+void bcm4360_bmac_read_tsf(struct bcm4360_mac *mac, u32 *lo, u32 *hi);		/* R7 */
+
 #endif
