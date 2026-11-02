@@ -214,8 +214,7 @@ use otp_read_word
 # (getvar: taken by the utilities layer above)
 # the MAC's per-rate power container (wlc_ppr.c): the open PHY's transmit power
 # reaches it through these names (phy_env.h services, hybrid/phy.c); taken over
-# by hybrid/ppr.c -> open/lib/ratepwr.c (docs/re/spec/ppr.md, switch open_ppr),
-# until hybrid/objects.mk links them Broadcom's own (weak) bodies run unchanged
+# by hybrid/ppr.c -> open/lib/ratepwr.c (docs/re/spec/ppr.md, switch open_ppr)
 take ppr_size
 take ppr_ser_size
 take ppr_ser_size_by_bw
