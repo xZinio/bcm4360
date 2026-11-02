@@ -42,6 +42,7 @@ was compared there.
 | MAC initialisation | `open_mac` | on | 7: `wlc_bmac_init` (microcode download and start, initialisation lists, buffer memory controller, band init), `wlc_bmac_wowlucode_start`, `wlc_bmac_switch_macfreq`, `wlc_bmac_set_extlna_pwrsave_shmem`, `wlc_bmac_txbw_update`, `wlc_bmac_band_stf_ss_set`, `wlc_bmac_set_shortslot` (microcode and lists stay Broadcom's data) | `mac_init.c` -> `open/mac/bmac_init.c` | [bmac-init](../docs/re/spec/bmac-init.md) B1-B12, E6, E10 |
 | MAC up and down | `open_mac` | on | 8: `wlc_bmac_hw_up` (one-time preparation after power-up, LED GPIOs), `wlc_bmac_up_prep`, `wlc_bmac_up_finish`, `wlc_bmac_down_prep`, `wlc_bmac_down_finish`, `wlc_bmac_hw_down`, `wlc_bmac_reset` (with the flush of the DMA queues), `wlc_bmac_validate_chip_access` (the PCIe bridge, the 4360 PCIe work-around and the IFS energy-detect setting they call stay Broadcom's) | `mac_updown.c` -> `open/mac/bmac_updown.c` | [bmac-init](../docs/re/spec/bmac-init.md) C2-C6, C8, C10, C15, D3 |
 | MAC channel and band | `open_mac` | on | 5: `wlc_bmac_set_chanspec` (with the band switch, which now runs the open band initialisation), `wlc_setxband`, `wlc_bmac_bw_set`, `wlc_bmac_bw_reset`, `wlc_bmac_mute` (the transmit FIFO suspend/resume they call stay Broadcom's) | `mac_chan.c` -> `open/mac/bmac_chan.c` | [acphy-chanspec](../docs/re/spec/acphy-chanspec.md) 1-3, [bmac-init](../docs/re/spec/bmac-init.md) E4 |
+| MAC at run time | `open_mac` | on | 10: `wlc_bmac_ifsctl_edcrs_set` (energy detect, every bandwidth), `wlc_bmac_tx_fifo_suspend/resume/suspended`, `cca_stats_read`, `wlc_bmac_cca_stats_read`, `wlc_bmac_rate_shm_offset`, `wlc_bmac_stf_get/set_rateset_shm_offset`, `wlc_bmac_read_tsf` | `mac_runtime.c` -> `open/mac/bmac_runtime.c` | [bmac-run](../docs/re/spec/bmac-run.md) R1, R2, R5, R6, R7 |
 | backplane | `open_si` | on | 34 `si_*`: core selection, register access of any core, the AXI wrapper (core flags, reset, disable), GPIO, chip helpers (`si_attach` and the PCIe bridge stay Broadcom's) | `si.c` -> `open/chip/si.c` | [chip](../docs/re/spec/chip.md) |
 | DMA engines | `open_dma` | on | `dma_attach` returns an open engine whose function table (49 slots) is the adapter's; `dma_addrwidth` | `dma.c` -> `open/mac/dma.c` | [bmac-data](../docs/re/spec/bmac-data.md) section 1 |
 | per-rate power container | `open_ppr` | on | all 50 `ppr_*` functions of `wlc_ppr.c` (the open PHY's transmit power reaches them too) | `ppr.c` -> `open/lib/ratepwr.c` | [ppr](../docs/re/spec/ppr.md) |
@@ -133,6 +134,8 @@ is the real card.
 | the same + the open PHY (`open_phy=1`) | 93,931 bytes (46.9 %) | 121,868 bytes | **95.0 %** |
 | + MAC channel and band (default) | 162,929 bytes (81.3 %) | 70,413 bytes | **92.7 %** |
 | the same + the open PHY (`open_phy=1`) | 91,456 bytes (45.6 %) | 123,523 bytes | **95.1 %** |
+| + MAC at run time (default) | 161,408 bytes (80.5 %) | 72,650 bytes | **92.9 %** |
+| the same + the open PHY (`open_phy=1`) | 89,935 bytes (44.9 %) | 125,760 bytes | **95.3 %** |
 
 With the open PHY switched on, the whole session is identical to the object
 (41,416 accesses: attach, up, nine channel changes in both bands and all
@@ -157,10 +160,20 @@ primitives and the variable lookup are small but run constantly (`getvar`
 alone was about a fifth of everything the driver executes). `check` gives
 "the same" with all layers on and with each switched off; the module builds
 against linux-headers 7.2.11-arch1-1 with GCC 16.2.1 without warnings from
-`open/` or `hybrid/`, and each of the 279 taken functions has exactly one
+`open/` or `hybrid/`, and each of the 289 taken functions has exactly one
 strong definition, the adapter's (layers still being written, staged as
 `hybrid-new*-objs` in `objects.mk`, keep Broadcom's body until they are
 linked).
+
+`python phy_soak.py` (in `tools/re`) is a much longer session: every channel
+of both bands in every bandwidth, an association stand-in with the full
+calibration, long watchdog runs with the periodic calibration, RSSI on many
+receive headers, the noise interrupt, with the card model giving the
+measurement registers deterministic values, and `--board N` for board
+variants. With Broadcom's PHY and every other layer open (the default
+module) it is identical to the object: 588,350 accesses. With the open PHY
+it still differs (calibration with real measurements, noise, single-chain
+boards); that is being fixed before `open_phy` can become the default.
 
 `python hybrid.py srom` attaches the driver from ten different cards
 (SROM images, a blank SROM, the image in the OTP, a blank OTP) on the object
