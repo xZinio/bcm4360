@@ -57,6 +57,26 @@ int osl_strlen(const char *s);
 int osl_snprintf(char *buf, size_t n, const char *fmt, ...)
 	__attribute__((format(printf, 3, 4)));
 
+/*
+ * Packets and DMA memory (the DMA engine, docs/re/spec/bmac-data.md): the
+ * functions of Broadcom's OS layer src/shared/linux_osl.c, with its
+ * prototypes. A packet is an opaque handle (struct sk_buff * on Linux).
+ */
+void *osl_pktget(void *osh, unsigned int len);
+void osl_pktfree(void *osh, void *pkt, bool send);
+u8 *osl_pktdata(void *osh, void *pkt);
+unsigned int osl_pktlen(void *osh, void *pkt);
+void *osl_pktnext(void *osh, void *pkt);
+void osl_pktsetnext(void *pkt, void *next);
+void osl_pktsetlen(void *osh, void *pkt, unsigned int len);
+u8 *osl_pktpull(void *osh, void *pkt, int bytes);
+void *osl_dma_alloc_consistent(void *osh, unsigned int size, u16 align_bits,
+			       unsigned int *alloced, unsigned long *pap);
+void osl_dma_free_consistent(void *osh, void *va, unsigned int size, unsigned long pa);
+unsigned int osl_dma_map(void *osh, void *va, unsigned int size, int direction, void *pkt,
+			 void *dmah);
+void osl_dma_unmap(void *osh, unsigned int pa, unsigned int size, int direction);
+
 static inline u8 hw_read8(void *base, u32 off)
 {
 	return osl_readb((volatile u8 *)base + off);

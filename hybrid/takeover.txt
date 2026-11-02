@@ -392,3 +392,10 @@ take si_fabid
 take si_pci_war16165
 take si_ldo_war
 take si_tcm_size
+
+# --- DMA engines (hybrid/dma.c -> open/mac/dma.c, docs/re/spec/bmac-data.md section 1,
+# switch open_dma): dma_attach returns an open engine whose function table is the
+# adapter's; until hybrid/objects.mk links them Broadcom's own (weak) bodies run
+# unchanged
+take dma_attach
+take dma_addrwidth
