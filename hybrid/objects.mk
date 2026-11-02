@@ -12,6 +12,7 @@ hybrid-objs := hybrid/card.o \
                hybrid/mac_clk.o open/mac/bmac_clk.o \
                hybrid/mac_init.o open/mac/bmac_init.o \
                hybrid/mac_updown.o open/mac/bmac_updown.o \
+               hybrid/mac_chan.o open/mac/bmac_chan.o \
                hybrid/utils.o open/lib/utils.o \
                hybrid/clm.o open/lib/clm.o \
                hybrid/ppr.o open/lib/ratepwr.o \
@@ -22,9 +23,6 @@ hybrid-objs := hybrid/card.o \
 # Being written, one variable hybrid-new*-objs per layer: each is linked by
 # tools/re/hybrid.py for the emulator once ALL its sources exist, not yet in
 # the module.
-
-# MAC channel and band, transmitter mute (task docs/re/tasks/bmac-chan.md, switch open_mac)
-hybrid-new-macchan-objs := hybrid/mac_chan.o open/mac/bmac_chan.o
 
 # The PHY layer (hybrid/phy.c, switch open_phy, default off): the adapter and
 # the open PHY (its register access, open/hw/access.o, is in the list above).

@@ -111,6 +111,8 @@ struct bcm4360_mac {
 	u32 nbands;		/* wlc_hw+0x118: number of bands (2 for the 4360) */
 	u32 band_unit;		/* the current band's unit, its 32-bit word +0x04 */
 	u16 devid;		/* wlc_hw+0x82: PCI device id (0x43a0) */
+	u16 chanspec;		/* wlc_hw+0x11c: the current chanspec (acphy-chanspec.md
+				 * section 1 step 2; E9 reads its bandwidth bits) */
 };
 
 void bcm4360_bmac_mctrl(struct bcm4360_mac *mac, u32 mask, u32 val);	/* A2 (+A1) */

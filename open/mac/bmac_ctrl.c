@@ -48,7 +48,7 @@
  * docs/re/spec/bmac-init.md, A1 (wlc_mctrl_write): write the MAC control
  * register from the software copy and the wake/mute overrides. No read.
  */
-static void wlc_mctrl_write(struct bcm4360_mac *mac)
+void bcm4360_bmac_mctrl_write(struct bcm4360_mac *mac)
 {
 	u32 v = mac->maccontrol;
 
@@ -91,7 +91,7 @@ void bcm4360_bmac_mctrl(struct bcm4360_mac *mac, u32 mask, u32 val)
 	if (new_maccontrol == mac->maccontrol)
 		return;
 	mac->maccontrol = new_maccontrol;
-	wlc_mctrl_write(mac);
+	bcm4360_bmac_mctrl_write(mac);
 }
 
 /*
@@ -106,7 +106,7 @@ void bcm4360_bmac_wake_override_set(struct bcm4360_mac *mac, u32 bit)
 		return;
 	}
 	mac->wake_override = bit;
-	wlc_mctrl_write(mac);
+	bcm4360_bmac_mctrl_write(mac);
 	wlc_bmac_wait_for_wake(mac);
 }
 
@@ -119,7 +119,7 @@ void bcm4360_bmac_wake_override_clear(struct bcm4360_mac *mac, u32 bit)
 {
 	mac->wake_override &= ~bit;
 	if (mac->wake_override == 0 && !(mac->maccontrol & MCTL_WAKE))
-		wlc_mctrl_write(mac);
+		bcm4360_bmac_mctrl_write(mac);
 }
 
 /*

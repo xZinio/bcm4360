@@ -41,6 +41,7 @@ was compared there.
 | MAC clocks, core reset, crystal | `open_mac` | on | 16: `wlc_bmac_corereset`, `wlc_bmac_phy_reset`, `wlc_bmac_phyclk_fgc`, `wlc_bmac_macphyclk_set`, `wlc_bmac_core_phy_clk`, `wlc_bmac_core_phypll_ctl/reset`, `wlc_coredisable`, `wlc_bmac_xtal`, `wlc_bmac_pllreq`, `wlc_bmac_set_clk`, `wlc_bmac_set_ctrl_bt_shd0/SROM`, `wlc_bmac_radio_read_hwdisabled`, `wlc_hw_deviceremoved`, `wlc_bmac_btc_mode_get` | `mac_clk.c` -> `open/mac/bmac_clk.c` | [bmac-init](../docs/re/spec/bmac-init.md) A10-A17, C7, C9, C11, C13, C14 |
 | MAC initialisation | `open_mac` | on | 7: `wlc_bmac_init` (microcode download and start, initialisation lists, buffer memory controller, band init), `wlc_bmac_wowlucode_start`, `wlc_bmac_switch_macfreq`, `wlc_bmac_set_extlna_pwrsave_shmem`, `wlc_bmac_txbw_update`, `wlc_bmac_band_stf_ss_set`, `wlc_bmac_set_shortslot` (microcode and lists stay Broadcom's data) | `mac_init.c` -> `open/mac/bmac_init.c` | [bmac-init](../docs/re/spec/bmac-init.md) B1-B12, E6, E10 |
 | MAC up and down | `open_mac` | on | 8: `wlc_bmac_hw_up` (one-time preparation after power-up, LED GPIOs), `wlc_bmac_up_prep`, `wlc_bmac_up_finish`, `wlc_bmac_down_prep`, `wlc_bmac_down_finish`, `wlc_bmac_hw_down`, `wlc_bmac_reset` (with the flush of the DMA queues), `wlc_bmac_validate_chip_access` (the PCIe bridge, the 4360 PCIe work-around and the IFS energy-detect setting they call stay Broadcom's) | `mac_updown.c` -> `open/mac/bmac_updown.c` | [bmac-init](../docs/re/spec/bmac-init.md) C2-C6, C8, C10, C15, D3 |
+| MAC channel and band | `open_mac` | on | 5: `wlc_bmac_set_chanspec` (with the band switch, which now runs the open band initialisation), `wlc_setxband`, `wlc_bmac_bw_set`, `wlc_bmac_bw_reset`, `wlc_bmac_mute` (the transmit FIFO suspend/resume they call stay Broadcom's) | `mac_chan.c` -> `open/mac/bmac_chan.c` | [acphy-chanspec](../docs/re/spec/acphy-chanspec.md) 1-3, [bmac-init](../docs/re/spec/bmac-init.md) E4 |
 | backplane | `open_si` | on | 34 `si_*`: core selection, register access of any core, the AXI wrapper (core flags, reset, disable), GPIO, chip helpers (`si_attach` and the PCIe bridge stay Broadcom's) | `si.c` -> `open/chip/si.c` | [chip](../docs/re/spec/chip.md) |
 | DMA engines | `open_dma` | on | `dma_attach` returns an open engine whose function table (49 slots) is the adapter's; `dma_addrwidth` | `dma.c` -> `open/mac/dma.c` | [bmac-data](../docs/re/spec/bmac-data.md) section 1 |
 | per-rate power container | `open_ppr` | on | all 50 `ppr_*` functions of `wlc_ppr.c` (the open PHY's transmit power reaches them too) | `ppr.c` -> `open/lib/ratepwr.c` | [ppr](../docs/re/spec/ppr.md) |
@@ -130,6 +131,8 @@ is the real card.
 | the same + the open PHY (`open_phy=1`) | 95,768 bytes (47.8 %) | 118,828 bytes | **95.0 %** |
 | + MAC up and down (default) | 165,404 bytes (82.5 %) | 68,758 bytes | **92.7 %** |
 | the same + the open PHY (`open_phy=1`) | 93,931 bytes (46.9 %) | 121,868 bytes | **95.0 %** |
+| + MAC channel and band (default) | 162,929 bytes (81.3 %) | 70,413 bytes | **92.7 %** |
+| the same + the open PHY (`open_phy=1`) | 91,456 bytes (45.6 %) | 123,523 bytes | **95.1 %** |
 
 With the open PHY switched on, the whole session is identical to the object
 (41,416 accesses: attach, up, nine channel changes in both bands and all
@@ -154,7 +157,7 @@ primitives and the variable lookup are small but run constantly (`getvar`
 alone was about a fifth of everything the driver executes). `check` gives
 "the same" with all layers on and with each switched off; the module builds
 against linux-headers 7.2.11-arch1-1 with GCC 16.2.1 without warnings from
-`open/` or `hybrid/`, and each of the 274 taken functions has exactly one
+`open/` or `hybrid/`, and each of the 279 taken functions has exactly one
 strong definition, the adapter's (layers still being written, staged as
 `hybrid-new*-objs` in `objects.mk`, keep Broadcom's body until they are
 linked).

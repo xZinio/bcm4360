@@ -852,7 +852,7 @@ static void wlc_bmac_btc_flags_to_mhf(struct bcm4360_mac *mac)
  * the initialisation that depends on the band. `bandswitch`: called by the
  * band switch of wlc_bmac_set_chanspec (not by wlc_bmac_init).
  */
-static void wlc_bmac_bsinit(struct bcm4360_mac *mac, u16 chanspec, bool bandswitch)
+void bcm4360_bmac_bsinit(struct bcm4360_mac *mac, u16 chanspec, bool bandswitch)
 {
 	/* step 1: chips 0xa9a7 and 0x4331: si_seci_upd; not this chip */
 
@@ -1253,7 +1253,7 @@ void bcm4360_bmac_init(struct bcm4360_mac *mac, u16 chanspec, bool mute)
 		bcm4360_bmac_switch_macfreq(mac, 0);
 
 	/* step 37 */
-	wlc_bmac_bsinit(mac, chanspec, false);
+	bcm4360_bmac_bsinit(mac, chanspec, false);
 
 	/* step 38 */
 	bcm4360_bmac_env_intrsrestore(mac, mask);

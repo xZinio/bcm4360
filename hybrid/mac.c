@@ -60,6 +60,7 @@
 #define WLC_HW_PCIE2_WAR_FREQ	0x1c0	/* u32, C2 step 7 */
 #define WLC_HW_DEVID		0x082	/* u16 */
 #define WLC_HW_NBANDS		0x118	/* u32 */
+#define WLC_HW_CHANSPEC		0x11c	/* u16 */
 /* coexistence state (E10) */
 #define BTC_FLAGS		0x08	/* u16 */
 #define BTC_GPIO_MASK		0x0c	/* u32 */
@@ -150,6 +151,7 @@ void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac)
 	}
 	mac->nbands = FIELD(wlc_hw, WLC_HW_NBANDS, u32);
 	mac->devid = FIELD(wlc_hw, WLC_HW_DEVID, u16);
+	mac->chanspec = FIELD(wlc_hw, WLC_HW_CHANSPEC, u16);
 	if (sih) {
 		mac->bustype = sih->bustype;
 		mac->cccaps = sih->cccaps;
@@ -196,6 +198,7 @@ void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac)
 	FIELD(wlc_hw, WLC_HW_SRL, u16) = mac->srl;
 	FIELD(wlc_hw, WLC_HW_LRL, u16) = mac->lrl;
 	FIELD(wlc_hw, WLC_HW_UP, u8) = mac->up;
+	FIELD(wlc_hw, WLC_HW_CHANSPEC, u16) = mac->chanspec;
 	if (cur) {
 		FIELD(cur, BAND_CWMIN, u16) = mac->cwmin;
 		FIELD(cur, BAND_CWMAX, u16) = mac->cwmax;

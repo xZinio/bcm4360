@@ -260,7 +260,7 @@ in `wlc_hw` unless the structure is named):
 | 0x104 / 0x106 | 2 / 2 | SRL / LRL | short / long retry limit (defaults 7 / 4) |
 | 0x108 / 0x10a | 2 / 2 | SFBL / LFBL | short / long fallback limit (defaults 3 / 2) |
 | 0x10c | 1 | up | interface is up (`wlc_bmac_up_finish`/`_down_finish`) |
-| 0x11c | 2 | phy_bw_ctl | PHY bandwidth control (0x1001 default; bits 0x3800 select 20/40/80 MHz in E9) |
+| 0x11c | 2 | chanspec | the current chanspec, set by `wlc_bmac_set_chanspec` (`acphy-chanspec.md` section 1 step 2); 0x1001 at attach; E9 reads its bandwidth bits 0x3800 (20/40/80 MHz). (Named `phy_bw_ctl` in the first version.) |
 | 0x118 | 4 | nbands | number of bands (2 for the 4360) |
 | 0x150 | 8 | xmtfifo_sz_tbl | transmit-FIFO-size table pointer, chosen by MAC rev at attach |
 | 0x160 | 4 | pllreq_mask | PLL-request bitmask (`wlc_bmac_pllreq`, C9) |

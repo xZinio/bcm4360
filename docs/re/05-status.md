@@ -16,16 +16,17 @@ now being worked (first increment: the control primitives, `mac-ctrl`).
 Since the **hybrid build** ([../../hybrid/README.md](../../hybrid/README.md)),
 open code runs inside `bcm4360.ko` in place of Broadcom's, not only in the
 emulator: the PMU (16 functions of `hndpmu.c`), the register access primitives
-(15), the MAC layer (50: control primitives, object memories, clocks and core
-reset, initialisation with the microcode download, up and down), the utilities
+(15), the MAC layer (55: control primitives, object memories, clocks and core
+reset, initialisation with the microcode download, up and down, channel and
+band), the utilities
 of `bcmutils.c` and Broadcom's PHY's variable lookup (8), the regulatory
 database interpreter (16 of `wlc_clm.c`), the per-rate transmit power
 container (all 50 of `wlc_ppr.c`), the board variables from SROM/OTP
 (`srom_var_init`), the backplane functions (34 `si_*`) and the DMA engines are
 taken over and verified identical over a full session, with each layer's
 fallback too. **As of 2026-11-02, 92.7% of everything the driver executes in
-that session is open code by default** (95.0% with the open PHY switched on,
-when the Broadcom code that runs is 46.9% of the object alone). **The open AC-PHY now
+that session is open code by default** (95.1% with the open PHY switched on,
+when the Broadcom code that runs is 45.6% of the object alone). **The open AC-PHY now
 takes over all 79 entry points of Broadcom's PHY** (module parameter
 `open_phy`, off by default until it has run on a card): with it switched on
 the whole session is identical to the object, and the Broadcom code that runs

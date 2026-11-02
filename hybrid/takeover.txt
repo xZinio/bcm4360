@@ -136,8 +136,7 @@ use wlc_bmac_4360_pcie2_war
 use wlc_bmac_ifsctl_edcrs_set
 # the channel and the band, the transmitter mute (hybrid/mac_chan.c -> open/mac/bmac_chan.c,
 # acphy-chanspec.md sections 1-3, bmac-init.md E4). The transmit FIFO suspend/resume stay
-# Broadcom's (services of mac_env.h). Until open/mac/bmac_chan.c exists these takes keep
-# Broadcom's bodies (staged: hybrid-new-macchan-objs).
+# Broadcom's (services of mac_env.h).
 take wlc_bmac_set_chanspec
 take wlc_setxband
 take wlc_bmac_bw_set
