@@ -1177,8 +1177,9 @@ Nothing is done if `pub+0x40` (`hw_up`) is already set. Steps (bus PCI, chip
    word `wlc_hw+0x180` (GPIO mask of the LEDs; 7 in the traces) and the LED
    table `wlc_hw+0x198`: `si_gpiocontrol(sih, g, 0, 0)`, `si_gpioled(sih, g,
    g)`; a = OR of `1 << (pin & 31)` over those of the 32 LED entries (24
-   bytes each from table+8: pin in the first word) whose byte +4 is 0
-   (presumably "active high" (unverified)); if bit 11 of `boardflags2` is
+   bytes each from table+8: pin in the first word) whose byte +4 is 0 (byte
+   +4 = 1 marks an active-high LED, so `a` is the set of active-low pins:
+   they are driven high, i.e. off; `bmac-run.md` R4); if bit 11 of `boardflags2` is
    clear: r = `si_gpioout(sih, g, a & g, 0)`, `si_gpioouten(sih, g, g, 0)`;
    else: `si_gpioout(sih, g, ~(a & g) & g, 0)`, r = `si_gpioouten(sih, g, 0,
    0)` and for ChipCommon revisions >= 20 (`sih+0x14`) `si_gpiopull(sih, 1, g,
@@ -1666,6 +1667,10 @@ interface is up and the byte `+0xf4` of the structure `wlc+0x550` is 0, call
 
 #### E9. wlc_bmac_ifsctl_edcrs_set (.text+0x062340, 195 bytes, name original), sub_06212d (.text+0x06212d, 428 bytes, name assigned: wlc_bmac_ifs_ctl1_edcrs), sub_0622d9 (.text+0x0622d9, 103 bytes, name assigned: wlc_bmac_ifs_ctl_edcrs)
 
+**Superseded by [`bmac-run.md`](bmac-run.md) R1** (every bandwidth and
+sideband; the text below describes the 20 MHz case only and is kept for
+reference).
+
 Set the energy-detect / carrier-sense control of the IFS block. Acts for PHY
 types 4 (N, rev >= 16), 7 (HT) and 11 (AC). **This corrects C4 step 5: for the
 AC-PHY the function is not a no-op.**
@@ -1693,6 +1698,11 @@ the AC-PHY `on` is 0, so `sub_0622d9(.,8,8)` (no-op on rev 42) and
 `sub_06212d(.,1)` run - the latter produces the `D11(0x6c6)`/`SHM(0x5a)` writes.
 
 #### E10. Bluetooth coexistence: mode, wire, GPIO, host flags
+
+**Superseded by [`bmac-run.md`](bmac-run.md) R3** (see its "Corrections to
+bmac-init.md": the -3 result of `btc_mode_set`, `btc+0x18` is `aa2g`, the auto
+wire, 40 MHz in `update_bt_chanspec`, `sub_06106b` called by B10). The text
+below is kept for reference.
 
 The coexistence state is `wlc_hw+0xb0` (`btc`): `+0x00` mode, `+0x04` wire,
 `+0x08` flags, `+0x0c` GPIO mask, `+0x10` GPIO out, `+0x1a` the shared-memory
