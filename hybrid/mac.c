@@ -36,11 +36,23 @@
 #define WLC_HW_LRL		0x106	/* long retry limit (u16, E7) */
 #define WLC_HW_UP		0x10c	/* the interface is up (u8) */
 #define WLC_HW_ETHERADDR	0x178	/* saved hardware MAC address (6 bytes, E1) */
-/* band state: the host flag copies (A9), the contention window (B11) */
+#define WLC_HW_DI		0x020	/* DMA engines of the transmit FIFOs 0..5 (8 bytes each) */
+#define WLC_HW_GPIO_SEL		0x0ac	/* u16, C7 step 3 */
+#define WLC_HW_BTC		0x0b0	/* coexistence state; its first 32-bit word is the mode */
+#define WLC_HW_PLLREQ		0x160	/* PLL request mask (u32, C9) */
+#define WLC_HW_SUSPENDED_FIFOS	0x164	/* u8 */
+#define WLC_HW_NORESET		0x184	/* u8 */
+#define WLC_HW_FORCEFASTCLK	0x185	/* u8 */
+#define WLC_HW_SBCLK		0x187	/* u8 */
+#define WLC_HW_PHYCLK		0x190	/* u8 */
+/* band state: the host flag copies (A9), the contention window (B11), the PHY */
 #define BAND_MHFS		0x008	/* u16 [5] */
 #define BAND_MHFS_N		5
 #define BAND_CWMIN		0x014	/* u16 */
 #define BAND_CWMAX		0x016	/* u16 */
+#define BAND_COREFLAGS		0x018	/* u32 */
+#define BAND_PHYTYPE		0x01c	/* u16 */
+#define BAND_PI			0x028	/* the PHY of the band */
 
 #define FIELD(p, off, type)	(*(type *)((u8 *)(p) + (off)))
 
@@ -91,6 +103,31 @@ void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac)
 	mac->sem_ctx = FIELD(wlc_hw, WLC_HW_WLC, void *);
 	mac->sem_enter = tcm_sem_enter;
 	mac->sem_exit = tcm_sem_exit;
+	mac->env = wlc_hw;
+	mac->noreset = FIELD(wlc_hw, WLC_HW_NORESET, u8);
+	mac->forcefastclk = FIELD(wlc_hw, WLC_HW_FORCEFASTCLK, u8);
+	mac->sbclk = FIELD(wlc_hw, WLC_HW_SBCLK, u8);
+	mac->phyclk = FIELD(wlc_hw, WLC_HW_PHYCLK, u8);
+	mac->suspended_fifos = FIELD(wlc_hw, WLC_HW_SUSPENDED_FIFOS, u8);
+	for (i = 0; i < 6; i++)
+		if (FIELD(wlc_hw, WLC_HW_DI + 8 * i, void *))
+			mac->dma_fifos |= 1 << i;
+	mac->gpio_sel = FIELD(wlc_hw, WLC_HW_GPIO_SEL, u16);
+	mac->pllreq = FIELD(wlc_hw, WLC_HW_PLLREQ, u32);
+	if (FIELD(wlc_hw, WLC_HW_BTC, u32 *))
+		mac->btc_mode = *FIELD(wlc_hw, WLC_HW_BTC, u32 *);
+	if (cur) {
+		mac->band_valid = 1;
+		mac->band_has_phy = FIELD(cur, BAND_PI, void *) != NULL;
+		mac->band_phytype = FIELD(cur, BAND_PHYTYPE, u16);
+		mac->band_coreflags = FIELD(cur, BAND_COREFLAGS, u32);
+	}
+	if (sih) {
+		mac->bustype = sih->bustype;
+		mac->cccaps = sih->cccaps;
+		mac->pmurev = (u32)sih->pmurev;
+		mac->chiprev = sih->chiprev;
+	}
 }
 
 void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac)
@@ -108,6 +145,12 @@ void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac)
 		FIELD(cur, BAND_CWMIN, u16) = mac->cwmin;
 		FIELD(cur, BAND_CWMAX, u16) = mac->cwmax;
 	}
+	FIELD(wlc_hw, WLC_HW_CLK, u8) = mac->clk;
+	FIELD(wlc_hw, WLC_HW_FORCEFASTCLK, u8) = mac->forcefastclk;
+	FIELD(wlc_hw, WLC_HW_SBCLK, u8) = mac->sbclk;
+	FIELD(wlc_hw, WLC_HW_PHYCLK, u8) = mac->phyclk;
+	FIELD(wlc_hw, WLC_HW_SUSPENDED_FIFOS, u8) = mac->suspended_fifos;
+	FIELD(wlc_hw, WLC_HW_PLLREQ, u32) = mac->pllreq;
 	FIELD(wlc_hw, WLC_HW_MACCONTROL, u32) = mac->maccontrol;
 	FIELD(wlc_hw, WLC_HW_SUSPEND_DEPTH, u32) = mac->mac_suspend_depth;
 	FIELD(wlc_hw, WLC_HW_WAKE_OVERRIDE, u32) = mac->wake_override;

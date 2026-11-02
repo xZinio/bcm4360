@@ -37,9 +37,12 @@ was compared there.
 | PMU, clocks | `open_pmu` | on | 16: `si_pmu_init`, `si_pmu_pll_init`, `si_pmu_res_init`, `si_pmu_measure_alpclk`, the clock queries, OTP power, radio supply, the indirect PMU registers | `pmu.c` -> `open/chip/pmu.c` | [pmu](../docs/re/spec/pmu.md) |
 | register access | `open_access` | on | 15: `phy_reg_read/write/mod/and/or`, `read/write/mod/and/or/xor_radio_reg`, `wlc_phy_table_write/read_acphy`, `wlc_bmac_read/write_shm` | `access.c` -> `open/hw/access.c` | [access](../docs/re/spec/access.md) |
 | MAC control | `open_mac` | on | 6: `wlc_bmac_mctrl`, `wlc_ucode_wake_override_set/clear`, `wlc_bmac_suspend_mac_and_wait`, `wlc_bmac_enable_mac`, `wlc_bmac_mhf` | `mac.c` -> `open/mac/bmac_ctrl.c`, `bmac_mhf.c` | [bmac-init](../docs/re/spec/bmac-init.md) A1-A9 |
+| MAC object memories | `open_mac` | on | 13: `wlc_bmac_set_shm`, `wlc_bmac_copyto/copyfrom_objmem`, `wlc_bmac_write_amt`, `wlc_bmac_set_rcmta`, `wlc_bmac_write_template_ram`, `wlc_bmac_write_ihr`, `wlc_bmac_write_inits`, `wlc_bmac_set_cwmin/cwmax`, `wlc_bmac_retrylimit_upd`, `wlc_bmac_set_hw_etheraddr`, `wlc_bmac_hw_etheraddr` | `mac_mem.c` -> `open/mac/bmac_mem.c` | [bmac-init](../docs/re/spec/bmac-init.md) A8, B4-B6, B11, E1, E3, E7, F1, F2 |
+| per-rate power container | `open_ppr` | on | all 50 `ppr_*` functions of `wlc_ppr.c` (the open PHY's transmit power reaches them too) | `ppr.c` -> `open/lib/ratepwr.c` | [ppr](../docs/re/spec/ppr.md) |
+| board variables from SROM/OTP | `open_srom` | on | `srom_var_init` (PCI: SROM read and CRC, OTP and NVRAM fall-backs, the revision-11 conversion, the variable buffer), `srom_read`; the backplane, OTP and NVRAM functions they call stay Broadcom's | `srom.c` -> `open/chip/srom.c` | [srom-otp](../docs/re/spec/srom-otp.md) |
 | PHY and radio | `open_phy` | **off** | all 79 entry points of the MAC into the PHY (takeover.txt) | `phy.c` -> `open/phy/*` (+ `open/hw/access.c`) | [acphy-api](../docs/re/spec/acphy-api.md) and the `acphy-*` specs |
 | regulatory database | `open_clm` | on | 16 `clm_*` entry points of `wlc_clm.c` (the database stays Broadcom's data) | `clm.c` -> `open/lib/clm.c` | [clm](../docs/re/spec/clm.md) |
-| utilities | `open_utils` | on | 7: `getvar`, `getintvar`, `getintvararray`, `getintvararraysize`, `bcm_strtoul`, `bcm_bitcount`, `hndcrc8` (the global NVRAM, `nvram_get`, stays Broadcom's) | `utils.c` -> `open/lib/utils.c` | [utils](../docs/re/spec/utils.md) |
+| utilities | `open_utils` | on | 8: `getvar`, `getintvar`, `getintvararray`, `getintvararraysize`, `bcm_strtoul`, `bcm_bitcount`, `hndcrc8`, and Broadcom's PHY's own lookup `phy_getvar` (the global NVRAM, `nvram_get`, stays Broadcom's) | `utils.c` -> `open/lib/utils.c` | [utils](../docs/re/spec/utils.md) |
 
 The switches are read when a card is attached (`open_access`, `open_mac` and
 `open_utils` at every call; all are read-only once the module is loaded). To
@@ -87,6 +90,10 @@ is the real card.
 | the same + the open PHY (`open_phy=1`) | 123,127 bytes (61.4 %) | 69,061 bytes | 37.6 % |
 | default since the CLM layer: PMU, access, MAC, utilities, regulatory database | 187,114 bytes (93.4 %) | 25,831 bytes | **64.7 %** |
 | the same + the open PHY (`open_phy=1`) | 115,520 bytes (57.6 %) | 79,127 bytes | **78.6 %** |
+| default since 2026-11-02: + `phy_getvar`, MAC object memories, per-rate power container | 181,825 bytes (90.7 %) | 41,093 bytes | **84.4 %** |
+| the same + the open PHY (`open_phy=1`) | 110,352 bytes (55.1 %) | 94,348 bytes | **85.2 %** |
+| + board variables from SROM/OTP (default) | 179,205 bytes (89.4 %) | 45,101 bytes | **91.2 %** |
+| the same + the open PHY (`open_phy=1`) | 107,732 bytes (53.8 %) | 98,356 bytes | **93.3 %** |
 
 With the open PHY switched on, the whole session is identical to the object
 (41,416 accesses: attach, up, nine channel changes in both bands and all
@@ -96,19 +103,30 @@ layers switched off. All 79 entry points exist; the receive measurements
 written from their specification, not compared. The PHY layer is in the
 module with `open_phy` off by default until it has run on a card. The
 (much larger) static share falls because the whole AC-PHY of Broadcom's
-object stops running; the share of execution counting repetitions is
-dominated by Broadcom's regulatory database lookup (`wlc_clm.c`, about 46 %),
-the largest closed part still running and the next candidate for a
-specification.
+object stops running. (Earlier, the share of execution counting repetitions
+was dominated by Broadcom's regulatory database lookup, `wlc_clm.c`, about
+46 %; it is open since the CLM layer. With Broadcom's PHY running, its own
+variable lookup `phy_getvar` was the next 14 %; it goes through the open
+lookup since 2026-11-02, as do the per-rate power container (`wlc_ppr.c`,
+about 5 %) and the SROM variable building (`bcmsrom.c`, about 7 %).) What
+Broadcom code still runs is spread thin: the MAC (`wlc_bmac.c`), the channel
+and rate logic of the upper layer (`wlc_channel.c`, `wlc.c`, `wlc_stf.c`), the
+backplane (`siutils.c`, `aiutils.c`) and the DMA engines (`hnddma.c`).
 
 The last column weighs code by how often it runs: the register access
 primitives and the variable lookup are small but run constantly (`getvar`
 alone was about a fifth of everything the driver executes). `check` gives
 "the same" with all layers on and with each switched off; the module builds
 against linux-headers 7.2.11-arch1-1 with GCC 16.2.1 without warnings from
-`open/` or `hybrid/`, and each of the 46 taken functions of these layers has
-exactly one strong definition, the adapter's (the 79 of the PHY stay
-Broadcom's until the PHY adapter goes into the module).
+`open/` or `hybrid/`, and each of the 207 taken functions has exactly one
+strong definition, the adapter's (layers still being written, staged as
+`hybrid-new*-objs` in `objects.mk`, keep Broadcom's body until they are
+linked).
+
+`python hybrid.py srom` attaches the driver from ten different cards
+(SROM images, a blank SROM, the image in the OTP, a blank OTP) on the object
+alone and on the hybrid core and compares the variable buffer, the attach
+result and every access.
 
 One value of the object is not defined by the object itself: the third
 16-bit word of PHY table 0x14, entry 0x33, comes from uninitialized stack in

@@ -52,6 +52,11 @@ list between the register accesses, for the object and for your code alike
 * Freestanding: no libc, no floating point, no 64 bit division by a variable
   without need. Everything from the environment comes through
   `open/include/bcm4360/hw.h`. Integer types from `bcm4360/types.h`.
+  Beware of code the compiler turns into library calls: an initializer of a
+  whole structure or a large local array (`struct x v = { ... }`, `= {0}`)
+  or a structure assignment may become a call of `memset`/`memcpy`, which
+  the emulator of the hybrid build does not provide ("import memset is not
+  implemented"). Set fields one by one, or use `hw_memset`/`hw_memcpy`.
 * No global mutable state: state lives in structures passed as arguments (a
   machine can have more than one card).
 * Every function has a comment that names the specification and section it

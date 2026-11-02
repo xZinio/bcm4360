@@ -68,6 +68,32 @@ take wlc_bmac_set_rcmta
 take wlc_bmac_retrylimit_upd
 take wlc_bmac_write_ihr
 take wlc_bmac_write_template_ram
+# clocks, core reset, crystal, core disable (hybrid/mac_clk.c -> open/mac/bmac_clk.c,
+# bmac-init.md A10-A17, C7, C9, C11, C13, C14); until hybrid/objects.mk links them
+# Broadcom's own (weak) bodies run unchanged. The backplane functions they call stay
+# Broadcom's (services of open/include/bcm4360/mac_env.h); the PHY functions they
+# call are the PHY layer's takes.
+take wlc_bmac_phyclk_fgc
+take wlc_bmac_macphyclk_set
+take wlc_bmac_core_phy_clk
+take wlc_bmac_corereset
+take wlc_bmac_phy_reset
+take wlc_bmac_core_phypll_ctl
+take wlc_bmac_core_phypll_reset
+take wlc_bmac_btc_mode_get
+take wlc_coredisable
+take wlc_bmac_xtal
+take wlc_bmac_pllreq
+take wlc_bmac_set_clk
+take wlc_bmac_set_ctrl_bt_shd0
+take wlc_bmac_set_ctrl_SROM
+take wlc_bmac_radio_read_hwdisabled
+take wlc_hw_deviceremoved
+use si_iscoreup
+use si_core_reset
+use si_core_disable
+use si_clkctl_xtal
+use si_deviceremoved
 
 # --- utilities (hybrid/utils.c -> open/lib/utils.c, docs/re/spec/utils.md)
 take getvar
@@ -304,8 +330,7 @@ use prefregs_2069_rev4
 use rx_farrow_tbl
 use tx_farrow_dac1_tbl
 # --- board variables (hybrid/srom.c -> open/chip/srom.c, docs/re/spec/srom-otp.md,
-# switch open_srom); until hybrid/objects.mk links them Broadcom's own (weak)
-# bodies run unchanged. The backplane, OTP and NVRAM functions stay Broadcom's:
+# switch open_srom). The backplane, OTP and NVRAM functions stay Broadcom's:
 # the services of open/include/bcm4360/srom.h
 take srom_var_init
 take srom_read

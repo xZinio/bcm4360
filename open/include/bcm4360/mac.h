@@ -47,6 +47,30 @@ struct bcm4360_mac {
 	void *sem_ctx;
 	void (*sem_enter)(void *ctx);
 	void (*sem_exit)(void *ctx);
+
+	/* clocks, core reset, crystal, core disable (bmac-init.md A10-A17, C7,
+	 * C9, C11, C13, C14; task docs/re/tasks/bmac-clk.md). Services:
+	 * bcm4360/mac_env.h; `env` is the platform's handle for them. */
+	void *env;
+	u8  noreset;		/* the core reset skips the reset itself (A14 step 4) */
+	u8  forcefastclk;	/* the fast clock is forced (A13) */
+	u8  sbclk;		/* the crystal / backplane clock is on (C9) */
+	u8  phyclk;		/* argument of the last core_phy_clk (A12) */
+	u8  suspended_fifos;	/* suspended transmit FIFOs (cleared by A14 step 7) */
+	u8  dma_fifos;		/* bit i: transmit FIFO i (0..5) has a DMA engine */
+	u16 gpio_sel;		/* the 16-bit word of C7 step 3 */
+	u32 pllreq;		/* PLL request mask (C9) */
+	u32 btc_mode;		/* Bluetooth coexistence mode (A17) */
+	/* the current band */
+	u8  band_valid;		/* there is a current band */
+	u8  band_has_phy;	/* it has a PHY (a `pi`) */
+	u16 band_phytype;	/* its PHY type (11 = AC-PHY) */
+	u32 band_coreflags;	/* its core flags (A14 step 1) */
+	/* the chip */
+	u32 bustype;		/* 1 = PCI */
+	u32 cccaps;		/* ChipCommon capabilities (bit 28: PMU) */
+	u32 pmurev;		/* PMU revision */
+	u32 chiprev;		/* chip revision */
 };
 
 void bcm4360_bmac_mctrl(struct bcm4360_mac *mac, u32 mask, u32 val);	/* A2 (+A1) */
@@ -81,5 +105,23 @@ void bcm4360_bmac_retrylimit_upd(struct bcm4360_mac *mac, u16 srl, u16 lrl);	/* 
 void bcm4360_bmac_write_ihr(struct bcm4360_mac *mac, u32 reg, u16 v);		/* F1 */
 void bcm4360_bmac_write_template_ram(struct bcm4360_mac *mac, s32 offset, s32 len,
 				     const void *buf);				/* F2 */
+
+/* clocks, core reset, crystal, core disable */
+void bcm4360_bmac_phyclk_fgc(struct bcm4360_mac *mac, bool on);			/* A10 */
+void bcm4360_bmac_macphyclk_set(struct bcm4360_mac *mac, bool on);		/* A11 */
+void bcm4360_bmac_core_phy_clk(struct bcm4360_mac *mac, bool on);		/* A12 */
+void bcm4360_bmac_corereset(struct bcm4360_mac *mac, u32 flags);		/* A14 (+A13) */
+void bcm4360_bmac_phy_reset(struct bcm4360_mac *mac);				/* A15 */
+void bcm4360_bmac_core_phypll_ctl(struct bcm4360_mac *mac, bool on);		/* A16 */
+void bcm4360_bmac_core_phypll_reset(struct bcm4360_mac *mac);			/* A16 */
+u32 bcm4360_bmac_btc_mode_get(struct bcm4360_mac *mac);				/* A17 */
+void bcm4360_bmac_coredisable(struct bcm4360_mac *mac);				/* C7 */
+void bcm4360_bmac_xtal(struct bcm4360_mac *mac, bool want);			/* C9 */
+void bcm4360_bmac_pllreq(struct bcm4360_mac *mac, bool set, u32 req_bit);	/* C9 */
+void bcm4360_bmac_set_clk(struct bcm4360_mac *mac, bool on);			/* C9 */
+s32 bcm4360_bmac_set_ctrl_bt_shd0(struct bcm4360_mac *mac, bool on);		/* C11 */
+void bcm4360_bmac_set_ctrl_srom(struct bcm4360_mac *mac);			/* C11 */
+bool bcm4360_bmac_radio_read_hwdisabled(struct bcm4360_mac *mac);		/* C13 */
+bool bcm4360_bmac_deviceremoved(struct bcm4360_mac *mac);			/* C14 */
 
 #endif
