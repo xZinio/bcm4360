@@ -14,12 +14,12 @@ hybrid-objs := hybrid/card.o \
                hybrid/utils.o open/lib/utils.o \
                hybrid/clm.o open/lib/clm.o \
                hybrid/ppr.o open/lib/ratepwr.o \
-               hybrid/srom.o open/chip/srom.o
+               hybrid/srom.o open/chip/srom.o \
+               hybrid/si.o open/chip/si.o
 
 # Being written, one variable hybrid-new*-objs per layer: each is linked by
 # tools/re/hybrid.py for the emulator once ALL its sources exist, not yet in
 # the module.
-hybrid-new-si-objs := hybrid/si.o open/chip/si.o
 
 # The PHY layer (hybrid/phy.c, switch open_phy, default off): the adapter and
 # the open PHY (its register access, open/hw/access.o, is in the list above).

@@ -357,8 +357,7 @@ use si_osh
 # --- backplane (hybrid/si.c -> open/chip/si.c, docs/re/spec/chip.md, switch open_si):
 # core selection, register access, the AXI wrapper, GPIO, small helpers; si_attach
 # and the PCIe bridge stay Broadcom's. The MAC, SROM and PMU layers call these
-# names too and reach the same code. Until hybrid/objects.mk links them Broadcom's
-# own (weak) bodies run unchanged.
+# names too and reach the same code.
 take si_coreidx
 take si_coreid
 take si_corerev

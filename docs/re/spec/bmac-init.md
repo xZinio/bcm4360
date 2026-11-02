@@ -1475,9 +1475,11 @@ set). Result: 0 on success, else an error code (below). The order is:
        identity into `wlc->band`. Set `band+0x14` = 0x0f (cwmin default 15),
        `band+0x16` = 0x3ff (cwmax default 1023).
     6. On the first band only (FIFO 0 handle still 0): `wl_alloc_dma_resources`
-       then four `dma_attach` calls for FIFOs 0..3 (ring descriptors at
-       `regs+0x200`, `+0x220`, `+0x240`, `+0x260`; rev >= 11 shifts these),
-       each followed by `sub_069659` (FIFO size, spec `bmac-data`) and
+       then four `dma_attach` calls for FIFOs 0..3 (on MAC revision 42 the
+       channel registers are: transmit `regs+0x200`, `+0x240`, `+0x280`,
+       `+0x2c0`, receive of FIFO 0 at `regs+0x220`; corrected by `bmac-data`
+       D7), each followed by `sub_069659` (burst/prefetch parameters, spec
+       `bmac-data`) and
        `wlc_hw_set_di`; **any `dma_attach` failure returns 0x13**; then read
        `&txavail` for each FIFO. The DMA details belong to `bmac-data`.
     7. Initial host-flag copies of the band: `memset(band+0x08, 0, 10)` (the five
