@@ -174,9 +174,14 @@ calibration, long watchdog runs with the periodic calibration, RSSI on many
 receive headers, the noise interrupt, with the card model giving the
 measurement registers deterministic values, and `--board N` for board
 variants. With Broadcom's PHY and every other layer open (the default
-module) it is identical to the object: 513,322 accesses. With the open PHY
-it still differs in the receive calibration with measured powers (being
-fixed before `open_phy` can become the default).
+module) it is identical to the object: 513,322 accesses. **With the open PHY
+switched on as well it is identical too**, on the synthetic board (513,322
+accesses) and on the eight board variants (451,609 to 735,078 accesses
+each): every channel and bandwidth, the full calibration on four channels
+with measured IQ powers, the periodic multi-phase calibration, measured
+temperatures, RSSI and noise. The soak runs 73 % of the open PHY's code
+(the rest: front-end overrides of other boards, the debug ioctls and
+iovars, entry points of modes the emulator does not use).
 
 `python hybrid.py srom` attaches the driver from ten different cards
 (SROM images, a blank SROM, the image in the OTP, a blank OTP) on the object
