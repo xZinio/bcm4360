@@ -96,5 +96,6 @@ extern bool bcm4360_open_mac;
 extern bool bcm4360_open_utils;
 extern bool bcm4360_open_clm;
 extern bool bcm4360_open_ppr;
+extern bool bcm4360_open_srom;
 
 #endif

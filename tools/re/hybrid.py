@@ -42,7 +42,7 @@ ROOT = ab.ROOT
 OUT = os.environ.get('HYBRID_OUT') or os.path.join(ROOT, 're-out', 'hybrid')
 BLOB = os.path.join(ROOT, 'lib', 'wlc_hybrid.o_shipped')
 CORE = os.path.join(OUT, 'core.o')
-LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils', 'clm', 'ppr')   # the switches bcm4360_open_<layer>
+LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils', 'clm', 'ppr', 'srom')   # the switches bcm4360_open_<layer>
 
 CHANNELS = ['1', '6', '11', '36', '36/40', '36/80', '149/80', '157/40', '165']
 SESSION = (['attach', 'mpc 0', 'up'] + CHANNELS +
@@ -70,9 +70,19 @@ UNDEFINED_TBL = {('W', 'tbl.14', 0x33, 6): 0xffffffff}
 STACK_ZEROED = ('wlc_update_txppr_offset',)
 
 
-def objects(variables=('hybrid-objs', 'hybrid-phy-objs', 'hybrid-new-objs')):
-    """The objects of the hybrid build: hybrid/objects.mk, with the PHY layer."""
+def staged_groups():
+    """The variables hybrid-new*-objs of hybrid/objects.mk: layers being
+    written, each linked for the emulator only once all its sources exist."""
     text = open(os.path.join(ROOT, 'hybrid', 'objects.mk')).read()
+    return re.findall(r'^(hybrid-new[\w-]*-objs)\s*:=', text, re.M)
+
+
+def objects(variables=None):
+    """The objects of the hybrid build: hybrid/objects.mk, with the PHY layer
+    and the staged layers."""
+    text = open(os.path.join(ROOT, 'hybrid', 'objects.mk')).read()
+    if variables is None:
+        variables = ('hybrid-objs', 'hybrid-phy-objs') + tuple(staged_groups())
     out = []
     for var in variables:
         m = re.search(var + r'\s*:=((?:.*\\\n)*.*)', text)
@@ -89,11 +99,14 @@ def build(quiet=False):
     os.makedirs(os.path.join(OUT, 'obj'), exist_ok=True)
     objs = []
     phy_only = set(objects()) - set(objects(('hybrid-objs',)))
-    new = objects(('hybrid-new-objs',))
-    new_ready = all(os.path.exists(os.path.join(ROOT, o[:-2] + '.c')) for o in new)
+    waiting = set()
+    for group in staged_groups():
+        objs_of = objects((group,))
+        if not all(os.path.exists(os.path.join(ROOT, o[:-2] + '.c')) for o in objs_of):
+            waiting |= set(objs_of)
     for o in objects():
         src = os.path.join(ROOT, o[:-2] + '.c')
-        if o in new and not new_ready:
+        if o in waiting:
             continue    # a layer being written: its adapter waits for the open code
         if o in phy_only and not os.path.exists(src):
             continue    # a file of the PHY layer that is still to be written
@@ -124,8 +137,10 @@ def build(quiet=False):
 class Run:
     """A session on one build of the core."""
 
-    def __init__(self, path=None, off=(), coverage=False, patch=None, on=()):
-        self.s = ab.Session(path=path)
+    def __init__(self, path=None, off=(), coverage=False, patch=None, on=(), **card):
+        # card: srom= (an image as a list of words; None: no SROM) and otp=
+        # ({word: value}) of the card model (run_attach.Driver, bcm4360.py)
+        self.s = ab.Session(path=path, **card)
         self.s.chip.radio_done = True
         self.m = self.s.m
         self.d = self.s.d
@@ -243,6 +258,95 @@ def check(off=(), show=20, patch=None, on=()):
     return bad
 
 
+def srom_images(seed=11):
+    """Cards for the srom check: (label, card model arguments). The SROM images
+    are revision 11 (the format of the BCM4360) derived from the synthetic one,
+    with a valid CRC unless the label says otherwise."""
+    import random
+    from run_attach import DEFAULT_SROM, load_srom
+    from srom import crc8
+    base = load_srom(DEFAULT_SROM, Blob(BLOB))
+
+    def fix(words):
+        raw = b''.join(w.to_bytes(2, 'little') for w in words)
+        words[-1] = (words[-1] & 0xff) | ((crc8(raw[:-1]) ^ 0xff) << 8)
+        return words
+
+    rng = random.Random(seed)
+    out = [('synthetic SROM', {})]
+    w = list(base)
+    for i in range(1, len(w) - 1):
+        if i not in (64,) and rng.random() < 0.3:
+            w[i] = 0xffff                       # unprogrammed fields (NOFFS)
+    out.append(('SROM with unprogrammed words', {'srom': fix(w)}))
+    for k in range(4):
+        w = [rng.randrange(0x10000) for _ in base]
+        w[0] = rng.randrange(0xffff)
+        w[64] = base[64]                        # signature of a 234-word image
+        w[-1] = base[-1]                        # revision 11
+        out.append(('random revision-11 SROM %d' % k, {'srom': fix(w)}))
+    w = list(base)
+    bad = w[-1] ^ 0x0100
+    w[-1] = bad
+    out.append(('SROM with a bad CRC', {'srom': w}))
+    out.append(('blank SROM', {'srom': [0xffff] * len(base)}))
+    gu = 16                                     # OTP layout of the model (srom-otp.md)
+    otp = {gu + 3: 1 << 12, gu: (gu + 4 + len(base)) << 4}
+    otp.update({gu + 4 + i: v for i, v in enumerate(base)})
+    out.append(('no SROM, image in the OTP', {'srom': None, 'otp': otp}))
+    out.append(('no SROM, blank OTP', {'srom': None}))
+    return out
+
+
+def srom_check(off=(), show=20, on=()):
+    """Attach from several SROM/OTP images on the object alone and on the
+    hybrid core: the result, the variable buffer and every access of the
+    attach must be the same."""
+    core = build(quiet=True)
+    bad = 0
+    for label, card in srom_images():
+        runs = []
+        for path, o, n in ((None, (), ()), (core, off, on)):
+            r = Run(path, off=o, on=n, **card)
+            made = []      # (result, buffer) of every srom_var_init
+
+            def entry(m, sih, bustype, curmap, osh, pvars, pcount, made=made):
+                def done(mm, result):
+                    p, k = mm.r64(pvars), mm.r32(pcount)
+                    made.append((result & 0xffffffff, mm.read(p, k) if p and k else b''))
+                m.at_return(done)
+            r.m.on_call('srom_var_init', entry, 6)
+            try:
+                res = r.step('attach')
+            except EmuError as e:
+                res = 'emulation error: %s' % str(e).splitlines()[0]
+            vars_ = made[0][1] if made else b''
+            runs.append((res, vars_, r.logical(), made))
+        (ra, va, ta, ma), (rb, vb, tb, mb) = runs
+        same = ra == rb and ma == mb and ta == tb
+        bad += not same
+        print('%-30s attach %s, %4d bytes of variables, %5d accesses: %s' % (
+            label, 'ok' if ra == 0 else ra, len(va), len(ta),
+            'the same' if same else 'DIFFERENT'))
+        if not same:
+            if ra != rb:
+                print('    attach result: object %s, hybrid %s' % (ra, rb))
+            if [x[0] for x in ma] != [x[0] for x in mb]:
+                print('    srom_var_init results: object %s, hybrid %s' % (
+                    [x[0] for x in ma], [x[0] for x in mb]))
+            if va != vb:
+                print('    variables differ (object %d bytes, hybrid %d bytes)' % (len(va), len(vb)))
+                for x, y in zip(va.split(b'\0'), vb.split(b'\0')):
+                    if x != y:
+                        print('      first difference: object %r, hybrid %r' % (x, y))
+                        break
+            if ta != tb:
+                ab.compare(ta, tb, show)
+    print('srom check, switched on: %s, off: %s: %s' % (
+        ', '.join(on) or '-', ', '.join(off) or '-', 'the same' if not bad else 'DIFFERENT'))
+    return bad
+
+
 def share():
     """Bytes of code executed in the session: Broadcom's, and the open code's."""
     core = build(quiet=True)
@@ -284,7 +388,7 @@ def selftest():
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('cmd', choices=('build', 'check', 'share', 'selftest'))
+    ap.add_argument('cmd', choices=('build', 'check', 'share', 'selftest', 'srom'))
     ap.add_argument('--off', default='', help='layers to switch off: ' + ', '.join(LAYERS))
     ap.add_argument('--on', default='', help='layers to switch on: ' + ', '.join(LAYERS))
     ap.add_argument('--show', type=int, default=20)
@@ -299,6 +403,8 @@ def main():
         return selftest()
     off = [x for x in ns.off.split(',') if x]
     on = [x for x in ns.on.split(',') if x]
+    if ns.cmd == 'srom':
+        return 1 if srom_check(off, ns.show, on=on) else 0
     return 1 if check(off, ns.show, on=on) else 0
 
 

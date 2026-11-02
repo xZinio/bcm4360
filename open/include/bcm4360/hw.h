@@ -54,6 +54,8 @@ int osl_memcmp(const void *a, const void *b, size_t n);
 int osl_strcmp(const char *a, const char *b);
 int osl_strncmp(const char *a, const char *b, unsigned int n);
 int osl_strlen(const char *s);
+int osl_snprintf(char *buf, size_t n, const char *fmt, ...)
+	__attribute__((format(printf, 3, 4)));
 
 static inline u8 hw_read8(void *base, u32 off)
 {
@@ -140,6 +142,9 @@ const void *hw_fw_data(struct bcm4360_hw *hw, const char *name, u32 *size);
 #define hw_strcmp(a, b)		osl_strcmp((a), (b))
 #define hw_strncmp(a, b, n)	osl_strncmp((a), (b), (n))
 #define hw_strlen(s)		osl_strlen(s)
+/* the kernel's snprintf: at most n - 1 characters and a NUL, result the
+ * length the whole text would have; %c of 0 stores a zero byte */
+#define hw_snprintf		osl_snprintf
 
 #else
 #error "no platform: define BCM4360_EMU (emulator) or BCM4360_OSL (hybrid module)"

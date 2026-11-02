@@ -304,3 +304,20 @@ use prefregs_2069_rev3
 use prefregs_2069_rev4
 use rx_farrow_tbl
 use tx_farrow_dac1_tbl
+# --- board variables (hybrid/srom.c -> open/chip/srom.c, docs/re/spec/srom-otp.md,
+# switch open_srom); until hybrid/objects.mk links them Broadcom's own (weak)
+# bodies run unchanged. The backplane, OTP and NVRAM functions stay Broadcom's:
+# the services of open/include/bcm4360/srom.h
+take srom_var_init
+take srom_read
+use si_is_sprom_available
+use si_chipcontrl_read
+use si_chipcontrl_restore
+use si_chipcontrl_srom4360
+use otp_read_region
+use si_getdevpathvar
+use si_getnvramflvar
+use nvram_getall
+use si_devpath
+use si_coded_devpathvar
+use si_osh
