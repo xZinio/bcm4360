@@ -145,8 +145,6 @@ take wlc_bmac_mute
 # (wlc_bmac_tx_fifo_suspend/resume: taken by the run-time group below)
 # at run time (hybrid/mac_runtime.c -> open/mac/bmac_runtime.c, bmac-run.md R1, R2, R5,
 # R6, R7): energy detect, transmit FIFO suspend/resume, CCA counters, rate offsets, TSF.
-# Until open/mac/bmac_runtime.c exists these takes keep Broadcom's bodies (staged:
-# hybrid-new-macruntime-objs).
 take wlc_bmac_ifsctl_edcrs_set
 take wlc_bmac_tx_fifo_suspend
 take wlc_bmac_tx_fifo_resume
