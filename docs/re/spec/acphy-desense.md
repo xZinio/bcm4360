@@ -245,7 +245,9 @@ CRS minimum-power lookup tables, 15 bytes, index 0..14 (`.rodata`):
 c" means c = 0 .. N-1 in rising order (N = `pi+0x168` = 2), o = 0x200 * c.
 2.4 GHz means (`pi+0x17e` & 0xc000) = 0, everything else is 5 GHz; bw =
 `pi+0x17e` & 0x3800 (0x1000 = 20, 0x1800 = 40, 0x2000 = 80 MHz). "Present cores"
-are those whose bit is set in `sh+0xa7` (`phyrxchain`).
+are those whose bit is set in `sh+0xa7` (`phyrxchain`). (phy-calrx5g: C2 step 3
+and the wide-band detector of E1 step 4 do **not** test it - they take every
+core below `pi+0x168`; C1 does. Corrected in place.)
 
 ### R. Review of the annexes A4 to A7 of `acphy-chanspec.md`
 
@@ -414,6 +416,16 @@ No result.
 2. `p3 = off1`. (PHY rev 3 only, and core 1 on 5 GHz, rescales `p3` by
    bandwidth; not this card, so `p3 = off1` throughout.)
 3. For each present core c (0, then 1; core 2 not on this board):
+   **Corrected (phy-calrx5g, answers Q7 of questions/phy-soak.md):** for
+   **every** core c = 0 .. `pi+0x168`-1, with no test of `sh+0xa7`/`sh+0xa5`
+   or of any other mask (read; observed: on the soak's boards with `txchain`
+   = `rxchain` = 1 core 1's eight mods are made (the phy-soak implementer),
+   and here on a board with core 0 absent, `txchain` = `rxchain` = 2, `pi+0x168` = 2, `sh+0xa4..0xa7` = 2,
+   both core 0's eight and core 1's eight mods are made at every channel
+   change - 32 accesses). `pi+0x168` is 2 on this card whatever the chain
+   masks (acphy-attach.md: forced to 2 for chip 0x4360 with board type 0x117).
+   The values are those the caller passes (from C1, which itself works on the
+   present cores only: with core 0 absent `local_58[0]` keeps 0x36).
    * **core 0** - low byte only (`mod(reg, 0x00ff, value)`), in this order:
      `PHY(0x324)=a`, `PHY(0x330)=b`, `PHY(0x321)=a`, `PHY(0x32d)=b`,
      `PHY(0x32a)=a`, `PHY(0x336)=b`, `PHY(0x327)=a`, `PHY(0x333)=b`. (These are
@@ -534,6 +546,23 @@ shift `s`: 0 for 20 MHz, 1 for 40 MHz, 2 for 80 MHz.
    card.) Divide each sum by the number of cores. If D < 200 and B > 199: D = B.
    Then C = B if B > 199 else 0. `detW = (C != 0 and D < 4*C)`. **(code reading;
    the registers read 0 in the model, so C = 0 and `detW = false`.)**
+   **Corrected (phy-calrx5g):**
+   * The cores read are **all** c = 0 .. `pi+0x168`-1, not only the present
+     ones (read; observed every tick on the single-chain boards by the
+     phy-soak implementer, and here on a board with core 0 absent,
+     `re-out\analysis\phy-calrx5g\probe2.py chain2`: `PHY(0x7af, 0x7ab, 0x7b3, 0x7b1, 0x9af, 0x9ab, 0x9b3,
+     0x9b1)` are read). "The number of cores" is the number read, i.e.
+     `pi+0x168`.
+   * The tail is different from the text above. The sums are unsigned 32-bit;
+     each is divided (unsigned, truncating) by the count only if the count is
+     greater than 1. Then: **if D <= 199**: if B >= 200, D = B and C = A; else
+     C = 0 (D unchanged). **If D >= 200**: C and D stay as they are. `detW` =
+     (C != 0 and D < 4*C). (Verified by injection, `re-out\analysis\
+     phy-calrx5g\verify_hwaci.py`: with only the wide-band detector on, 3000
+     random register sets, the corrected rule predicts the object's level
+     change in all 3000 cases, the text above misses 804.)
+   (PHY revision 2 reads core 0 at the revision->=2 addresses but core 1 at the
+   old ones; not this card.)
 5. **hwaci detector** (bit 2 of `sh+0x80`): read `w=PHY(0x523)`, `x=PHY(0x529)`,
    `y=PHY(0x528)`, `z=PHY(0x527)`. Let `E` = the level table entry of the
    current level (`table + 8*level`) and `f(v) = (v & 0x7f) >> s`. `detH =

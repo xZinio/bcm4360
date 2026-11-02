@@ -14,6 +14,9 @@
 >   `wlc_phy_cordic` returns I = sine, Q = cosine with magnitude 2^16 (the tone
 >   scaling divides by 2^16); the gain LUT and LOFT tables are written
 >   interleaved by index - item 6.
+> * **(phy-calrx5g)** section 15 B: the start coefficients are written in
+>   **every** call; only their source depends on `cal[1]` < 3 (corrected in
+>   place). `wlc_phy_cordic` exactly: acphy-cal-rx.md section X3.
 
 Status: work in progress, written function by function. Everything below was
 read in the decompiler output and checked in the disassembly; what was also
@@ -495,7 +498,11 @@ constant 0x9b75). The angle unit is `0x1680000` per full turn, so the tone of
 section 12 with `freq` = `sample_rate`/10 (2 MHz at 20 MHz) advances `0x240000`
 per sample = one cycle per 10 samples. Also called by `sub_0addfa` and the
 other PHYs' tone functions. Not specified further (18-iteration CORDIC over the
-constant table at `.rodata+0x2ce950`).
+constant table at `.rodata+0x2ce950`). **(phy-calrx5g)** Specified exactly,
+with the table, in acphy-cal-rx.md section X3 (verified on 20,000 angles
+against the object): only two arguments; `out[0]` is the sine and `out[1]`
+the cosine with a magnitude of about 2^16 (65541 at angle 0), as
+questions/phy-cal.md item 6 found - not "I = cosine, ~2^15" as above.
 
 ### 14. wlc_phy_stopplayback_acphy (.text+0x09c5c3, name original)
 
@@ -599,6 +606,28 @@ from the previous final results `cal+4` when `sm` = 1; the intermediate area
 `cal+0x2c` is loaded (5 u16 per core). Then for each core c write the start
 coefficients through `sub_09bf99` mode 1: selection 0 (a,b); if `part` = 0 also
 selections 1, 2, 3 (d, e, f). (So a fresh run starts every coefficient at 0.)
+
+**Corrected (phy-calrx5g, answers Q6 of questions/phy-soak.md):** only the
+*choice of the source* depends on `cal[1]`; the writes are made in **every**
+call (read; observed). Exactly, right after `PHY(0x382)` = 0x8a09:
+
+1. If `cal[1]` < 3 (single-shot, phase 0, or the multi-phase steps 1 and 2):
+   source = 5*N zero words (`sm` = 0) or `cal+4` (`sm` = 1); copy those 5*N
+   16-bit words into `cal+0x2c`. Otherwise (`cal[1]` >= 3): source = `cal+0x2c`
+   as the previous phases left it (no copy). Nothing else (`cal[2]`, the
+   sub-phase) is tested.
+2. For each core c = 0..N-1, with the source record of core c = 5 words
+   (a, b, d, e, f) at byte offset 10*c: `sub_09bf99(pi, 1, &rec[0], 0, c)`
+   (a, b); if `part` = 0 also `sub_09bf99(pi, 1, &rec[2], 1, c)`,
+   `(.., &rec[3], 2, c)`, `(.., &rec[4], 3, c)`.
+
+Observed (`re-out\analysis\phy-calrx5g\probe2.py seed`, the soak's steps to
+131, periodic multi-phase calibration on 36/80 after `interf 1`): the seed
+writes come before the tone in every phase 2..0xc (8 per phase: selections
+0..3 for both cores) and 0xe..0x10 (2 per phase: selection 0 for both cores),
+and in every phase the values written equal `cal+0x2c + 10*c` at that moment;
+the single-shot calls (phase 0) write 8 (part 0) and 2 (part 1). This is the
+542-access difference the soak attributed to the seeding.
 
 **C. Choose the command list** for this (`sm`, `part`, PHY revision):
 

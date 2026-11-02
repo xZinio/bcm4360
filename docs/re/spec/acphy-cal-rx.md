@@ -14,6 +14,21 @@
 >   +-1000 - item 9;
 > * the 2.4 GHz radio loopback override of `sub_094b1a` - item 10;
 > * `sub_09868f` reads `TBL(0x20)[0x32]` as one **48-bit** entry - item 11.
+>
+> **(phy-calrx5g)** The receive calibration at 40 and 80 MHz, at 5 GHz and with
+> non-zero measured powers is completed in the section "Receive calibration at
+> every bandwidth and band, with measured powers (phy-calrx5g)" (X1 to X10,
+> before "Verification"); it supersedes the passages of the text below that it
+> names, in particular: the tone frequencies and amplitudes are 1000 / 2000 /
+> 4000 kHz for **20 / 40 / 80 MHz** (the labels were swapped in `sub_0ad89a`,
+> in step 10 and in the regression constant K; tempsense step 1 called 0x2000
+> "40 MHz" - it is 80 MHz); at 80 MHz there are 6 tones and `pi_ac+0x8c4` is
+> set; at 5 GHz the tone estimates isolate the cores (`wlc_phy_rx_iq_est_acphy`
+> step 5 *is* exercised); the exact arithmetic of `sub_097809`,
+> `wlc_phy_nbits`, `wlc_phy_sqrt_int`, `wlc_phy_cordic`, `wlc_phy_inv_cordic`,
+> of the image combination and of the fit; `sub_09107b` with its table; the 5
+> GHz gain table of `sub_0ad89a` and its walk; the rev-dependent 5 GHz loopback
+> of `sub_094b1a`.
 
 Behaviour of the receive-side calibration and measurement functions of the
 AC-PHY for chip 0x4360 (AC-PHY revision 0/1, radio 2069 major revision 0,
@@ -53,6 +68,9 @@ are in `acphy-attach.md`; this document refers to those fields by their
 | `wlc_phy_get_tempsense_degree` | 0x0b537d | 38 | original (wlc_phy_cmn.c); not on the AC-PHY path (see Notes) |
 | `wlc_phy_rssi_compute_acphy` | 0x096ee4 | 954 | original |
 | `wlc_phy_11b_rssi_WAR` | 0x08efa4 | 226 | original; not reached on rev 0/1 (see Notes) |
+| `wlc_phy_nbits` | 0x0b24a4 | 31 | original (wlc_phy_cmn.c); math helper, section X3 (phy-calrx5g) |
+| `wlc_phy_sqrt_int` | 0x0b24c3 | 52 | original (wlc_phy_cmn.c); math helper, section X3 (phy-calrx5g) |
+| `wlc_phy_inv_cordic` | 0x0b2406 | 97 | original (wlc_phy_cmn.c); math helper, section X3 (phy-calrx5g) |
 
 Helpers described elsewhere and only referenced here: `phy_reg_*`,
 `read/write/mod_radio_reg`, `wlc_phy_table_{read,write}_acphy`,
@@ -62,7 +80,8 @@ Helpers described elsewhere and only referenced here: `phy_reg_*`,
 `wlc_phy_stopplayback_acphy`, `wlc_phy_txpwr_by_index_acphy` (tx-cal, not yet
 specified - their observable effect used here is stated); `wlc_phy_nbits`,
 `wlc_phy_sqrt_int`, `wlc_phy_cordic`, `wlc_phy_inv_cordic`, `qm_div16`
-(integer maths helpers, wlc_phy_cmn.c).
+(integer maths helpers, wlc_phy_cmn.c; the first four are specified exactly in
+section X3, phy-calrx5g).
 
 ## Overview
 
@@ -150,7 +169,8 @@ Overall sequence:
 
 1. **Flags.** `img = pi_ac+0x8d8 = 1` (do the image-rejection second estimate),
    except set to 0 for phy rev 5/2/6/3, and for phy rev 1 on 5 GHz
-   (`pi+0x17e & 0xc000 == 0xc000`). On the BCM4360 2.4 GHz path `img = 1`.
+   (`pi+0x17e & 0xc000 == 0xc000`). On the BCM4360 2.4 GHz path `img = 1`;
+   at 5 GHz `img` = 1 on rev 0 and 0 on rev 1 (phy-calrx5g, X2).
 2. `wlc_phy_stay_in_carriersearch_acphy(pi,1)`; `wlc_phy_force_rfseq_acphy(pi,2)`.
 3. For each core: `sub_090fcb(pi,2,0,core)` -> zeroes `PHY(c*0x200+0x6a0)` and
    `PHY(c*0x200+0x6a1)` (start from unity/no correction).
@@ -160,8 +180,9 @@ Overall sequence:
    tx-power spec) then `sub_09bf99(pi,1,gains,8,core)` with `gains` read from
    the cal state `*(pi+0xfb8)+0x54+4c` (apply a fixed measurement gain).
 6. Compute the bandwidth config word `W` and `bw_index` (`local_21c`) exactly
-   as in tempsense step 1 (`bw==0x2000`: `W=0x7f8`, idx 2; `bw==0x1800`:
-   `W=0x43e9(+0x201 if pi+0x116a==0)`, idx 1; else `W=0xd5eb`, idx 0).
+   as in tempsense step 1 (`bw==0x2000` (80 MHz): `W=0x7f8`, idx 2;
+   `bw==0x1800` (40 MHz): `W=0x43e9(+0x201 if pi+0x116a==0)`, idx 1; else
+   (20 MHz) `W=0xd5eb`, idx 0; bandwidth names corrected, phy-calrx5g).
 7. **Save + override the PHY RX path.** First, once: save `PHY(0x40f)` ->
    `pi_ac+0x24c`, clear its bit 9; save `PHY(0x401)` -> `pi_ac+0x23a`,
    `mod(PHY(0x401),0x7,sh+0xa5)` (rx chain), `mod(PHY(0x401),0x7000,0)`. Then
@@ -198,6 +219,7 @@ Overall sequence:
      mod(PHY(b+0x720),0x2,0x2)
      # (5 GHz only, skipped here: if phytype 0xb & phyrev!=0 & band 0xc000: mod(PHY(b+0x729),0x20,0x20);
      #  radiomajor 1 only: another mod(PHY(b+0x729),0x20,0x20))
+     #  (phy-calrx5g, X1: the condition is only the current chanspec's band; no other state)
      mod(PHY(b+0x729),0x200,0x200); mod(PHY(b+0x721),0x200,0x200)
      mod(PHY(b+0x736),0x80,0);   mod(PHY(b+0x724),0x80,0x80)
      mod(PHY(b+0x736),0x4,0);    mod(PHY(b+0x724),0x4,0x4)
@@ -222,15 +244,17 @@ Overall sequence:
    tempsense step 3. `sub_09cf53` (step 13) writes every saved register back.
 8. `sub_094b1a(pi)` -> radio loopback setup (below).
 9. `sub_0ad89a(pi)` -> RX-gain search / gain selection (below).
-10. Build the tone list `local_48` from the bandwidth: 20 MHz -> `{+8,-8}`
-    (2 tones); 40 MHz -> extra tones and `pi_ac+0x8c4=1` (two-tone / filter
-    fit); the amplitude byte `A` = 8 (20 MHz) / 4 (0x1800) / 2 (else); tone
-    count `uVar4` = 2 (or 4/6 with `pi_ac+0x8c4`).
-11. **Tone loop**, for each tone index `k` (amplitude `A_k = local_48[k]`):
+10. Build the tone list `local_48` from the bandwidth. **Superseded by X2
+    (phy-calrx5g)**: 20 MHz `{+2,-2}`, 40 MHz `{+4,-4}`, 80 MHz
+    `{+8,-8,+24,-24,+32,-32}` with `pi_ac+0x8c4` = 1 (only at 80 MHz on rev
+    0/1); the earlier "{+8,-8} at 20 MHz, extra tones at 40 MHz, A = 8 (20) / 4
+    (0x1800) / 2 (else)" had the bandwidths reversed.
+11. **Tone loop**, for each tone index `k` (amplitude `A_k = local_48[k]`;
+    exact arguments and the per-core arithmetic in X2, X5, phy-calrx5g):
     a. `wlc_phy_tx_tone_acphy(pi, (s16)(A_k*1000)>>1, 0xb5, 0,0,0)` - plays a
-       tone at `A_k*500` (freq units) with amplitude 0xb5.
-    b. `wlc_phy_rx_iq_est_acphy(pi, est0, 0x4000, ...)` (0x3000 if
-       `pi_ac+0x8c4`).
+       tone at `A_k*500` kHz with amplitude 0xb5.
+    b. `wlc_phy_rx_iq_est_acphy(pi, est0, 0x4000, 0x20, 0, 1)` (0x3000 if
+       `pi_ac+0x8c4`; at 5 GHz this isolates the cores, X7).
     c. If `img == 1`: `sub_095511(pi)` (radio restore), a second
        `wlc_phy_rx_iq_est_acphy(pi, est1, 0x4000)`, `sub_094b1a(pi)` (radio
        setup again) - the pair with/without the loopback path gives the image
@@ -243,7 +267,8 @@ Overall sequence:
        angle in `aiStack_1f4[k*9+c]` and the gain ratio (`local_98[1]`) in
        `aiStack_1e4[k*9+c]`.
 12. **Regression + coefficient build** (after all tones). All quantities are
-    32-bit signed. Per core `c`, over the `uVar4` tones (`k`):
+    32-bit signed. (Exact version, with the corrected K and without the
+    remainder term: X6, phy-calrx5g.) Per core `c`, over the `uVar4` tones (`k`):
     ```
     Sxx  = sum_k A_k^2                        # amplitude energy
     Sy   = sum_k angle[k][c]                  # local_98[c]  (angle from step 11e)
@@ -261,9 +286,11 @@ Overall sequence:
     integer average angle and `rem` its division remainder (for sub-unit
     precision). Verified: with injected accumulators the predicted `(a,b)` equal
     the emulator's writes exactly for both cores (Verification).
-    If `pi_ac+0x8c4` (two-tone, 40 MHz only): also a per-core digital-filter
-    coefficient `pi_ac+0x8c8+4c = ((-Sxy * K) / Sxx >> 14 + 1) >> 1` with
-    `K = 0x1e` (20 MHz) / `8` (0x2000) / `0xf` (0x1800), plus a remainder term.
+    If `pi_ac+0x8c4` (several tone pairs: **80 MHz** on rev 0/1): also a
+    per-core digital-filter coefficient
+    `pi_ac+0x8c8+4c = (((-Sxy * K) / Sxx >> 14) + 1) >> 1` with `K = 0x1e`
+    (**80 MHz**, 0x2000) / `0xf` (40 MHz) / `8` (20 MHz), and no remainder term
+    (corrected, phy-calrx5g X6).
 13. **Write + restore.** For each core `sub_090fcb(pi,1,ab,core)` writes
     `a`->`PHY(c*0x200+0x6a0)`, `b`->`PHY(c*0x200+0x6a1)`. If `pi_ac+0x8c4`:
     `sub_09107b(pi,1)` writes the digital-filter taps. `sub_095511(pi)` restores
@@ -294,6 +321,9 @@ Purpose: from one IQ-estimate record `{I*Q, I^2, Q^2}` compute the phase angle,
 the gain ratio and the quadrature term of the receiver's IQ imbalance, in fixed
 point. Inputs `param_1` = `int[3]` = `{IQ, I2, Q2}`; outputs `param_2` =
 `int[3]` = `{angle, gainratio (Q10, 0x400 = 1.0), sinterm}`.
+**The exact steps are in X4 (phy-calrx5g)**; the outline below is kept for
+orientation (its step 1 "denom shifted to IQ's scale" and step 4 "rounded to
+even" are made precise there).
 
 Steps (all shifts are the exact ones in the code; `nbits(x)` = position of the
 highest set bit, `sqrt_int` = integer square root, `inv_cordic` = atan2):
@@ -327,7 +357,9 @@ accumulators `pi_ac+0x8c8+4c`. mode 1 (after the cal): per core it clamps the
 computed slope `pi_ac+0x8c8+4c` to +/-10, programs `PHY(0x210)/0x211/0x212`
 (mux/enable), and writes 11 taps to `PHY(c*0x200+0x6a4..0x6ae)` from the table
 (indexed by the clamped slope, forwards or reversed by its sign), then sets
-`PHY(0x211)` bit 0.
+`PHY(0x211)` bit 0. **Exact accesses and the whole table: X8 (phy-calrx5g).**
+Called with mode 1 only when `pi_ac+0x8c4` is set, i.e. after an 80 MHz
+calibration on this card.
 
 ### sub_094b1a (.text+0x94b1a, assigned: wlc_phy_rxcal_radio_setup_acphy)
 
@@ -340,7 +372,9 @@ set/clear mask 4 by radio rev (rev in {2,3,4,0x12,0x18,0x1a,0x22,8} -> 0, our
 rev 4 -> 0), set the loopback enable (2.4 GHz `RADIO(0x22)` mask 0x200; 5 GHz AC
 `RADIO(0x23)` mask 0x200 then 0x80/0x80), and clear the low mixer bits (mask 3
 then mask 6). (Siblings 0x4352/0xa9c4/0xaa06 identical; other chips use radio
-`0x25/0x26/0x27/0x28/0x41/0x44`.)
+`0x25/0x26/0x27/0x28/0x41/0x44`.) **Exact sequence of both bands: X10
+(phy-calrx5g)** - at 5 GHz the "0x200 then 0x80" pair is taken only for PHY
+revision 0; revision 1 does `mod(0x23, 1, 1)` then `mod(0x23, 0x200, 0x200)`.
 
 ### sub_095511 (.text+0x95511, assigned: wlc_phy_rxcal_radio_restore_acphy)
 
@@ -362,9 +396,13 @@ Setup: per core `c` read the coarse gain seed `seed[c] = (PHY(c*0x200+0x6dc) &
 default gain word.
 
 Loop (a do-while that alternates "apply" and "measure"):
+(**Exact walk, both gain tables and the corrected tone and `paldo`: X9,
+phy-calrx5g.** The paragraphs below are kept for orientation.)
+
 * **Measure** (once all cores in this pass have applied): play one tone
   (`wlc_phy_tx_tone_acphy(pi, F, 0xb5, 0,0,0)`, `F` = 4000 / 2000 / 1000 for
-  20 / 0x1800 / 40 MHz), `wlc_phy_rx_iq_est_acphy(pi, buf, 0x400, 0x20, 0, 0)`
+  **80 / 40 / 20 MHz** - corrected, phy-calrx5g; the first version said 20 /
+  0x1800 / 40), `wlc_phy_rx_iq_est_acphy(pi, buf, 0x400, 0x20, 0, 0)`
   (0x400 samples), `wlc_phy_stopplayback_acphy`. Per unsettled core compute
   `p = ((I2 + 0x200) >> 10) + ((Q2 + 0x200) >> 10)` from `buf[c]` and step:
   - `dir==1` (climbing): if `p < 0xb58` raise `gi[c]` by 1, else settle;
@@ -385,9 +423,11 @@ Loop (a do-while that alternates "apply" and "measure"):
   1<<c, s5)` (`s5` = a tx power index).
 
 `paldo` (`bVar20`) = 6 for 5 GHz AC rev!=0, or radio rev in
-{2,3,4,0x12,0x18,0x1a,0x22,8}, else 0. In the model every `rx_iq_est` returns 0,
+{2,3,4,0x12,0x18,0x1a,0x22,8}, else 0. (Corrected, phy-calrx5g X9: the radio
+rev clause applies only to radio major revision 1; on this card `paldo` = 6
+exactly at 5 GHz on rev 1, else 0.) In the model every `rx_iq_est` returns 0,
 so `p = 0` each pass and the search simply climbs `gi` to 10 and force-settles
-(~11 passes per core).
+(~11 passes per core at 2.4 GHz, 7 at 5 GHz where it starts at 4).
 
 ### sub_09cf53 (.text+0x9cf53, assigned: wlc_phy_rxcal_phy_restore_acphy)
 
@@ -441,7 +481,10 @@ Steps:
    stack; then `osl_delay(1)`, starts and polls the estimate as in 4a/4b,
    restores the saved registers in reverse order, and reads the three power
    sums for core `c` as in 4c. (This branch is not exercised by the callers on
-   this board; described for completeness.)
+   this board; described for completeness.) **Corrected (phy-calrx5g, X7):**
+   it is exercised - the tone loop of `sub_0addfa` passes `param_6` = 1 and
+   `pi_ac+0x901` = 1, so every tone estimate at 5 GHz takes it; the exact
+   order of its accesses is in X7.
 
 Result: none (void); output is the array at `param_2`.
 
@@ -486,10 +529,14 @@ Steps (BCM4360, radio major rev 0, phy rev 0/1):
 
 1. Compute a bandwidth-dependent config word `W` (`uVar20`) from the chanspec
    bandwidth bits `bw = pi+0x17e & 0x3800`:
-   * `bw == 0x2000` (40 MHz): `W = 0x7f8`.
-   * `bw == 0x1800`: `W = 0x43e9`, plus `0x201` if `pi+0x116a == 0`
+   * `bw == 0x2000` (80 MHz): `W = 0x7f8`.
+   * `bw == 0x1800` (40 MHz): `W = 0x43e9`, plus `0x201` if `pi+0x116a == 0`
      (i.e. `0x45ea` when `pi+0x116a==0`).
-   * otherwise (incl. `0x1000` 20 MHz, `0x3000` 80 MHz): `W = 0xd5eb`.
+   * otherwise (`0x1000`, 20 MHz): `W = 0xd5eb`.
+   (Bandwidth names corrected, phy-calrx5g: the first version called 0x2000
+   "40 MHz" and 0x3000 "80 MHz"; the chanspec's bandwidth field is 0x1000 /
+   0x1800 / 0x2000 for 20 / 40 / 80 MHz, as in acphy-cal-tx.md and
+   acphy-chanspec.md.)
 2. Save `PHY(0x19e)` into `pi_ac+0x296`; clear its bits 6, 7, 8
    (`mod(0x19e,0x40,0)`, `mod(0x19e,0x80,0)`, `mod(0x19e,0x100,0)`).
 3. For each active core `c` (bit `c` set in `sh+0xa7`): base `b = c*0x200`.
@@ -704,6 +751,345 @@ Not on the AC-PHY path: it simply tail-calls `wlc_lcnphy_tempsense_degree`
 it; the AC-PHY's degree conversion is the arithmetic inside
 `wlc_phy_tempsense_acphy` (step 7 above).
 
+## Receive calibration at every bandwidth and band, with measured powers (phy-calrx5g)
+
+This section completes `sub_0addfa` and its helpers so that the receive
+calibration can be implemented for 20, 40 and 80 MHz on both bands, for PHY
+revision 0 and 1, and for **any** values of the IQ-estimate registers. Where it
+disagrees with the text above or with `questions/phy-cal.md` items 8 to 10,
+this section is right. "Observed" = seen in the emulator (the object alone; see
+"Verification (phy-calrx5g)"); "read" = from the code and the disassembly only.
+`bw` = `pi+0x17e & 0x3800` (0x1000 = 20 MHz, 0x1800 = 40 MHz, 0x2000 =
+80 MHz); "5 GHz" = `pi+0x17e & 0xc000` = 0xc000; `rev` = `pi+0x164`; N =
+`pi+0x168`; all arithmetic is 32-bit two's complement, divisions truncate
+toward zero, `>>` is arithmetic, and a shift by a computed count uses the count
+modulo 32 (the processor's rule; it matters only at the extremes noted).
+
+### X1. Which state carries the 5 GHz behaviour (answers Q1 of questions/phy-soak.md)
+
+* Every band or bandwidth decision of the calibration is taken from the current
+  chanspec `pi+0x17e` and from `rev` (read). Step 7's
+  `mod(PHY(b+0x729), 0x20, 0x20)` is made exactly when the PHY type `pi+0x160`
+  is 0xb, `rev` != 0 and the chanspec is 5 GHz (read; observed made at 36/80 on
+  rev 1, not made on channel 6). (The second such mod, for radio major
+  revision 1, does not apply to this card.)
+* `pi_ac+0x8d8` (`img`) and `pi_ac+0x8c4` (`two`, X2) are written by every
+  call before they are read, and `pi_ac+0x8c8+4c` is cleared by step 4; on the
+  AC-PHY path nothing else uses them (read: no other AC function names these
+  offsets). So no flag carries one calibration into the next. What does survive
+  is hardware state: the digital filter of `sub_09107b` mode 1 (X8) - bit 0 of
+  `PHY(0x211)` and the taps `PHY(c*0x200+0x6a4..0x6ae)` - stays programmed
+  until the next calibration's step 4 clears `PHY(0x211)` bit 0; a calibration
+  at 20 or 40 MHz leaves the filter off. No other function of the AC-PHY names
+  `PHY(0x210..0x212)` or `0x6a4..0x6ae` (read).
+* What the soak showed (observed): in `tools/re/phy_soak.py` the channel steps
+  taken while associated (`6` = step 117, `1l` = 123, `149/80` = 127) return 0
+  from the `chanspec` iovar but make **no access**, and `pi+0x17e` stays 0xe02a
+  (36/80): the upper layer stays on the associated channel. `sub_0addfa` in the
+  join calibrations of steps 119 and 129 and in the periodic calibrations of
+  `wait 130` and `wait 920` sees chanspec 0xe02a, rev 1: they are 80 MHz
+  calibrations at 5 GHz, the same as step 105. That is why they make the mod
+  and read `PHY(0x211)` = 1 (left by the previous 80 MHz calibration) in step 4.
+  The band test of the current chanspec is the whole condition.
+
+### X2. Flags, tones and estimate parameters (Q3, Q5.1)
+
+* `img` (step 1) = 1, except 0 for `rev` 2, 3, 5, 6 and for `rev` 1 at 5 GHz.
+  This card: rev 0 -> 1 on both bands; rev 1 -> 1 at 2.4 GHz, 0 at 5 GHz (read;
+  observed on both revisions and bands).
+* `two` = `pi_ac+0x8c4`, written once per call right after the gain search
+  (step 9): 1 if `bw` = 0x2000, or if `bw` = 0x1800 and `rev` = 3; else 0. On
+  rev 0/1 it is 1 exactly at 80 MHz and **cleared** at 20 and 40 MHz (read;
+  observed 0 at 20/40 and 1 at 80 MHz).
+* Tone amplitudes `A_k` (signed bytes) and their number `cnt` (step 10):
+
+  | Bandwidth | `two` | `A_0 .. A_cnt-1` | `cnt` |
+  |---|---|---|---|
+  | 20 MHz | 0 | +2, -2 | 2 |
+  | 40 MHz (rev 0/1) | 0 | +4, -4 | 2 |
+  | 80 MHz | 1 | +8, -8, +24, -24, +32, -32 | 6 |
+  | 40 MHz, rev 3 only (other chips) | 1 | +4, -4, +15, -15 | 4 |
+
+  (A bandwidth outside the three with `two` set would get +2, -2, +7, -7;
+  unreachable.)
+* Tone k is `wlc_phy_tx_tone_acphy(pi, f_k, 0xb5, 0, 0, 0)` with `f_k` =
+  `A_k * 1000` taken as a 16-bit signed product, shifted right by 1
+  (arithmetic) = `A_k * 500` kHz: **20 MHz +-1000, 40 MHz +-2000, 80 MHz
+  +-4000, +-12000, +-16000** in this order (observed at all three). The
+  `{+8,-8}` and "`A` = 8 (20 MHz) / 4 (0x1800) / 2 (else)" of step 10 above had
+  the bandwidths the wrong way round; 8 belongs to 80 MHz.
+* For each tone k (step 11): the loopback estimate
+  `wlc_phy_rx_iq_est_acphy(pi, est0, n, 0x20, 0, 1)` with `n` = 0x3000 if `two`
+  else 0x4000; then, if `img`: `sub_095511(pi)`,
+  `wlc_phy_rx_iq_est_acphy(pi, est1, 0x4000, 0x20, 0, 1)`, `sub_094b1a(pi)`;
+  then `wlc_phy_stopplayback_acphy(pi)` (observed, all arguments). The last
+  argument 1 asks the estimator to isolate the cores (X7); it takes effect
+  only where the band's byte allows it: `pi_ac+0x900` (2.4 GHz) = 0 and
+  `pi_ac+0x901` (5 GHz) = 1 on this card (observed). So **at 5 GHz every
+  tone estimate measures the cores one after the other**, at 2.4 GHz all at
+  once. (The gain search's estimates pass 0 there and always measure all cores
+  at once.)
+
+### X3. The integer helpers of wlc_phy_cmn.c (exact)
+
+Angles are in units of 1/65536 degree (0x1680000 = 360 degrees, 0xb40000 =
+180). `T[0..17]` = the arctangent table at `.rodata+0x2ce950` (32-bit
+entries; `atan(2^-i)` in that unit):
+`0x2d0000, 0x1a90a7, 0x0e0947, 0x072001, 0x03938b, 0x01ca38, 0x00e52a,
+0x007297, 0x00394c, 0x001ca6, 0x000e53, 0x000729, 0x000395, 0x0001ca, 0x0000e5,
+0x000073, 0x000039, 0x00001d`. (questions/phy-cal.md item 6 derived it; these
+are the object's values.)
+
+* **`wlc_phy_nbits(x)`** (`.text+0x0b24a4`, 31 bytes), x signed 32-bit, result
+  a byte: let `a` = |x| computed in 32 bits (so |-2^31| stays -2^31); the
+  result is the smallest n >= 0 with `a >> n` <= 0 - the number of significant
+  bits of |x|: 0 for 0, 1 for +-1, 31 for magnitudes >= 2^30, and 0 for -2^31.
+* **`wlc_phy_sqrt_int(v)`** (`.text+0x0b24c3`, 52 bytes), v unsigned 32-bit:
+  digit-by-digit square root. `r` = 0; for `bit` = 2^30, 2^28, ..., 2^2, 2^0: if
+  `v >= r + bit` then `v -= r + bit` and `r = (r >> 1) | bit`, else
+  `r = r >> 1`. Result `r + 1` if the remainder `v > r`, else `r`: the square
+  root rounded to the nearest integer (0..65536). Only one argument (the extra
+  arguments the decompiler shows at its call sites are leftovers in registers).
+* **`wlc_phy_cordic(theta, out)`** (`.text+0x0b2317`, 239 bytes; also in
+  acphy-cal-tx.md section 13): only two arguments (the third the decompiler
+  shows in `sub_0addfa` is the remainder of a division left in a register).
+  1. `s` = -1 if theta < 0 else +1; `t` = ((theta + s*0xb40000) rem 0x1680000)
+     - s*0xb40000 (rem = remainder of a truncating division) - theta folded
+     into -180..+180 degrees.
+  2. `d` = t in whole degrees, rounded: `((t >> 15) + 1) >> 1` for t >= 0,
+     `-((((-t) >> 15) + 1) >> 1)` for t < 0.
+  3. If d > 90: `t -= 0xb40000`, sign = -1. Else if t < 0 and d < -90:
+     `t += 0xb40000`, sign = -1. Else sign = +1.
+  4. `x` = 0x9b75, `y` = 0, `z` = 0. For i = 0..17: if t > z: `z += T[i]`,
+     `(x, y) = (x - (y >> i), y + (x >> i))`; else: `z -= T[i]`,
+     `(x, y) = (x + (y >> i), y - (x >> i))` (both new values from the old ones).
+  5. `out[0]` = sign*y (the sine, about 65536*sin theta), `out[1]` = sign*x
+     (the cosine; 65541 at theta 0).
+* **`wlc_phy_inv_cordic(xy, out)`** (`.text+0x0b2406`, 97 bytes): one 64-bit
+  argument with `x` in its high 32 bits and `y` in its low 32 bits, and an
+  `int *out`. `x <<= 4`, `y <<= 4` (32 bits); `z` = 0; for i = 0..17: if y < 0:
+  `z -= T[i]`, `(x, y) = (x - (y >> i), y + (x >> i))`; else `z += T[i]`,
+  `(x, y) = (x + (y >> i), y - (x >> i))`. `*out = z`: the angle of (x, y) for
+  x > 0.
+
+### X4. sub_097809 (wlc_phy_calc_iqcc_acphy) exact
+
+Input `{IQ, I2, Q2}` (the three words of one estimate record), output
+`{angle, gain, sin}` (replaces "sub_097809" above, whose steps 1 to 4 were only
+an outline):
+
+1. `nIQ` = nbits(IQ); `n` = max(nbits(I2), nbits(Q2)).
+2. If `n` <= 30: `rI` = sqrt_int(I2 << (30-n)), `rQ` = sqrt_int(Q2 << (30-n));
+   else `rI` = sqrt_int(I2 >> (n-30)), `rQ` = sqrt_int(Q2 >> (n-30)) (the
+   shifted words passed as unsigned).
+3. `den` = rI*rQ (32-bit product); if `n > nIQ + 16`: `den <<= n - nIQ - 16`,
+   else `den >>= nIQ + 16 - n` (count modulo 32).
+4. `num` = (-IQ) << (30 - nIQ) (count modulo 32: nIQ = 31 shifts by 31). If
+   `num` > 0: `num += den >> 1`, else `num -= den >> 1` (rounding).
+5. `sin` = num / den, or 0 if den = 0. `out[2]` = sin. (About
+   -IQ/sqrt(I2*Q2) * 65536.)
+6. `h` = sin >> 1; `c` = sqrt_int(0x40000000 - h*h); `out[0]` =
+   inv_cordic(x = 2c, y = sin) (about asin of the sine term, in 1/65536 degree).
+7. `d` = Q2 - I2; `m` = nbits(d) rounded up to even (`m += m & 1`);
+   `dd` = d << (30 - m) (count modulo 32); `ii` = I2 >> (m - 10) if m > 10,
+   else I2 << (10 - m); if `dd` > 0: `dd += ii >> 1`, else `dd -= ii >> 1`.
+8. `out[1]` = 0x400 if `ii` = 0, else sqrt_int(dd / ii + 0x100000) (about
+   sqrt(Q2/I2) * 1024).
+
+(The processor would fault on -2^31 / -1 in steps 5 and 8; the estimator's
+records do not produce that - unverified on hardware.)
+
+### X5. Per tone and core: the angle and the gain (step 11e)
+
+For tone k and core c (`est0[c]`, `est1[c]` = the records of the two estimates):
+
+1. `(a0, g0, s0)` = sub_097809(est0[c]).
+2. If `img` = 1:
+   1. `(a1, g1, s1)` = sub_097809(est1[c]).
+   2. `P1` = est1.I2 + est1.Q2, `P0` = est0.I2 + est0.Q2 (32-bit sums).
+      `m` = nbits(P1) rounded up to even; `P0'` = P0 >> (m - 10) if m > 10,
+      else P0 << (10 - m).
+   3. If `P0'` = 0: angle = a0. Otherwise `r` = sqrt_int(((P0' >> 1) +
+      (P1 << (30 - m))) / P0') (about sqrt(P1/P0) * 1024). If `r` <= 41:
+      angle = a0. Otherwise `s` = s0 + ((r * (s0 - s1)) >> 10); `h` = s >> 1;
+      `c` = sqrt_int(0x40000000 - h*h); angle = inv_cordic(2c, s).
+3. Else angle = a0.
+4. Keep `angle[k][c]` = angle and `gain[k][c]` = g0 (the loopback estimate's
+   gain; the image estimate's gain g1 is not used).
+
+### X6. The fit and the coefficients (steps 12 and 13, exact)
+
+Over the `cnt` tones: `Sxx` = sum of A_k^2 (one value for all cores); per core
+c: `Sy` = sum of angle[k][c], `Sxy` = sum of A_k * angle[k][c], `Sg` = sum of
+gain[k][c]; `half` = cnt >> 1. Then per core:
+
+1. `g` = (Sg + half) / cnt.
+2. `q` = Sy + half if Sy >= 0, else Sy - half; `theta` = q / cnt;
+   `(w0, w1)` = wlc_phy_cordic(theta) (sine, cosine).
+3. `a` = (((g * w0) >> 15) + 1) >> 1, bits 0..9 kept; `b` = (((g * w1) >> 15)
+   + 1) >> 1, bits 0..9 kept (32-bit products). `a` -> `PHY(c*0x200+0x6a0)`,
+   `b` -> `PHY(c*0x200+0x6a1)` (written in step 13 by `sub_090fcb` mode 1, core
+   by core, after all cores are computed). So `a` is the sine branch and `b`
+   the cosine branch (as phy-cal.md item 8 found); with no imbalance `b` =
+   0x400, which the 10-bit field keeps as 0 (interpretation: the field holds b
+   relative to 1.0).
+4. Only if `two`: `K` = 30 at 80 MHz (15 at 40 MHz, reached only on rev 3;
+   8 at 20 MHz, unreachable); `pi_ac+0x8c8+4c` = ((((-Sxy * K) / Sxx) >> 14) + 1) >> 1. There
+   is no remainder term (the "remainder" of the text above and the extra
+   argument the decompiler passes to `sub_090fcb`/`sub_09107b` are dead values
+   in registers). The text above had K's 20 and 80 MHz labels swapped.
+5. Step 13: the writes of item 3 for every core; then, if `two`,
+   `sub_09107b(pi, 1)` (X8); then `sub_095511`, `sub_09cf53`, the `sub_09bf99`
+   restores and carrier search off, as above.
+
+The calibration makes the same accesses for any measured values: the values
+change only the written words (`0x6a0/0x6a1`, the filter taps) and the gain
+search's path (X9).
+
+### X7. wlc_phy_rx_iq_est_acphy with core isolation (exercised at 5 GHz)
+
+Correction of its step 5 ("not exercised ... on this board"): the tone loop of
+the receive calibration takes this branch at 5 GHz (X2). Exactly (read; the
+access sequence observed in the 80 MHz calibration): for each core c = 0..N-1
+(the core being measured):
+
+1. For each core d = 0..N-1 with d != c and bit d set in `sh+0xa7`: read
+   `PHY(d*0x200+0x720)`, `+0x728`, `+0x721`, `+0x729` (in this order), then
+   `mod(+0x720, 1, 1)`, `mod(+0x728, 1, 0)`, `mod(+0x721, 4, 4)`,
+   `mod(+0x729, 2, 0)`; remember the four (address, value read) pairs in that
+   order.
+2. `osl_delay(1)`; `mod(PHY(0x270), 1, 1)`; poll `PHY(0x270)` bit 0 as in step
+   4b (up to 1000 waits of 10 us).
+3. Write the remembered values back in the reverse order (last core's 0x729
+   first, first core's 0x720 last; plain writes).
+4. Read `PHY(0x270)`; if bit 0 is clear, read core c's six sums as in step 4c
+   into record c.
+
+With one present core (`sh+0xa7` = 1, the single-chain boards) the measured
+core 0 isolates nobody and core 1 isolates core 0; both are still measured
+(the outer loop is over all N cores).
+
+### X8. sub_09107b (wlc_phy_rxcal_digfilt_acphy) exact
+
+* Mode 0: `mod(PHY(0x211), 1, 0)`; `pi_ac+0x8c8+4c` = 0 for c < N (observed).
+* Mode 1, for each core c = 0..N-1: `v` = `pi_ac+0x8c8+4c`; `j` = min(|v|, 10);
+  `mod(PHY(0x210), 7, 4)`, `mod(PHY(0x211), 4, 0)`, `mod(PHY(0x211), 2, 0)`,
+  `mod(PHY(0x212), 0xf, 10)` (repeated for every core); then 11 plain writes
+  `PHY(c*0x200+0x6a4+i)` for i = 0..10 in rising address order, of `R_j[i]` if
+  v >= 0 and of `R_j[10-i]` (the row reversed) if v < 0. After all cores:
+  `mod(PHY(0x211), 1, 1)`.
+* The rows `R_0 .. R_10` (the 0xf2 bytes at `.rodata+0x2cc960`,
+  `DAT_0054da90`; 16-bit entries, i = 0..10):
+
+  | j | R_j[0..10] |
+  |---|---|
+  | 0 | 0000 0000 0000 0000 0000 0400 0000 0000 0000 0000 0000 |
+  | 1 | fff4 000f ffec 001e ffc4 0400 003d ffe2 0014 fff1 000c |
+  | 2 | ffe8 001e ffd8 003c ff88 0400 007a ffc3 0029 ffe2 0018 |
+  | 3 | ffdc 002d ffc4 005b ff4c 0400 00b8 ffa4 003d ffd2 0025 |
+  | 4 | ffd6 0034 ffbb 0067 ff32 0400 00d3 ff97 0046 ffcc 002a |
+  | 5 | ffcc 0041 ffaa 0081 ff00 0400 0108 ff7d 0057 ffbf 0034 |
+  | 6 | ffc2 004e ff99 009b fecd 03ff 013f ff62 0069 ffb2 003f |
+  | 7 | ffb7 005b ff87 00b4 fe9b 03ff 0175 ff48 007a ffa4 0049 |
+  | 8 | ffad 0068 ff76 00ce fe69 03ff 01ac ff2d 008c ff97 0054 |
+  | 9 | ffa3 0075 ff65 00e7 fe38 03ff 01e3 ff12 009e ff8a 005e |
+  | 10 | ff98 0081 ff54 0101 fe06 03fe 021b fef7 00b0 ff7c 0069 |
+
+  (Interpretation: an 11-tap filter with centre tap 1.0 = 0x400 whose
+  asymmetry grows with j; reversing it mirrors the correction. Row 0 is the
+  identity, so v = 0 programs a pass-through filter and still sets
+  `PHY(0x211)` bit 0.) `|v|` is taken as `v * ((v >> 31) | 1)`, so v = -2^31
+  would index outside the table (not reachable: |v| < 2^17 from X6).
+
+### X9. sub_0ad89a: the gain search, exact (Q4)
+
+Gain tables, entries (`s3`, `s7`, `s5`) of three 16-bit words, index `gi` =
+0..10 (read: the `.rodata` bytes; observed: the writes):
+
+| gi | 5 GHz `.rodata+0x2ccab0` (`DAT_0054dbe0`) | 2.4 GHz `.rodata+0x2cca60` (`DAT_0054db90`) |
+|---|---|---|
+| 0 | 0, 0, 0 | 0, 0, 10 |
+| 1 | 0, 1, 0 | 0, 1, 10 |
+| 2 | 0, 2, 0 | 0, 2, 10 |
+| 3 | 0, 3, 0 | 0, 3, 10 |
+| 4 | 0, 4, 0 | 0, 4, 10 |
+| 5 | 1, 4, 0 | 0, 5, 10 |
+| 6 | 2, 4, 0 | 1, 5, 10 |
+| 7 | 3, 4, 0 | 2, 5, 10 |
+| 8 | 4, 4, 0 | 3, 5, 10 |
+| 9 | 5, 4, 0 | 4, 5, 10 |
+| 10 | 5, 5, 0 | 5, 5, 10 |
+
+1. `paldo` = 6 if the chanspec is 5 GHz, the PHY type is 0xb and `rev` != 0;
+   else 0. (Also 6 for radio major revision 1 with radio rev in {2, 3, 4, 8,
+   0x12, 0x18, 0x1a, 0x22} - not this card; the "or radio rev in {...}" of the
+   text above belongs to that radio only.) Table = the 5 GHz one at 5 GHz,
+   else the 2.4 GHz one.
+2. Read `PHY(0x19e)`, `mod(PHY(0x19e), 2, 2)`. For each core c: `seed[c]` =
+   (`PHY(c*0x200+0x6dc)` & 0x780) >> 7; `gi[c]` = 4 at 5 GHz, 0 at 2.4 GHz;
+   `dir[c]` = 0; `done[c]` = 0. Then `sub_09868f(pi, buf, 0x32)` (item 11 of
+   phy-cal.md); its third 16-bit word is kept as `u` (used only by the unity
+   path below).
+3. **Apply** (for c = 0..N-1 with `done[c]` = 0), `(s3, s7, s5)` =
+   table[gi[c]]: `PHY(c*0x200+0x730)` = (seed[c] << 6) | (paldo << 3);
+   `PHY(c*0x200+0x731)` = 0 at 2.4 GHz, 4 at 5 GHz; `PHY(c*0x200+0x734)` =
+   (s3 << 3) | s7; `mod(PHY(c*0x200+0x722), 2, 2)`, `(..., 4, 4)`,
+   `(..., 8, 8)`; then, if the low byte of s5 is 0xff, `TBL(7)[c+0x100]` =
+   0xff, `TBL(7)[c+0x103]` = 0xffff, `TBL(7)[c+0x106]` = u (16-bit, one entry
+   each; not reached with these tables), else
+   `wlc_phy_txpwr_by_index_acphy(pi, 1 << c, s5)` (index 0 at 5 GHz, 10 at
+   2.4 GHz).
+4. **Measure**: `wlc_phy_tx_tone_acphy(pi, F, 0xb5, 0, 0, 0)` with F = 4000
+   at 80 MHz, 2000 at 40 MHz, 1000 at 20 MHz (the text above had 20 and 80
+   swapped); `wlc_phy_rx_iq_est_acphy(pi, buf, 0x400, 0x20, 0, 0)`;
+   `wlc_phy_stopplayback_acphy(pi)`.
+5. **Step** each core with `done[c]` = 0, from its record (unsigned 32-bit):
+   `p` = ((Q2 + 0x200) >> 10) + ((I2 + 0x200) >> 10) (logical shifts):
+   * `dir` = 1: if p < 0xb58: gi += 1; else done.
+   * `dir` = 0: if p >= 0x169e: `dir` = 2, then repeat { stop if gi < 2;
+     p >>= 1; gi -= 1 } while p > 0x169d. Else if p > 0xb56: done. Else
+     `dir` = 1 and, if p != 0, repeat { stop if gi > 7; p *= 2; gi += 1 }
+     while p < 0xb57.
+   * `dir` = 2: if p < 0x169e: done; else gi -= 1.
+   * Then, `gi` being a byte: if gi > 10 as an unsigned byte (so also after a
+     decrement from 0, which gives 255): done.
+6. If any core stepped in 5 is still not done, go to 3 (only the cores not done
+   are applied again); else `mod(PHY(0x19e), 2, old & 2)` and return. A core
+   that is done keeps the gain applied last (an index that went past 10 or
+   below 0 is never applied).
+
+The first pass applies the start index to every core before the first
+measurement. With zero powers (the base model and the soak, see
+Verification) `p` = 0: `dir` becomes 1 with no climb, then one step per pass,
+4 -> 10 at 5 GHz (7 measurements, then gi = 11 -> done), 0 -> 10 at 2.4 GHz.
+
+### X10. sub_094b1a: the radio loopback, exact (Q2)
+
+Per core c (radio registers `| c << 9`; chip 0x4360, 0x4352, 0xa9c4 and 0xaa06
+alike), after `pi_ac+0x11a` = 1: read and save `RADIO(0x20)`, `0x21`, `0x22`,
+`0x23`, `0x3a`, `0x3d` (into `pi_ac+0x11c/0x124/0x12c/0x134/0x13c/0x144 + 2c`),
+write 0 to the same six in the same order, then (read; observed at 2.4 GHz and
+at 5 GHz on rev 1):
+
+| 2.4 GHz | 5 GHz |
+|---|---|
+| `mod(0x22, 0x100, 0)` | `mod(0x23, 0x100, 0)` |
+| `mod(0x3a, 0x10, 0)` | `mod(0x3d, 0x10, 0)` |
+| `mod(0x22, 0x20, 0)` | `mod(0x23, 0x20, 0)` |
+| `mod(0x22, 0x40, 0)` | `mod(0x23, 0x40, 0)` |
+| radio rev in {2,3,4,8,0x12,0x18,0x1a,0x22}: `mod(0x20, 0x20, 0)`, `mod(0x20, 4, 4)`; else `mod(0x20, 0x20, 0x20)`, `mod(0x20, 4, 0)` | the same on `0x21` |
+| `mod(0x22, 0x200, 0x200)`, `mod(0x22, 0x80, 0x80)` | **rev 0:** `mod(0x23, 0x200, 0x200)`, `mod(0x23, 0x80, 0x80)`; **rev 1:** `mod(0x23, 1, 1)`, `mod(0x23, 0x200, 0x200)` |
+| `mod(0x20, 3, 0)` | `mod(0x21, 3, 0)` |
+| `mod(0x22, 6, 0)` | `mod(0x23, 6, 0)` |
+
+The 5 GHz loopback pair depends on one 8-byte comparison of `pi+0x160` (the PHY
+type and, above it, the PHY revision) with 0xb: it is true only for PHY type
+0xb **and** revision 0. (So the text above, "`RADIO(0x23)` mask 0x200 then
+0x80/0x80", is the rev-0 branch; the soak's rev-1 card takes the other.) The
+fourth mask is 0x40 (not 4 as questions/phy-cal.md item 10 has it; the
+registers are 0 there, so the mask is not observable) and the rev-dependent
+pair is on `0x20`/`0x21` with masks 0x20 and 4.
+
 ## Verification
 
 Everything was run in the Unicorn model after a full bring-up (`run.py`,
@@ -725,7 +1111,8 @@ Everything was run in the Unicorn model after a full bring-up (`run.py`,
 * `sub_0addfa` (full RX IQ cal) ran to completion (58433 accesses, `iqcal.py`):
   it entered/left carrier search, ran the radio+PHY loopback save/override,
   `sub_0ad89a` gain search, one tone pair (`+8`/`-8`, `img=1` so two estimates
-  each) and, in the base model, wrote `PHY(0x6a0)=PHY(0x6a1)=0` for both cores,
+  each; phy-calrx5g: at 20 MHz the pair is +2/-2, played at +-1000 kHz, X2)
+  and, in the base model, wrote `PHY(0x6a0)=PHY(0x6a1)=0` for both cores,
   then restored via `sub_095511`/`sub_09cf53`. `*(pi+0xf58) == pi+0xfb8` was
   confirmed; the save/restore scratch area is `pi_ac` (the function reassigns
   its base after the early cal-state reads).
@@ -737,8 +1124,54 @@ Everything was run in the Unicorn model after a full bring-up (`run.py`,
   `sub_097809`/`wlc_phy_cordic`) reproduced all four bit-for-bit. This proves
   the coefficients are the `sub_097809`+regression+cordic result of the measured
   I/Q powers, and pins down `a`=cosine branch / `b`=sine branch of the cordic
-  output. `investigate.py`/`test_done.py` showed the base model writes 0 only
+  output. (phy-calrx5g: the reverse - `a` is computed from `out[0]`, the sine,
+  and `b` from `out[1]`, the cosine, as `verify_coeff.py` itself does; X6.)
+  `investigate.py`/`test_done.py` showed the base model writes 0 only
   because `rx_iq_est` never reads the accumulators (done bit never clears).
+
+### Verification (phy-calrx5g)
+
+Scripts and outputs in `re-out\analysis\phy-calrx5g\` (the object alone in the
+emulator; `model.py` holds the independent models written from X3 to X9):
+
+* `verify_math.py 20000`: `wlc_phy_nbits`, `wlc_phy_sqrt_int`,
+  `wlc_phy_inv_cordic`, `wlc_phy_cordic` and `sub_097809` called directly on
+  20,000 inputs each (random 32-bit words, small values, powers of two and
+  their neighbours, the extremes, realistic estimate records): **100,000
+  comparisons, 0 different** (`vm-20000.txt`).
+* `verify_cal.py`: a full bring-up, a channel, then `sub_0addfa` called
+  directly, the IQ-estimate registers giving a fresh random record for every
+  estimate and core (powers from 2^6 to 2^31, imbalances up to +-60 %, phase
+  terms up to +-0.45, some zero and some arbitrary records). Captured: every
+  estimate the object read, the tones, the gain-search writes and power
+  indices, the coefficients passed to `sub_090fcb` mode 1, `pi_ac+0x8c8` and
+  every access of `sub_09107b`; compared with the models fed with the captured
+  estimates. 192 calls (rev 0 and rev 1; 36/80, 149/80, 36l, 161u, 36, 6 and
+  channel 1): **384 coefficient pairs, 48 filter value pairs and 48
+  `sub_09107b` access sequences, 192 gain searches (730 measurements, every
+  write of 0x730/0x731/0x734 and every power index), 192 tone lists, the
+  arguments of 730 gain-search, 576 tone and 360 image estimates, 192 `img`
+  and 192 `two` flags: 0 different**
+  (`vc-full.txt`). All branches of the gain-search walk were taken (fast climb,
+  in-window, fast drop, climb, drop, settle, forced at 11 and at 255;
+  `vc-cov.txt`).
+* `verify_digfilt.py`: `sub_09107b(pi, 1)` with 571 chosen value pairs
+  (-22..22, the clamp edges, random up to +-2^16, +-2^31-1): 0 different; mode
+  0 observed (`vdf.txt`).
+* `probe1.py`, `probe2.py soak` (the soak's card): chanspec 0xe02a in every
+  calibration after step 105 (X1); `pi_ac+0x900` = 0, `+0x901` = 1; the tone
+  loop arguments of X2 (`probe1-*.txt`, `probe2-soak.txt`).
+* `probe3.py`: the radio accesses of `sub_094b1a` at 5 GHz on rev 0
+  (`RADIO(0x23)` 0 -> 0x200 -> 0x280) and rev 1 (0 -> 1 -> 0x201), and the
+  isolating estimate of X7 (`probe3-*.txt`).
+* **The soak's IQ powers are zero** (observed, `probe2-soak.txt`: 14 of 14
+  estimates of the 36/80 join calibration are 0): `Measurements.phy_read` in
+  `tools/re/phy_soak.py` splits the address as `addr >> 9`, `addr & 0x1ff` and
+  tests `0x6c0 <= reg < 0x6c6`, which a value below 0x200 never is (the
+  per-core registers are `0x6c0 + 0x200*c`, i.e. `addr >> 9` = 3, 4, 5). The
+  soak's gain search therefore climbs 4..10 with p = 0 and `pi_ac+0x8c8` is 0;
+  the soak does not test the arithmetic of X3 to X6. (Not changed: tools are
+  not the analyst's to edit; reported.)
 
 ## Open questions
 
@@ -759,6 +1192,17 @@ Everything was run in the Unicorn model after a full bring-up (`run.py`,
 * The two-tone digital-filter coefficient (`pi_ac+0x8c8`, `sub_09107b`) only
   runs on 40 MHz; not exercised on the 20 MHz emulator channel. Its numerator
   constant `K` and the remainder term are from the code, not verified.
+  **Answered (phy-calrx5g):** it runs at 80 MHz (rev 0/1), K = 30, there is no
+  remainder term; verified (X6, X8, "Verification (phy-calrx5g)").
+* (phy-calrx5g) The previous item's "model limit" no longer holds: the model
+  clears the done bit, and with X3 to X6 the coefficients follow for any
+  register values. What stays open is only what real hardware returns.
+* (phy-calrx5g) Interpretation only: the meaning of the 10-bit `a`/`b` fields
+  (b relative to 1.0?) and of the 11-tap filter rows; the purpose of
+  `PHY(0x210)/0x212` fields. The accesses are exact.
+* (phy-calrx5g) Not reachable on this card and not described further: rev 3's
+  40 MHz two-tone path (K = 15, tones +-15), radio major revision 1's `paldo`
+  and second `0x729` mod, the `s5` = 0xff unity-gain path of `sub_0ad89a`.
 * `wlc_phy_tx_tone_acphy`, `wlc_phy_stopplayback_acphy`,
   `wlc_phy_txpwr_by_index_acphy`, `sub_09bf99`, `sub_098751`, `sub_09c4e4`,
   `sub_09868f` are treated as opaque here (tx-cal / tx-power topics); only their
