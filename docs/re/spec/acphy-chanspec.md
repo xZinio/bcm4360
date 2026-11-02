@@ -807,8 +807,28 @@ parts for core 0, 1, 2, then three high parts):
 16  03 02 03 5a 6a 56  03 00 03 5a ba 5a  02 00 02 72 ba 70  02 00 01 74 ba 8e  02 00 01 74 ba 8e
 17  04 04 04 32 2d 32  03 03 03 52 52 52  03 03 03 52 52 52  03 03 03 52 52 52  03 03 03 52 52 52
 18  05 05 05 3d 3d 3d  02 02 02 7a 7a 7a  02 02 02 7a 7a 7a  02 02 02 7a 7a 7a  02 02 02 7a 7a 7a
-19  (all 0)
+19  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00
+20  00 00 00 00 00 00  00 00 01 9a 00 a8  00 a8 00 a8 00 a8  01 91 01 91 01 91  01 91 01 91 06 4c
+21  01 a0 06 4c 06 4c  06 4c 01 9c 01 98  01 98 01 98 01 98  01 98 01 98 01 98  01 98 01 98 03 64
+22  03 4b 03 4b 03 4b  03 4b 01 98 00 a6  00 a6 00 a6 00 a6  00 00 00 00 00 00  00 00 00 00 00 00
+23  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00
+24  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00
+25  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  01 01 91 91 01 01  91 91 01 01 91 91
+26  01 01 91 91 01 01  91 91 03 03 64 64  01 01 91 91 01 01  91 91 01 01 91 91  01 01 91 91 04 04
+27  5f 5f 01 01 91 91  01 01 91 91 01 01  91 91 01 01 91 91  00 00 00 00 00 00  00 00 00 00 00 00
+28  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00
+29  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00
+30  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00
+31  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00  00 00 00 00 00 00
 ```
+
+Rows 19 to 31 are not part of the table: the object does not check the range of
+p (a 5-bit SROM field) and reads the bytes that follow it in `.rodata` (other
+data). They are listed as the object reads them, so that every value of p gives
+the object's result; an implementation must use these 32 rows and never read
+beyond them. (Rows 19-31 added by the coordinator on 2026-11-02 after
+`tools/re/phy_soak.py --board 1` - `pdgain2g` = 30 - showed the open code
+reading past its 19 rows.)
 
 ### A2. sub_09eaf9 (.text+0x09eaf9, 4217 bytes; name assigned: wlc_phy_set_regtbl_on_bw_change_acphy)
 
@@ -1282,7 +1302,8 @@ boards; everything said about other chips and PHY revisions.
   (channel number below 100 or not; the values of the SROM for the middle of
   the band are read at attach but not used there).
 * Table A1 is indexed with the SROM values `pdgain2g`/`pdgain5g` (5 bit)
-  without a range check; values above 19 read behind the table. The values of
+  without a range check; values from 19 read behind the table (the rows
+  19..31 of Table A1 give those bytes). The values of
   the real card are not known (the synthetic SROM has 4), and neither are
   `rpcal*`, `rxgainerr*`, `cckdigfilttype` and `extpagain*`, which decide the
   values written by A1 and A3.

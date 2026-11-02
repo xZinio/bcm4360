@@ -10,10 +10,13 @@ Broadcom's object alone and on the hybrid core (by default with the open PHY,
 --on phy), and compares every access to the card and the result of every step:
 
   * every channel of both bands in every bandwidth, with band switches;
-  * an association stand-in - the upper layer's own wlc_sta_assoc_upd and
-    wlc_full_phy_cal, as its join does (roaming switched off, the model sends
-    no beacons) - then long watchdog runs: tempsense, the noise requests, the
-    periodic calibration (glacial timer), the transmit power recalculation;
+  * an association stand-in - the upper layer's own wlc_sta_assoc_upd,
+    wlc_clr_quiet_chanspec with wlc_mute(0) and wlc_full_phy_cal, as its join
+    does (roaming switched off, the model sends no beacons; without the unmute
+    the PHY's hold word keeps its mute bit and every calibration returns at
+    once) - the full calibration; then long watchdog runs: tempsense, the
+    noise requests, the periodic calibration (past 900 s), the transmit power
+    recalculation;
   * channel changes and a down/up while associated (the up calibrates);
   * per-frame RSSI computed on many varied receive headers;
   * the noise interrupt and the noise average;
@@ -26,7 +29,12 @@ PHY(0x13) of the temperature sense (temperatures from about 10 to 95 degrees
 C), the receive IQ power estimate PHY(c*0x200 + 0x6c0..0x6c5), and the noise
 powers SHM(0x308..0x313).
 
-    phy_soak.py [--on L,..] [--off L,..] [--show N] [--steps a,b,..]
+With --board N the card is a variant of the synthetic one: the SROM variables
+the PHY reads (power limits and PA coefficients, receive gains, temperature
+offset and thresholds, chains and antennas, per-rate power offsets, noise and
+gain-error corrections) changed at random within plausible ranges, seed N.
+
+    phy_soak.py [--on L,..] [--off L,..] [--show N] [--steps a,b,..] [--board N]
 """
 import argparse
 import os
@@ -49,17 +57,21 @@ CH_5G_80 = ['%d/80' % c for c in list(range(36, 65, 4)) + list(range(100, 145, 4
 STEPS = (['attach', 'mpc 0', 'up', 'roam_off 1'] + CH_2G + CH_5G_20 + CH_5G_40 + CH_5G_80 +
          ['6', '36/80', '1', '165', 'watchdog', 'rssi 1',
           # associated on 36/80
-          '36/80', 'assoc', 'joincal', 'interf 1', 'wait 5', 'rssi 2', 'noise 1', 'wait 20',
-          'rssi 3', 'noise 2', 'qtxpower 60', 'wait 130', 'rssi 4', 'noise 3',
+          '36/80', 'assoc', 'unquiet', 'joincal', 'interf 1', 'wait 5', 'rssi 2', 'noise 1',
+          'wait 20', 'rssi 3', 'noise 2', 'qtxpower 60', 'wait 130', 'rssi 4', 'noise 3',
           # channel and band changes while associated
-          '6', 'joincal', 'wait 15', 'rssi 5', 'noise 4', '1l', 'wait 15', 'rssi 6',
-          '149/80', 'joincal', 'interf 1', 'wait 130', 'rssi 7', 'qtxpower 127', 'wait 20',
+          '6', 'unquiet', 'joincal', 'wait 15', 'rssi 5', 'noise 4', '1l', 'unquiet',
+          'wait 15', 'rssi 6', '149/80', 'unquiet', 'joincal', 'interf 1', 'wait 130',
+          'rssi 7', 'qtxpower 127', 'wait 20',
+          # past 900 s since the last calibration: the periodic (multi-phase) one
+          'wait 920', 'rssi 10', 'noise 6',
           '52l', 'wait 15', 'rssi 8',
           # down and up while associated: the up calibrates again
           'down', 'up', 'wait 20', 'rssi 9', 'noise 5', 'interf 0', 'wait 15',
           'down', 'detach'])
 
 WLC_GET_PHY_NOISE = 135             # src/include/wlioctl.h
+WLC_CMI = 0x1a0                     # wlc->cmi, the channel manager (as wlc_join_BSS passes it)
 AUX_ADC = 0x13                      # PHY: the temperature sense's ADC readout
 IQEST = (0x6c0, 0x6c6)              # PHY, per core +0x200: I*Q, I^2, Q^2 (lo, hi)
 NOISE_SHM = (0x308, 0x314)          # SHM: noise power per core (lo, hi)
@@ -112,9 +124,61 @@ class Measurements:
         return value
 
 
+def board(seed):
+    """A board variant: the synthetic card's variables with those the PHY reads
+    changed at random within plausible ranges (seeded), as a revision-11 SROM
+    image. 0: the synthetic card itself."""
+    from blob import Blob
+    from run_attach import DEFAULT_SROM
+    from srom import Layout
+    v = {}
+    for line in open(DEFAULT_SROM):
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, _, val = line.partition('=')
+            v[k] = val
+    rng = random.Random(seed)
+
+    def arr(name, f):
+        v[name] = ','.join(str(f(int(x, 0))) for x in v[name].split(','))
+
+    for p in '01':
+        v['maxp2ga' + p] = str(rng.randrange(52, 91))
+        arr('maxp5ga' + p, lambda x: rng.randrange(52, 91))
+        arr('pa2ga' + p, lambda x: '0x%x' % ((x + rng.randrange(-0x30, 0x31)) & 0xffff))
+        arr('pa5ga' + p, lambda x: '0x%x' % ((x + rng.randrange(-0x30, 0x31)) & 0xffff))
+        for b in ('2g', '5g', '5gm', '5gh'):
+            v['rxgains%selnagaina%s' % (b, p)] = str(rng.randrange(8))
+            v['rxgains%strisoa%s' % (b, p)] = str(rng.randrange(16))
+            v['rxgains%strelnabypa%s' % (b, p)] = str(rng.randrange(2))
+    v['tempoffset'] = str(rng.choice([255, rng.randrange(0, 60)]))
+    v['rawtempsense'] = '0x%x' % rng.choice([0x1ff, rng.randrange(20, 80)])
+    v['tempthresh'] = str(rng.choice([255, rng.randrange(85, 116)]))
+    v['phycal_tempdelta'] = str(rng.choice([255, rng.randrange(15, 41)]))
+    for k in ('measpower', 'measpower1', 'measpower2'):
+        v[k] = '0x%x' % rng.randrange(0x80)
+    v['txchain'] = v['rxchain'] = str(rng.choice([3, 3, 1]))
+    v['aa2g'] = v['aa5g'] = str(rng.choice([3, 3, 1]))
+    for b in ('2g', '5g'):
+        v['epagain' + b] = str(rng.randrange(8))
+        v['pdgain' + b] = str(rng.randrange(32))
+        v['tworangetssi' + b] = str(rng.randrange(2))
+        v['papdcap' + b] = str(rng.randrange(2))
+    v['gainctrlsph'] = str(rng.randrange(2))
+    for k in list(v):
+        if k.endswith('po') and k.startswith(('mcs', 'cck', 'ofdm', 'dot11', 'sb')):
+            v[k] = '0x%x' % rng.randrange(1 << (32 if k.startswith('mcs') else 16))
+        elif k.startswith(('noiselvl', 'rxgainerr')):
+            arr(k, lambda x: rng.randrange(64))
+        elif k.startswith('pdoffset'):
+            v[k] = '0x%x' % rng.randrange(0x10000)
+    v['sar2g'], v['sar5g'] = str(rng.randrange(10, 21)), str(rng.randrange(10, 21))
+    return Layout(Blob(hybrid.BLOB)).encode(v)
+
+
 class SoakRun(hybrid.Run):
-    def __init__(self, path=None, off=(), on=()):
-        super().__init__(path, off=off, on=on)
+    def __init__(self, path=None, off=(), on=(), **card):
+        super().__init__(path, off=off, on=on, **card)
         self.s.chip.MAX_TRACE = 40000000
         Measurements(self.s.chip)
         self.marks = []             # length of the trace at the start of each step
@@ -152,6 +216,14 @@ class SoakRun(hybrid.Run):
         elif word == 'assoc':
             cfg = m.call('wlc_bsscfg_primary', d.wlc)
             m.call('wlc_sta_assoc_upd', cfg, 1)
+            r = 0
+        elif word == 'unquiet':
+            # as wlc_join_BSS: the channel is no longer quiet (a beacon was
+            # heard), the transmitter is unmuted - without it the PHY's hold
+            # word keeps the mute bit and the calibrations return at once
+            cs = d.iovar_getint('chanspec')[1] & 0xffff
+            m.call('wlc_clr_quiet_chanspec', m.r64(d.wlc + WLC_CMI), cs)
+            m.call('wlc_mute', d.wlc, 0, 0)
             r = 0
         elif word == 'joincal':
             cfg = m.call('wlc_bsscfg_primary', d.wlc)
@@ -193,10 +265,11 @@ class SoakRun(hybrid.Run):
         return out
 
 
-def soak(on=('phy',), off=(), show=20, steps=STEPS):
+def soak(on=('phy',), off=(), show=20, steps=STEPS, board_seed=0):
     core = hybrid.build(quiet=True)
-    ref = SoakRun().session(steps, stop_on_error=False)
-    got = SoakRun(core, off=off, on=on).session(steps, stop_on_error=False)
+    card = {'srom': board(board_seed)} if board_seed else {}
+    ref = SoakRun(**card).session(steps, stop_on_error=False)
+    got = SoakRun(core, off=off, on=on, **card).session(steps, stop_on_error=False)
     want, have = ref.logical_steps(), got.logical_steps()
     bad = 0
     if ref.error:
@@ -231,10 +304,11 @@ def soak(on=('phy',), off=(), show=20, steps=STEPS):
             shown += 1
             ab.compare(want[i], have[i], 4)
     total_w, total_h = sum(map(len, want)), sum(map(len, have))
-    print('PHY soak (%d steps), switched on: %s, off: %s: %d accesses of the object, %d of '
-          'the hybrid core, %s' % (len(steps), ', '.join(on) or '-', ', '.join(off) or '-',
-                                   total_w, total_h, 'the same' if not bad else
-                                   'DIFFERENT in %d steps' % bad))
+    print('PHY soak (%d steps, board %s), switched on: %s, off: %s: %d accesses of the object, '
+          '%d of the hybrid core, %s' % (len(steps), board_seed or 'synthetic',
+                                         ', '.join(on) or '-', ', '.join(off) or '-',
+                                         total_w, total_h, 'the same' if not bad else
+                                         'DIFFERENT in %d steps' % bad))
     return bad
 
 
@@ -245,12 +319,14 @@ def main():
     ap.add_argument('--off', default='', help='layers to switch off')
     ap.add_argument('--show', type=int, default=20)
     ap.add_argument('--steps', default='', help='comma-separated steps instead of the soak')
+    ap.add_argument('--board', type=int, default=0,
+                    help='a board variant (seed; 0: the synthetic card)')
     ns = ap.parse_args()
     on = tuple(x for x in ns.on.split(',') if x)
     off = tuple(x for x in ns.off.split(',') if x)
     steps = ns.steps.split(',') if ns.steps else STEPS
     try:
-        return 1 if soak(on, off, ns.show, steps) else 0
+        return 1 if soak(on, off, ns.show, steps, ns.board) else 0
     except EmuError as e:
         print('emulation error: %s' % e)
         return 1
