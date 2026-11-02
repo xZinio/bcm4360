@@ -59,13 +59,15 @@ STEPS = (['attach', 'mpc 0', 'up', 'roam_off 1'] + CH_2G + CH_5G_20 + CH_5G_40 +
           # associated on 36/80
           '36/80', 'assoc', 'unquiet', 'joincal', 'interf 1', 'wait 5', 'rssi 2', 'noise 1',
           'wait 20', 'rssi 3', 'noise 2', 'qtxpower 60', 'wait 130', 'rssi 4', 'noise 3',
-          # channel and band changes while associated
-          '6', 'unquiet', 'joincal', 'wait 15', 'rssi 5', 'noise 4', '1l', 'unquiet',
-          'wait 15', 'rssi 6', '149/80', 'unquiet', 'joincal', 'interf 1', 'wait 130',
+          # other channels and bands: the driver refuses a channel change while
+          # associated, so each one is a new association there
+          'deassoc', '6', 'assoc', 'unquiet', 'joincal', 'wait 15', 'rssi 5', 'noise 4',
+          'deassoc', '36l', 'assoc', 'unquiet', 'joincal', 'wait 15', 'rssi 6',
+          'deassoc', '149/80', 'assoc', 'unquiet', 'joincal', 'interf 1', 'wait 130',
           'rssi 7', 'qtxpower 127', 'wait 20',
           # past 900 s since the last calibration: the periodic (multi-phase) one
           'wait 920', 'rssi 10', 'noise 6',
-          '52l', 'wait 15', 'rssi 8',
+          'deassoc', '52l', 'assoc', 'unquiet', 'wait 15', 'rssi 8',
           # down and up while associated: the up calibrates again
           'down', 'up', 'wait 20', 'rssi 9', 'noise 5', 'interf 0', 'wait 15',
           'down', 'detach'])
@@ -99,8 +101,10 @@ class Measurements:
             self.n_adc += 1
             t = TEMP_SIGN[(n // 8) % 4] * TEMP_AMP[(n // 128) % len(TEMP_AMP)] + (n * 7) % 5 - 2
             return (t & 0x3ff) << 2
-        core, reg = addr >> 9, addr & 0x1ff
-        if core < 3 and IQEST[0] <= reg < IQEST[1]:
+        # core c's estimate registers are at c * 0x200 + 0x6c0 .. 0x6c5
+        core = (addr - IQEST[0]) >> 9 if addr >= IQEST[0] else -1
+        reg = addr - 0x200 * core
+        if 0 <= core < 3 and IQEST[0] <= reg < IQEST[1]:
             if reg == IQEST[0]:
                 self.iq[core] = self.iq.get(core, 0) + 1
             k = self.iq.get(core, 0)
@@ -216,6 +220,10 @@ class SoakRun(hybrid.Run):
         elif word == 'assoc':
             cfg = m.call('wlc_bsscfg_primary', d.wlc)
             m.call('wlc_sta_assoc_upd', cfg, 1)
+            r = 0
+        elif word == 'deassoc':
+            cfg = m.call('wlc_bsscfg_primary', d.wlc)
+            m.call('wlc_sta_assoc_upd', cfg, 0)
             r = 0
         elif word == 'unquiet':
             # as wlc_join_BSS: the channel is no longer quiet (a beacon was
