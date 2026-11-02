@@ -58,11 +58,13 @@ with `fwcut.py`). Per-device SROM/calibration is read from the card, not shipped
   channel set, rxgain/desense/txpower, calibrations). It reproduces the object
   access-for-access in the emulator: 23/23 scenarios, 0 differences.
 - Since the hybrid build (`hybrid/`, see below), open code **does** run inside
-  the shipping `bcm4360.ko`, in place of Broadcom's: the PMU and clocks (16
-  functions of `hndpmu.c`) are taken over, verified identical over a whole
-  session. The AC-PHY is wired to be taken over the same way at its 79 entry
-  points; the open side answers about a third of them today and the rest are
-  in progress.
+  the shipping `bcm4360.ko`, in place of Broadcom's: PMU, register access, MAC
+  control and object memories, utilities, regulatory database, power
+  container and SROM variables are taken over by default (223 functions),
+  each verified identical over a whole session with its fallback too. The
+  open AC-PHY takes over all 79 entry points of Broadcom's PHY with the
+  session identical; it is in the module behind `open_phy`, off by default
+  until it has run on a card.
 - It has **never run on a real card.** The card model uses *assumed* identity
   values (chip/PHY/radio revisions, SROM) and fakes calibration results, so the
   hybrid result says the open code does to the *model* exactly what the object
@@ -90,11 +92,20 @@ attach, up, nine channel changes, watchdog, down, up, down, detach:
 | object alone (1.0.3) | 200,461 bytes (100 %) | — | 0 % |
 | hybrid, PMU taken over | 197,888 bytes (98.7 %) | 2,716 bytes | — |
 | hybrid, PMU + register access + MAC control + utilities | 194,769 bytes (97.2 %) | 15,765 bytes | **33.0 %** |
+| + regulatory database (2026-11-01) | 187,114 bytes (93.4 %) | 25,831 bytes | 64.7 % |
+| + PHY's variable lookup, MAC object memories, power container, SROM variables (2026-11-02) | 179,205 bytes (89.4 %) | 45,101 bytes | **91.2 %** |
+| the same + the open AC-PHY (`open_phy=1`) | 107,732 bytes (53.8 %) | 98,356 bytes | **93.3 %** |
 
 The last column counts every execution of a basic block: the register access
 primitives and the board-variable lookup (`getvar`, about a fifth of all
-execution on its own) are small but run constantly, so a third of everything
-the driver does in the session is now open code. These are small layers in
+execution on its own) are small but run constantly. The regulatory database
+lookup, Broadcom's PHY's own variable lookup, the power container and the
+SROM variable building were the next largest; with them open, more than nine
+tenths of everything the driver does in the session is open code. What
+Broadcom code still runs is spread thin (MAC, channel/rate logic of the upper
+layer, backplane, DMA). The bytes column is now the more telling one: by
+default Broadcom's own AC-PHY still runs (about 70 KB of it), which only the
+switch `open_phy` - waiting for a test on the card - removes. These are small layers in
 bytes; the number that matters for the static share is the AC-PHY, which is the
 bulk of the hardware layer and the part no open driver has. Once its 79 entry
 points are all answered by `open/` and the `--on phy` session matches the

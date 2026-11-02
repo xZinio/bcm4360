@@ -1,6 +1,8 @@
 # Status
 
-State of 2026-10-31 (PHY areas unchanged since 2026-09-28; hybrid build added).
+State of 2026-11-02 (PHY areas unchanged since 2026-09-28; hybrid build since
+2026-10-31; regulatory database, power container, SROM variables and MAC
+object memories added 2026-11-01/02).
 This document says what is known, how well, and what is missing. Read "What the
 results rest on" before relying on anything.
 
@@ -14,10 +16,13 @@ now being worked (first increment: the control primitives, `mac-ctrl`).
 Since the **hybrid build** ([../../hybrid/README.md](../../hybrid/README.md)),
 open code runs inside `bcm4360.ko` in place of Broadcom's, not only in the
 emulator: the PMU (16 functions of `hndpmu.c`), the register access primitives
-(15), the MAC control primitives (6) and the utilities of `bcmutils.c` (7:
-board variables, number parsing, CRC-8) are taken over and verified identical
-over a full session, with each layer's fallback too; a third of everything the
-driver executes in that session is now open code. **The open AC-PHY now
+(15), the MAC control primitives and object memories (19), the utilities of
+`bcmutils.c` and Broadcom's PHY's variable lookup (8), the regulatory database
+interpreter (16 of `wlc_clm.c`), the per-rate transmit power container (all 50
+of `wlc_ppr.c`) and the board variables from SROM/OTP (`srom_var_init`) are
+taken over and verified identical over a full session, with each layer's
+fallback too. **As of 2026-11-02, 91.2% of everything the driver executes in
+that session is open code by default** (93.3% with the open PHY switched on). **The open AC-PHY now
 takes over all 79 entry points of Broadcom's PHY** (module parameter
 `open_phy`, off by default until it has run on a card): with it switched on
 the whole session is identical to the object, and the Broadcom code that runs
@@ -58,10 +63,13 @@ scenarios named.
 | Transmit power control | `wlc_phy_ac.c`, `wlc_ppr.c` | [acphy-txpower](spec/acphy-txpower.md) | `open/phy/phy_txpower.c` | part of `phy-init`/`phy-chanspec`, 0 differences |
 | Receive gain control, desense, interference mitigation | `wlc_phy_ac.c` | [acphy-desense](spec/acphy-desense.md) | `open/phy/phy_desense.c` | part of `phy-init`/`phy-chanspec`, 0 differences |
 | Calibrations (TX IQ/LO, RX IQ, temperature) | `wlc_phy_ac.c` | [acphy-cal-tx](spec/acphy-cal-tx.md), [acphy-cal-rx](spec/acphy-cal-rx.md) | `open/phy/phy_cal.c` | `phy-cal`: 141130 accesses, 0 differences (scheduler, TX IQ/LO, RX IQ, temperature sense, tone) |
-| PHY common layer, interface to the MAC | `wlc_phy_cmn.c` | - | - | - |
+| PHY common layer, interface to the MAC | `wlc_phy_cmn.c` | [acphy-api](spec/acphy-api.md) and the `acphy-api-*` specs | `open/phy/phy_api.c`, `phy_rx.c`, `phy_wd.c` | `hybrid.py check --on phy`: whole session, 41,416 accesses, 0 differences |
+| Board variables: lookup, Broadcom's PHY's lookup | `bcmutils.c`, `wlc_phy_cmn.c` | [utils](spec/utils.md) | `open/lib/utils.c` | `hybrid.py check`, 0 differences |
+| Regulatory database interpreter | `wlc_clm.c` | [clm](spec/clm.md) | `open/lib/clm.c` | `clm`: 145,780 results, 0 differences |
+| Per-rate transmit power container | `wlc_ppr.c` | [ppr](spec/ppr.md) | `open/lib/ratepwr.c` | `ppr`: 94,579 calls, 0 differences |
 | Backplane, cores, PCIe bridge | `siutils.c`, `aiutils.c`, `nicpci.c` | - | - | - |
-| SROM, OTP, variables | `bcmsrom.c`, `bcmotp.c` | format only, in `tools/re/srom.py` | - | - |
-| MAC core bring-up (microcode, initial values, buffers) | `wlc_bmac.c` | [bmac-init](spec/bmac-init.md) (draft) | - | - |
+| SROM, OTP, variables | `bcmsrom.c`, `bcmotp.c`, `nvram_ro.c` | [srom-otp](spec/srom-otp.md) | `open/chip/srom.c` (PCI path, revision 11; the OTP and backplane functions stay Broadcom's) | `hybrid.py srom`: ten cards, 0 differences |
+| MAC core bring-up (microcode, initial values, buffers) | `wlc_bmac.c` | [bmac-init](spec/bmac-init.md) | `open/mac/bmac_ctrl.c`, `bmac_mhf.c`, `bmac_mem.c` (control, host flags, object memories); clocks and reset being written | `mac-ctrl`, `mac-mhf`, `hybrid.py check`: 0 differences |
 | DMA, FIFOs, interrupts | `hnddma.c`, `wlc_bmac.c` | - | - | - |
 | Frame formats between driver and MAC core | `wlc.c`, `wlc_bmac.c` | - | - | - |
 | Aggregation and keys in hardware | `wlc_ampdu.c`, `wlc_key.c` | - | - | - |
