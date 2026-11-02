@@ -33,9 +33,11 @@ CC_REGS = [
     (0x008, 'core control'),
     (0x010, 'OTP status'),
     (0x014, 'OTP control'),
+    (0x018, 'OTP programming / bit read (only read here)'),
     (0x01c, 'OTP layout'),
     (0x028, 'chip control'),
     (0x02c, 'chip status'),
+    (0x04c, 'OTP fuse bit count (low 10 bits)'),
     (0x0ac, 'capabilities, extended'),
     (0x0fc, 'address of the enumeration ROM'),
     (0x190, 'SROM control'),
@@ -95,11 +97,15 @@ def main():
     except (OSError, ValueError) as e:
         sys.exit('cannot map BAR0: %s (kernel lockdown? memory space disabled?)' % e)
 
+    # Native formats ('I', 'H', not '<I'): CPython reads them with one load of
+    # the full width, as the driver does; the '<' formats are assembled from
+    # single-byte reads, which a register need not answer correctly.
+    # (x86 is little endian, so the values are the same.)
     def r32(off):
-        return struct.unpack_from('<I', bar, off)[0]
+        return struct.unpack_from('I', bar, off)[0]
 
     def r16(off):
-        return struct.unpack_from('<H', bar, off)[0]
+        return struct.unpack_from('H', bar, off)[0]
 
     if r32(CC) == 0xffffffff:
         sys.exit('the card does not answer (register reads give 0xffffffff): powered down?')
@@ -133,15 +139,18 @@ def main():
                 v = r32(off) if size == 4 else r16(off)
                 print('D11(%#05x) = %#0*x   %s' % (off, 2 + 2 * size, v, text))
 
-    # SROM (or OTP, if the card has no SROM): window of 16 bit words in ChipCommon
+    # SROM (or OTP, if the card has no SROM): window of 16 bit words in ChipCommon.
+    # 512 words: without an SROM the window shows the OTP, whose hardware region
+    # (the SROM image) can reach past word 255 (docs/re/spec/srom-otp.md).
+    n = 512
     print('\n--- SROM/OTP window, CC(0x800), 16 bit words')
-    words = [r16(CC + 0x800 + 2 * i) for i in range(256)]
-    for i in range(0, 256, 8):
+    words = [r16(CC + 0x800 + 2 * i) for i in range(n)]
+    for i in range(0, n, 8):
         print('%03d: %s' % (i, ' '.join('%04x' % w for w in words[i:i + 8])))
     sys.stdout.flush()
     with open('bcm4360-srom-window.bin', 'wb') as f:
-        f.write(struct.pack('<256H', *words))
-    sys.stderr.write('the 256 words were also written to bcm4360-srom-window.bin\n')
+        f.write(struct.pack('<%dH' % n, *words))
+    sys.stderr.write('the %d words were also written to bcm4360-srom-window.bin\n' % n)
 
 
 if __name__ == '__main__':

@@ -81,6 +81,25 @@ def crc8(data, crc=0xff):
     return crc
 
 
+def detect_rev(words):
+    """The revision of an image as srom_var_init finds it (srom-otp.md, step 5):
+    the first of 234, 220, 64 words whose CRC is good decides, by its
+    signature; None if none is good (the driver then tries the OTP, NVRAM)."""
+    raw = b''.join((w & 0xffff).to_bytes(2, 'little') for w in words)
+    if not words or words[0] == 0xffff:
+        return None
+    for n in (234, 220, 64):
+        if len(words) < n or crc8(raw[:2 * n]) != CRC8_GOOD:
+            continue
+        if n == 234:
+            return words[233] & 0xff if words[64] == SROM11_SIGNATURE else 0
+        if n == 220:
+            return words[219] & 0xff if 0x5372 in (words[32], words[64]) else 0
+        rev = words[63] & 0xff
+        return 1 if rev == 0x10 else rev
+    return None
+
+
 def shift_of(mask):
     s = 0
     while mask and not mask & 1:
@@ -96,14 +115,38 @@ class Layout:
         self.perpath = read_table(b, PERPATH_SROMVARS)
 
     def decode(self, words, rev=None):
-        """Variables of an image, in the order and form the driver makes them."""
+        """Variables of an image, in the order and form the driver makes them
+        (docs/re/spec/srom-otp.md, "Conversion of an image into variables").
+        rev: the revision; None: found as srom_var_init finds it."""
         if rev is None:
-            rev = words[-1] & 0xff
-        out = [('sromrev', '%d' % rev)]
-        self._decode(self.common, words, rev, 0, '', out)
+            rev = detect_rev(words)
+            if rev is None:
+                raise ValueError('no valid image: blank, or no CRC matches for 234, 220 '
+                                 'or 64 words (the driver would try the OTP / NVRAM)')
+        out = []
+        self._room = [0x1000]          # what is left of the driver's work buffer
+        self._append(out, 'sromrev', '%d' % rev)
+        self._decode(self.common, words, rev, 0, '', out, False)
         for base, p in self.path_bases(rev):
-            self._decode(self.perpath, words, rev, base, str(p), out)
+            self._decode(self.perpath, words, rev, base, str(p), out, True)
         return out
+
+    def _append(self, out, name, text):
+        """varbuf_append: a repeated name moves to the end; the buffer has
+        0x1000 bytes and an append that does not fit ends all appending."""
+        n = len(name) + 1 + len(text)
+        if self._room[0] <= 1:
+            return
+        if n > self._room[0] - 2:
+            self._room[0] = 0
+            return
+        for k, (old, val) in enumerate(out):
+            if old == name:
+                self._room[0] += len(old) + 1 + len(val) + 1
+                del out[k]
+                break
+        out.append((name, text))
+        self._room[0] -= n + 1
 
     @staticmethod
     def path_bases(rev):
@@ -112,58 +155,83 @@ class Layout:
                 return [(first + step * p, p) for p in range(count)]
         return []
 
-    def _decode(self, table, words, rev, base, suffix, out):
-        i = 0
-        n = len(table)
-        array = None
+    def _decode(self, table, words, rev, base, suffix, out, perpath):
+        """One table walk, (A) common or (B) per path, of srom-otp.md."""
+        def word(k):
+            return words[k] if k < len(words) else 0
+
+        def field(mask):
+            if not mask:
+                return 0, 0
+            lo = shift_of(mask)
+            return lo, mask.bit_length() - lo
+
+        mask_rev = 1 << (rev & 31)
+        i, n = 0, len(table)
+        array = None                    # [name, element texts] while one is built
         while i < n:
             e = table[i]
             i += 1
-            if not e.revmask & (1 << rev):
-                # skip the continuation entries of a variable that is not in this revision
-                while e.flags & SRFL_MORE and i < n:
-                    e = table[i]
-                    i += 1
+            if not e.revmask & mask_rev or e.flags & SRFL_NOVAR:
                 continue
-            first = e
-            w = words[base + e.off] if base + e.off < len(words) else 0xffff
-            val = (w & e.mask) >> shift_of(e.mask)
-            bits = bin(e.mask).count('1')
-            allff = w == 0xffff
-            while e.flags & SRFL_MORE and i < n:
-                e = table[i]
+            if not perpath and e.flags & SRFL_ETHADDR:
+                ws = [word(base + e.off + k) for k in range(3)]
+                self._append(out, e.name, ':'.join('%02x' % x for w3 in ws
+                                                    for x in (w3 >> 8, w3 & 0xff)))
+                continue
+            if rev > 9 and e.flags & SRFL_ARRAY and array is None:
+                array = [e.name, []]
+            lo, width = field(e.mask)
+            value = (word(base + e.off) & e.mask) >> lo
+            last = e
+            while not perpath and last.flags & SRFL_MORE and i < n:
+                c = table[i]
                 i += 1
-                w = words[base + e.off] if base + e.off < len(words) else 0xffff
-                if w != 0xffff:
-                    allff = False
-                val |= ((w & e.mask) >> shift_of(e.mask)) << bits
-                bits += bin(e.mask).count('1')
-            fl = first.flags
-            if fl & SRFL_NOVAR:
+                if c.off:
+                    clo, cw = field(c.mask)
+                    value += ((word(c.off) & c.mask) >> clo) << width
+                    width += cw
+                last = c
+            fl = e.flags
+            if fl & SRFL_NOFFS and value == ((1 << (width & 31)) - 1) & 0xffffffff:
                 continue
-            if fl & SRFL_ETHADDR:
-                ws = [words[base + first.off + k] for k in range(3)]
-                txt = ':'.join('%02x' % x for w3 in ws for x in (w3 >> 8, w3 & 0xff))
-                out.append((first.name + suffix, txt))
+            if rev <= 9 and last.flags & SRFL_ARRAY:
+                # step over the rest of the array and one entry more; the first
+                # element is printed as a scalar under the array's name
+                while i < n and table[i].flags & SRFL_ARRAY:
+                    i += 1
+                i += 2
+            elif array is not None:
+                if fl & SRFL_PRHEX:
+                    array[1].append('0x%x' % value)
+                elif fl & SRFL_PRSIGN and width and value >> (width - 1) & 1:
+                    array[1].append('%d' % (value - (1 << width)))
+                else:
+                    array[1].append('%u' % value)
+                if last.flags & SRFL_ARRAY:
+                    continue
+                self._append(out, array[0] + suffix, ','.join(array[1]))
+                array = None
                 continue
-            if fl & SRFL_CCODE:
-                txt = '' if val == 0 else '%c%c' % (val >> 8, val & 0xff)
-                out.append((first.name + suffix, txt))
-                continue
-            if fl & SRFL_PRSIGN and val & (1 << (bits - 1)):
-                val -= 1 << bits
-            txt = ('0x%x' % val) if fl & SRFL_PRHEX else '%d' % val
-            if fl & SRFL_ARRAY or array is not None:
-                if array is None:
-                    array = [first.name + suffix, []]
-                array[1].append(txt)
-                if not fl & SRFL_ARRAY:
-                    out.append((array[0], ','.join(array[1])))
-                    array = None
-                continue
-            if fl & SRFL_NOFFS and allff:
-                continue
-            out.append((first.name + suffix, txt))
+            if perpath:
+                # PRSIGN is ignored for per-path scalars
+                self._append(out, e.name + suffix,
+                             ('0x%x' if fl & SRFL_PRHEX else '%d') % value)
+            elif fl & SRFL_CCODE:
+                # a zero byte is stored as it is: the driver's list then ends
+                # there for getvar (srom-otp.md, open questions)
+                self._append(out, 'ccode', '' if value == 0 else
+                             chr(value >> 8 & 0xff) + chr(value & 0xff))
+            elif fl & SRFL_LEDDC:
+                v = ((value & 0xff) << 8) | ((value >> 8) << 24)
+                v &= 0xffffffff
+                self._append(out, 'leddc', '%d' % (v - (1 << 32) if v >> 31 else v))
+            elif fl & SRFL_PRHEX:
+                self._append(out, e.name, '0x%x' % value)
+            elif fl & SRFL_PRSIGN and width and value >> (width - 1) & 1:
+                self._append(out, e.name, '%d' % (value - (1 << width)))
+            else:
+                self._append(out, e.name, '%u' % value)
 
     def encode(self, variables, rev=11):
         """Image for a dict of variables; per-path names carry the path digit."""
@@ -272,14 +340,21 @@ if __name__ == '__main__':
         rev = int(sys.argv[2]) if len(sys.argv) > 2 else None
         for title, t in (('common', lay.common), ('per path', lay.perpath)):
             print('# ' + title)
+            more = False            # continuation entries belong to their head
             for e in t:
-                if rev is None or e.revmask & (1 << rev):
+                if rev is None or e.revmask & (1 << rev) or more:
                     print(e)
+                    more = bool(e.flags & SRFL_MORE)
     elif cmd == 'decode':
         raw = open(sys.argv[2], 'rb').read()
         words = list(struct.unpack('<%dH' % (len(raw) // 2), raw[:len(raw) & ~1]))
         for k, v in lay.decode(words):
-            print('%s=%s' % (k, v))
+            if '\0' in v:
+                print('%s=%s' % (k, v.split('\0')[0]))
+                print('# the driver stores a zero byte in %s here: getvar sees no '
+                      'variable after it' % k)
+            else:
+                print('%s=%s' % (k, v))
     elif cmd == 'encode':
         words = lay.encode(load_vars(sys.argv[2]))
         with open(sys.argv[3], 'wb') as f:

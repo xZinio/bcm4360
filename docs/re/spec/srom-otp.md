@@ -1096,6 +1096,15 @@ Further checks:
 
 ### Differences between `tools\re\srom.py` and the object
 
+**Fixed 2026-11-02** (coordinator): `srom.py decode` now follows the walk of
+this specification (revision detection by CRC and signature, NOFFS per field
+width, `leddc`, `ccode` with a zero byte, signed formatting only for common
+scalars and array elements, arrays only from revision 10, the duplicate rule
+and size limit of `varbuf_append`) and gives the object's buffer byte for byte
+on 37 revision-11 images (the cards of `hybrid.py srom` and 30 random ones);
+`srom.py table REV` lists the continuation entries of a variable. The list
+below is kept as the record of what was wrong.
+
 Found by reading, confirmed by `srompy_diff.py` (238 revision-11 images):
 
 1. **`leddc`**: the object prints `(w & 0xff) << 8 | (w >> 8) << 24` as a
