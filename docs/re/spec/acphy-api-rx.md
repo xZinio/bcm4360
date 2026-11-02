@@ -73,15 +73,21 @@ from `rxh`:
 | +0x24 | 1 (out) | the fractional/quarter-dB remainder |
 
 The AC path uses +0x06/+0x09/+0x0a for the per-core raw values, +0x04 for the
-band/bandwidth and +0x1c/+0x1f for the result; the +0x20/+0x21/+0x24 outputs
-and the ring at `pi+0x10b9`/`pi+0x10c9` are written only for N and HT PHYs.
+band/bandwidth and +0x1c/+0x1f for the result; the +0x20/+0x21 outputs and the
+ring at `pi+0x10b9`/`pi+0x10c9` are written only for N and HT PHYs. **+0x24 is
+written by every path** (the common end of `wlc_phy_rssi_compute`, after +0x1c):
+for the AC-PHY, and in the early-out for every type, it is set to **0**; only
+the LCN types store a remainder there. (Corrected by the coordinator from the
+code after `tools/re/phy_soak.py` showed the object clearing it; the first
+version said N/HT only.)
 
 ## wlc_phy_rssi_compute (AC-PHY)
 
 `wlc_phy_rssi_compute(pi, rxh)` dispatches by PHY type; for type 11 it calls
 `wlc_phy_rssi_compute_acphy(pi, rxh)` and stores the result in `rxh+0x1c`,
-clears `rxh+0x1f`. (The early-out for `sh+0x28` > 10 with certain `rxh+0x12`
-bits, which marks the RSSI invalid and returns, applies to every type.)
+clears `rxh+0x1f`, and sets `rxh+0x24` = 0. (The early-out for `sh+0x28` > 10
+with certain `rxh+0x12` bits applies to every type: it sets `rxh+0x1f` = 1,
+then the common end stores 0 in `rxh+0x1c` and in `rxh+0x24`.)
 
 `wlc_phy_rssi_compute_acphy(pi, rxh)` returns a signed dBm:
 

@@ -97,6 +97,14 @@ use what it reports. The prototypes of the entry points are in
 `open/include/bcm4360/phy_api.h`; keep the names and arguments, they are the
 interface `hybrid/phy.c` calls.
 
+`python phy_soak.py` (same place, Docker) is a much longer session for the
+open PHY: every channel and bandwidth, an association stand-in, long watchdog
+runs with the calibrations, RSSI on many receive headers, the noise
+interrupt; the card model gives the measurement registers deterministic
+values. It compares the accesses and the results of every step, and reports
+the steps that differ. It is a comparison test like the others: run it, use
+what it reports.
+
 ## Questions
 
 Write everything you had to guess, everything the specification got wrong or
