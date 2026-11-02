@@ -42,7 +42,7 @@ ROOT = ab.ROOT
 OUT = os.environ.get('HYBRID_OUT') or os.path.join(ROOT, 're-out', 'hybrid')
 BLOB = os.path.join(ROOT, 'lib', 'wlc_hybrid.o_shipped')
 CORE = os.path.join(OUT, 'core.o')
-LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils', 'clm', 'ppr', 'srom')   # the switches bcm4360_open_<layer>
+LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils', 'clm', 'ppr', 'srom', 'si')   # the switches bcm4360_open_<layer>
 
 CHANNELS = ['1', '6', '11', '36', '36/40', '36/80', '149/80', '157/40', '165']
 SESSION = (['attach', 'mpc 0', 'up'] + CHANNELS +

@@ -88,11 +88,6 @@ take wlc_bmac_set_ctrl_bt_shd0
 take wlc_bmac_set_ctrl_SROM
 take wlc_bmac_radio_read_hwdisabled
 take wlc_hw_deviceremoved
-use si_iscoreup
-use si_core_reset
-use si_core_disable
-use si_clkctl_xtal
-use si_deviceremoved
 # the initialisation (hybrid/mac_init.c -> open/mac/bmac_init.c, bmac-init.md B1-B3,
 # B6-B10, B12, E6, E10); until hybrid/objects.mk links them Broadcom's own (weak)
 # bodies run unchanged. The MAC functions not open yet that it calls, the backplane
@@ -249,14 +244,6 @@ use wlapi_init_timer
 use wlapi_add_timer
 use wlapi_del_timer
 use wlapi_free_timer
-use si_core_sflags
-use si_core_cflags
-use si_corereg
-use si_gpiocontrol
-use si_gpioout
-use si_gpioouten
-use si_get_sromctl
-use si_set_sromctl
 use si_alp_clock
 use otp_read_word
 # (getvar: taken by the utilities layer above)
@@ -367,3 +354,43 @@ use nvram_getall
 use si_devpath
 use si_coded_devpathvar
 use si_osh
+
+# --- backplane (hybrid/si.c -> open/chip/si.c, docs/re/spec/chip.md, switch open_si):
+# core selection, register access, the AXI wrapper, GPIO, small helpers; si_attach
+# and the PCIe bridge stay Broadcom's. The MAC, SROM and PMU layers call these
+# names too and reach the same code. Until hybrid/objects.mk links them Broadcom's
+# own (weak) bodies run unchanged.
+take si_coreidx
+take si_coreid
+take si_corerev
+take si_corevendor
+take si_backplane64
+take si_findcoreidx
+take si_setcoreidx
+take si_setcore
+take si_switch_core
+take si_restore_core
+take si_corereg
+take si_ccreg
+take si_iscoreup
+take si_core_cflags
+take si_core_cflags_wo
+take si_core_sflags
+take si_core_reset
+take si_core_disable
+take si_wrapperreg
+take si_gpiocontrol
+take si_gpioouten
+take si_gpioout
+take si_gpioin
+take si_gpioled
+take si_gpiotimerval
+take si_clkctl_xtal
+take si_deviceremoved
+take si_get_sromctl
+take si_set_sromctl
+take si_chip_hostif
+take si_fabid
+take si_pci_war16165
+take si_ldo_war
+take si_tcm_size
