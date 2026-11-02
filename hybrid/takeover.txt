@@ -212,33 +212,60 @@ use si_set_sromctl
 use si_alp_clock
 use otp_read_word
 # (getvar: taken by the utilities layer above)
-# the MAC's per-rate power container (wlc_ppr.c), services of the open PHY's
-# transmit power (phy_env.h, docs/re/spec/acphy-api-txpower.md)
-use ppr_create
-use ppr_delete
-use ppr_clear
-use ppr_copy_struct
-use ppr_get_ch_bw
-use ppr_set_cmn_val
-use ppr_plus_cmn_val
-use ppr_minus_cmn_val
-use ppr_cmn_val_minus
-use ppr_apply_min
-use ppr_apply_max
-use ppr_compare_min
-use ppr_compare_max
-use ppr_multiply_percentage
-use ppr_force_disabled
-use ppr_get_max
-use ppr_get_min
-use ppr_get_ofdm
-use ppr_set_ofdm
-use ppr_get_ht_mcs
-use ppr_set_ht_mcs
-use ppr_get_vht_mcs
-use ppr_set_vht_mcs
-use ppr_get_dsss
-use ppr_set_dsss
+# the MAC's per-rate power container (wlc_ppr.c): the open PHY's transmit power
+# reaches it through these names (phy_env.h services, hybrid/phy.c); taken over
+# by hybrid/ppr.c -> open/lib/ratepwr.c (docs/re/spec/ppr.md, switch open_ppr),
+# until hybrid/objects.mk links them Broadcom's own (weak) bodies run unchanged
+take ppr_size
+take ppr_ser_size
+take ppr_ser_size_by_bw
+take ppr_get_ch_bw
+take ppr_get_max_bw
+take ppr_create
+take ppr_init
+take ppr_delete
+take ppr_clear
+take ppr_set_cmn_val
+take ppr_copy_struct
+take ppr_get_dsss
+take ppr_get_ofdm
+take ppr_get_ht_mcs
+take ppr_get_vht_mcs
+take ppr_set_dsss
+take ppr_set_ofdm
+take ppr_set_ht_mcs
+take ppr_set_vht_mcs
+take ppr_set_same_dsss
+take ppr_set_same_ofdm
+take ppr_set_same_ht_mcs
+take ppr_set_same_vht_mcs
+take ppr_get_vht_mcs_min
+take ppr_apply_max
+take ppr_apply_min
+take ppr_plus_cmn_val
+take ppr_minus_cmn_val
+take ppr_cmn_val_minus
+take ppr_multiply_percentage
+take ppr_compare_min
+take ppr_compare_max
+take ppr_apply_vector_ceiling
+take ppr_apply_vector_floor
+take ppr_force_disabled
+take ppr_apply_constraint_total_tx
+take ppr_get_max
+take ppr_get_min
+take ppr_get_max_for_bw
+take ppr_get_min_for_bw
+take ppr_map_vec_dsss
+take ppr_map_vec_ofdm
+take ppr_map_vec_ht_mcs
+take ppr_map_vec_vht_mcs
+take ppr_map_vec_all
+take ppr_init_ser_mem_by_bw
+take ppr_init_ser_mem
+take ppr_serialize
+take ppr_deserialize
+take ppr_deserialize_create
 
 # Broadcom's tables the open PHY loads at runtime (hybrid/fwdata.h)
 use acphy_est_pwr_lut_core0_rev0

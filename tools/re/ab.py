@@ -640,6 +640,7 @@ def main():
     import phy_scenarios    # noqa: F401 (adds its scenarios to the table)
     import mac_scenarios    # noqa: F401 (adds its scenarios to the table)
     import clm_scenarios    # noqa: F401
+    import ppr_scenarios    # noqa: F401
     table = scenarios.all_scenarios()
     if ns.cmd == 'list':
         for name, sc in table.items():

@@ -14,7 +14,7 @@ hybrid-objs := hybrid/card.o \
 
 # Being written: linked by tools/re/hybrid.py for the emulator once ALL of
 # these sources exist, not yet in the module.
-hybrid-new-objs :=
+hybrid-new-objs := hybrid/ppr.o open/lib/ratepwr.o
 
 # The PHY layer (hybrid/phy.c, switch open_phy, default off): the adapter and
 # the open PHY (its register access, open/hw/access.o, is in the list above).
