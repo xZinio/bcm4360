@@ -151,7 +151,7 @@ static void clk_ctl_wait_0x20000(struct bcm4360_mac *mac)
  * fast clock of the MAC core (mode 0) or return to the dynamic clock (any
  * other mode). No register access while the core's clock is off.
  */
-static void wlc_bmac_clkctl_clk(struct bcm4360_mac *mac, u32 mode)
+void bcm4360_bmac_clkctl_clk(struct bcm4360_mac *mac, u32 mode)
 {
 	u32 v;
 
@@ -302,7 +302,7 @@ void bcm4360_bmac_corereset(struct bcm4360_mac *mac, u32 flags)
 	/* step 2: the clock mode at entry (a local by the specification) */
 	fast = mac->forcefastclk;
 	if (!fast)
-		wlc_bmac_clkctl_clk(mac, CLK_FAST);
+		bcm4360_bmac_clkctl_clk(mac, CLK_FAST);
 
 	/* step 3 */
 	corereset_dma(mac);
@@ -334,7 +334,7 @@ void bcm4360_bmac_corereset(struct bcm4360_mac *mac, u32 flags)
 
 	/* step 8: the reset cleared the force bit */
 	if (mac->cccaps & CC_CAP_PMU)
-		wlc_bmac_clkctl_clk(mac, CLK_FAST);
+		bcm4360_bmac_clkctl_clk(mac, CLK_FAST);
 
 	/* step 9 */
 	if (mac->band_valid)
@@ -348,7 +348,7 @@ void bcm4360_bmac_corereset(struct bcm4360_mac *mac, u32 flags)
 
 	/* step 12 */
 	if (!fast)
-		wlc_bmac_clkctl_clk(mac, CLK_DYNAMIC);
+		bcm4360_bmac_clkctl_clk(mac, CLK_DYNAMIC);
 }
 
 /*

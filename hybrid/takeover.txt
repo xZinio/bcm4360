@@ -113,8 +113,7 @@ use btc_ucode_flags
 # up and down (hybrid/mac_updown.c -> open/mac/bmac_updown.c, bmac-init.md C2-C6, C8,
 # C10, C15, D3). The PCIe bridge, the clock and coexistence helpers of the backplane,
 # the 4360 PCIe work-around and the IFS energy-detect setting stay Broadcom's
-# (services of mac_env.h). Until open/mac/bmac_updown.c exists these takes keep
-# Broadcom's bodies (staged: hybrid-new-macupdown-objs).
+# (services of mac_env.h).
 take wlc_bmac_hw_up
 take wlc_bmac_up_prep
 take wlc_bmac_up_finish

@@ -95,6 +95,8 @@ attach, up, nine channel changes, watchdog, down, up, down, detach:
 | + regulatory database (2026-11-01) | 187,114 bytes (93.4 %) | 25,831 bytes | 64.7 % |
 | + PHY's variable lookup, MAC object memories, power container, SROM variables (2026-11-02) | 179,205 bytes (89.4 %) | 45,101 bytes | **91.2 %** |
 | the same + the open AC-PHY (`open_phy=1`) | 107,732 bytes (53.8 %) | 98,356 bytes | **93.3 %** |
+| + MAC clocks/reset/initialisation/up and down, backplane, DMA engines (2026-11-02) | 165,404 bytes (82.5 %) | 68,758 bytes | **92.7 %** |
+| the same + the open AC-PHY (`open_phy=1`) | 93,931 bytes (46.9 %) | 121,868 bytes | **95.0 %** |
 
 The last column counts every execution of a basic block: the register access
 primitives and the board-variable lookup (`getvar`, about a fifth of all

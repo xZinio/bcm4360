@@ -1403,8 +1403,13 @@ Bus PCI:
    0x204, 0)`, `si_pmu_res_req_timer_clr(sih)`.
 5. `si_pci_down(sih)`.
 
-Then, any bus: chips 0x4352, 0x4360, 0xaa06: `si_pmu_rfldo(sih, 0)`;
-`wlc_bmac_xtal(wlc_hw, 0)`. (Chip 0x4350 rev 0: chip control.)
+Then, any bus: for chips 0x4352, 0x4360, 0xaa06 only, `si_pmu_rfldo(sih,
+0)`; then, on every chip, `wlc_bmac_xtal(wlc_hw, 0)`. (Chip 0x4350 rev 0:
+chip control.)
+
+The PHY functions called in C2-C6 (`wlc_phy_por_inform`,
+`wlc_phy_hw_state_upd`, `wlc_phy_hw_clk_state_upd`, `wlc_phy_down`) get the
+current band's `pi` without a test (unlike A14 and C9).
 
 #### C16. The complete down sequence in the trace
 
@@ -1559,7 +1564,8 @@ rev > 10 (this card):
    31), else 0.
 
 (MAC rev <= 10 uses a different pattern test with `D11(0x18c)` and
-`D11(0x604)`/`D11(0x606)`; not this card.) In the trace this runs right after the
+`D11(0x604)`/`D11(0x606)` instead of steps 1-3, and then the same step 4;
+not this card.) In the trace this runs right after the
 attach core reset and passes (the model returns the written SHM value and the
 reset `D11(0x120)` = 0x04000400).
 
