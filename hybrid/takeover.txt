@@ -472,3 +472,10 @@ take wlc_valid_40chanspec_in_band
 take wlc_valid_80chanspec_in_band
 take wlc_valid_chanspec
 take wlc_valid_chanspec_db
+
+# --- iovar dispatcher (hybrid/iovar.c -> open/lib/iovar.c, docs/re/spec/iovar.md,
+# switch open_iovar): the lookup of a driver variable in the modules' tables;
+# the check, the BSS configurations and the handlers stay Broadcom's
+take wlc_iovar_op
+use wlc_iovar_check
+use wlc_bsscfg_find
