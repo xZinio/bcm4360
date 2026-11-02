@@ -21,6 +21,7 @@ see "Verification").
 | `bcm_strtoul` | 0x00a5f4 | 249 | original |
 | `bcm_bitcount` | 0x00ab85 | 38 | original |
 | `hndcrc8` | 0x00a9a6 | 30 | original |
+| `phy_getvar` | 0x0bcd81 | 108 | original (`wlc_phy_cmn.c`) |
 
 ## Overview
 
@@ -158,6 +159,26 @@ of bits set in the `length` bytes at `bitmap` (32 bit result).
 `nbytes` bytes in order, `crc = table[crc ^ byte]` (table above). Result
 `crc`. No final inversion; the caller passes the initial value (the SROM code
 passes 0xff and compares the result with a constant, srom-otp specification).
+
+### phy_getvar (wlc_phy_cmn.c, .text+0x0bcd81, 108 bytes, name original)
+
+`char *phy_getvar(phy_info_t *pi, const char *name)`: the lookup of
+Broadcom's PHY in its own copy of the variables pointer, `pi+0x158`
+(acphy-attach.md, "Data"). It is `getvar` above with that pointer as `vars`
+and **without** step 4: a name that is not found gives NULL, the global NVRAM
+is not asked. (Added 2026-11-02 by the coordinating session from the
+disassembly.)
+
+Its only caller is a stripped helper of the same file (`sub_0bcded`, the
+"fab" variant: when the 16-bit fab id `pi+0x10fc` is not 0 it first looks up
+`<name>.fab.<id>` in a buffer it allocates, then `name`), which the PHY's
+`phy_getvar_fabid`, `phy_getintvar_default` and `phy_getintvararray_default`
+call. With Broadcom's PHY running, every SROM variable the PHY's attach reads
+goes through it: measured 2026-11-02, `phy_getvar` alone was 13.7% of all
+execution in the default hybrid build (`open_phy` off). (Note: after the PHY's
+attach `pi+0x158` holds its own address, acphy-attach.md step 21, so later
+lookups scan the bytes of that pointer and find nothing; the open lookup
+scans the same bytes.)
 
 ## Verification
 

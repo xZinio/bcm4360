@@ -138,7 +138,7 @@ MAC_REV = 42
 
 def make_mac(t, hw, st):
     x = st.extra
-    p = t.m.buf(64)
+    p = t.m.buf(128)    # struct bcm4360_mac is 96 bytes; the fields packed here come first
     t.m.write(p, struct.pack(MAC_FMT, hw, x['maccontrol'], x['mac_suspend_depth'],
                              x['wake_override'], x['mute_override'],
                              x['fastpwrup_dly'], x['clk'] & 0xff, MAC_REV,

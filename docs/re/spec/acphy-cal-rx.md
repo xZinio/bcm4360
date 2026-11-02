@@ -1,5 +1,20 @@
 # AC-PHY receive calibration, IQ estimation, temperature sense, RSSI
 
+> **Corrections (read first).** Implementing this specification against the
+> object's trace showed errors that are not yet folded into the text below.
+> Where they disagree, [questions/phy-cal.md](../questions/phy-cal.md) is right
+> (its findings are reproduced access for access by `open/phy/phy_cal.c`):
+> * tempsense step 6b: the second `RADIO(0x0e)` modification **sets** bit 2 to
+>   `B[p]` (it does not clear it) - item 2;
+> * the step-7 save/override of `sub_0addfa` is one save loop over all cores,
+>   then `PHY(0x401)`, then one override loop; the save order is not ascending
+>   and the restore swaps `0x726`/`0x727` - item 8;
+> * the gain search `sub_0ad89a`: `paldo` = 0 at 2.4 GHz on this board, the
+>   2.4 GHz gain table and `s5` = 10, tone frequency **1000** (not 4000), tones
+>   +-1000 - item 9;
+> * the 2.4 GHz radio loopback override of `sub_094b1a` - item 10;
+> * `sub_09868f` reads `TBL(0x20)[0x32]` as one **48-bit** entry - item 11.
+
 Behaviour of the receive-side calibration and measurement functions of the
 AC-PHY for chip 0x4360 (AC-PHY revision 0/1, radio 2069 major revision 0,
 revisions 3/4, two cores/chains, Apple board 0x106b:0x117). Siblings 0x4352

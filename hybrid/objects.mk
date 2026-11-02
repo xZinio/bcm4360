@@ -11,6 +11,10 @@ hybrid-objs := hybrid/card.o \
                hybrid/utils.o open/lib/utils.o \
                hybrid/clm.o open/lib/clm.o
 
+# Being written (docs/re/tasks/bmac-mem.md): linked by tools/re/hybrid.py for
+# the emulator once ALL of these sources exist, not yet in the module.
+hybrid-new-objs := hybrid/mac_mem.o open/mac/bmac_mem.o
+
 # The PHY layer (hybrid/phy.c, switch open_phy, default off): the adapter and
 # the open PHY (its register access, open/hw/access.o, is in the list above).
 # All 79 entry points exist (docs/re/spec/acphy-api*.md) and the whole session

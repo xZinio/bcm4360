@@ -19,6 +19,7 @@
 #include <bcm4360/mac.h>
 
 /* wlc_hw_info_t (`wlc_hw`): docs/re/spec/bmac-init.md, "Data" and A9 */
+#define WLC_HW_WLC		0x000	/* wlc_info_t * (argument of the offload semaphore) */
 #define WLC_HW_COREREV		0x084	/* MAC core revision */
 #define WLC_HW_SIH		0x0b8	/* si_t * */
 #define WLC_HW_REGS		0x0d0	/* registers of the 802.11 core */
@@ -31,11 +32,21 @@
 #define WLC_HW_MUTE_OVERRIDE	0x174	/* transmitter muted (A1) */
 #define WLC_HW_CLK		0x186	/* the core's clock is on (u8) */
 #define WLC_HW_FASTPWRUP_DLY	0x192	/* fast power-up delay, microseconds (u16, A5) */
-/* band state: the host flag copies (A9) */
+#define WLC_HW_SRL		0x104	/* short retry limit (u16, E7) */
+#define WLC_HW_LRL		0x106	/* long retry limit (u16, E7) */
+#define WLC_HW_UP		0x10c	/* the interface is up (u8) */
+#define WLC_HW_ETHERADDR	0x178	/* saved hardware MAC address (6 bytes, E1) */
+/* band state: the host flag copies (A9), the contention window (B11) */
 #define BAND_MHFS		0x008	/* u16 [5] */
 #define BAND_MHFS_N		5
+#define BAND_CWMIN		0x014	/* u16 */
+#define BAND_CWMAX		0x016	/* u16 */
 
 #define FIELD(p, off, type)	(*(type *)((u8 *)(p) + (off)))
+
+/* the offload semaphore of Broadcom's wlc_offloads.c (bmac-init.md A8) */
+void tcm_sem_enter(void *wlc);
+void tcm_sem_exit(void *wlc);
 
 HYB_TAKE(void, wlc_bmac_mctrl, (void *wlc_hw, u32 mask, u32 val));
 HYB_TAKE(void, wlc_ucode_wake_override_set, (void *wlc_hw, u32 bit));
@@ -44,7 +55,7 @@ HYB_TAKE(void, wlc_bmac_suspend_mac_and_wait, (void *wlc_hw));
 HYB_TAKE(void, wlc_bmac_enable_mac, (void *wlc_hw));
 HYB_TAKE(void, wlc_bmac_mhf, (void *wlc_hw, u32 idx, u32 mask, u32 val, u32 bands));
 
-static void mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac)
+void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac)
 {
 	void *cur = FIELD(wlc_hw, WLC_HW_BAND, void *);
 	void *b2g = FIELD(wlc_hw, WLC_HW_BAND_2G, void *);
@@ -70,14 +81,33 @@ static void mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac)
 	}
 	mac->current_band = (cur && cur == b5g) ? 1 : 0;
 	mac->band_present = (b2g ? 1 : 0) | (b5g ? 2 : 0);
+	mac->up = FIELD(wlc_hw, WLC_HW_UP, u8);
+	for (i = 0; i < 6; i++)
+		mac->hw_etheraddr[i] = FIELD(wlc_hw, WLC_HW_ETHERADDR + i, u8);
+	mac->srl = FIELD(wlc_hw, WLC_HW_SRL, u16);
+	mac->lrl = FIELD(wlc_hw, WLC_HW_LRL, u16);
+	mac->cwmin = cur ? FIELD(cur, BAND_CWMIN, u16) : 0;
+	mac->cwmax = cur ? FIELD(cur, BAND_CWMAX, u16) : 0;
+	mac->sem_ctx = FIELD(wlc_hw, WLC_HW_WLC, void *);
+	mac->sem_enter = tcm_sem_enter;
+	mac->sem_exit = tcm_sem_exit;
 }
 
-static void mac_out(void *wlc_hw, const struct bcm4360_mac *mac)
+void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac)
 {
+	void *cur = FIELD(wlc_hw, WLC_HW_BAND, void *);
 	void *b2g = FIELD(wlc_hw, WLC_HW_BAND_2G, void *);
 	void *b5g = FIELD(wlc_hw, WLC_HW_BAND_5G, void *);
 	int i;
 
+	for (i = 0; i < 6; i++)
+		FIELD(wlc_hw, WLC_HW_ETHERADDR + i, u8) = mac->hw_etheraddr[i];
+	FIELD(wlc_hw, WLC_HW_SRL, u16) = mac->srl;
+	FIELD(wlc_hw, WLC_HW_LRL, u16) = mac->lrl;
+	if (cur) {
+		FIELD(cur, BAND_CWMIN, u16) = mac->cwmin;
+		FIELD(cur, BAND_CWMAX, u16) = mac->cwmax;
+	}
 	FIELD(wlc_hw, WLC_HW_MACCONTROL, u32) = mac->maccontrol;
 	FIELD(wlc_hw, WLC_HW_SUSPEND_DEPTH, u32) = mac->mac_suspend_depth;
 	FIELD(wlc_hw, WLC_HW_WAKE_OVERRIDE, u32) = mac->wake_override;
@@ -100,9 +130,9 @@ void wlc_bmac_mctrl(void *wlc_hw, u32 mask, u32 val)
 		bcm4360_blob_wlc_bmac_mctrl(wlc_hw, mask, val);
 		return;
 	}
-	mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac);
 	bcm4360_bmac_mctrl(&mac, mask, val);
-	mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac);
 }
 
 /* bmac-init.md A3 */
@@ -115,9 +145,9 @@ void wlc_ucode_wake_override_set(void *wlc_hw, u32 bit)
 		bcm4360_blob_wlc_ucode_wake_override_set(wlc_hw, bit);
 		return;
 	}
-	mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac);
 	bcm4360_bmac_wake_override_set(&mac, bit);
-	mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac);
 }
 
 /* bmac-init.md A4 */
@@ -130,9 +160,9 @@ void wlc_ucode_wake_override_clear(void *wlc_hw, u32 bit)
 		bcm4360_blob_wlc_ucode_wake_override_clear(wlc_hw, bit);
 		return;
 	}
-	mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac);
 	bcm4360_bmac_wake_override_clear(&mac, bit);
-	mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac);
 }
 
 /* bmac-init.md A6 */
@@ -145,9 +175,9 @@ void wlc_bmac_suspend_mac_and_wait(void *wlc_hw)
 		bcm4360_blob_wlc_bmac_suspend_mac_and_wait(wlc_hw);
 		return;
 	}
-	mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac);
 	bcm4360_bmac_suspend(&mac);
-	mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac);
 }
 
 /* bmac-init.md A7 */
@@ -160,9 +190,9 @@ void wlc_bmac_enable_mac(void *wlc_hw)
 		bcm4360_blob_wlc_bmac_enable_mac(wlc_hw);
 		return;
 	}
-	mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac);
 	bcm4360_bmac_enable(&mac);
-	mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac);
 }
 
 /* bmac-init.md A9 */
@@ -175,7 +205,7 @@ void wlc_bmac_mhf(void *wlc_hw, u32 idx, u32 mask, u32 val, u32 bands)
 		bcm4360_blob_wlc_bmac_mhf(wlc_hw, idx, mask, val, bands);
 		return;
 	}
-	mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac);
 	bcm4360_bmac_mhf(&mac, (u8)idx, (u16)mask, (u16)val, bands);
-	mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac);
 }

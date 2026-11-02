@@ -77,6 +77,14 @@ struct bcm4360_pmu;
 struct bcm4360_pmu *hyb_pmu_of(const void *sih);
 
 /*
+ * hybrid/mac.c: the open MAC state (struct bcm4360_mac) filled from the
+ * object's `wlc_hw` before a call of the open MAC, and written back after it.
+ */
+struct bcm4360_mac;
+void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac);
+void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac);
+
+/*
  * Switches, one per layer: true selects the open code. They are module
  * parameters of bcm4360.ko (read when a card is attached), and variables
  * that the emulator sets in its tests.

@@ -89,8 +89,12 @@ def build(quiet=False):
     os.makedirs(os.path.join(OUT, 'obj'), exist_ok=True)
     objs = []
     phy_only = set(objects()) - set(objects(('hybrid-objs',)))
+    new = objects(('hybrid-new-objs',))
+    new_ready = all(os.path.exists(os.path.join(ROOT, o[:-2] + '.c')) for o in new)
     for o in objects():
         src = os.path.join(ROOT, o[:-2] + '.c')
+        if o in new and not new_ready:
+            continue    # a layer being written: its adapter waits for the open code
         if o in phy_only and not os.path.exists(src):
             continue    # a file of the PHY layer that is still to be written
         out = os.path.join(OUT, 'obj', o.replace('/', '_'))

@@ -53,6 +53,22 @@ take wlc_ucode_wake_override_clear
 take wlc_bmac_suspend_mac_and_wait
 take wlc_bmac_enable_mac
 take wlc_bmac_mhf
+# object memories and the setters on them (hybrid/mac_mem.c -> open/mac/bmac_mem.c,
+# bmac-init.md A8, B4-B6, B11, E1, E3, E7, F1, F2); until hybrid/objects.mk links
+# them, Broadcom's own (weak) bodies are the only definitions and run unchanged
+take wlc_bmac_set_shm
+take wlc_bmac_copyto_objmem
+take wlc_bmac_copyfrom_objmem
+take wlc_bmac_write_amt
+take wlc_bmac_write_inits
+take wlc_bmac_set_cwmin
+take wlc_bmac_set_cwmax
+take wlc_bmac_set_hw_etheraddr
+take wlc_bmac_hw_etheraddr
+take wlc_bmac_set_rcmta
+take wlc_bmac_retrylimit_upd
+take wlc_bmac_write_ihr
+take wlc_bmac_write_template_ram
 
 # --- utilities (hybrid/utils.c -> open/lib/utils.c, docs/re/spec/utils.md)
 take getvar
@@ -62,6 +78,7 @@ take getintvararraysize
 take bcm_strtoul
 take bcm_bitcount
 take hndcrc8
+take phy_getvar
 use nvram_get
 
 # --- regulatory database (hybrid/clm.c -> open/lib/clm.c, docs/re/spec/clm.md)

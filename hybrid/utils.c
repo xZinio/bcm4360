@@ -22,6 +22,12 @@ HYB_TAKE(s32, getintvararraysize, (char *vars, const char *name));
 HYB_TAKE(u64, bcm_strtoul, (const char *cp, char **endp, u32 base));
 HYB_TAKE(u32, bcm_bitcount, (const u8 *bitmap, u32 length));
 HYB_TAKE(u32, hndcrc8, (const u8 *data, u32 nbytes, u32 crc));
+HYB_TAKE(char *, phy_getvar, (void *pi, const char *name));
+
+/* phy_info_t (`pi`): docs/re/spec/acphy-attach.md, "Data" */
+#define PI_VARS			0x158	/* the board variables of the PHY (char *) */
+
+#define FIELD(p, off, type)	(*(type *)((u8 *)(p) + (off)))
 
 /* the driver's global NVRAM (nvram_ro.c), the fallback of the lookup */
 char *nvram_get(const char *name);
@@ -78,4 +84,17 @@ u32 hndcrc8(const u8 *data, u32 nbytes, u32 crc)
 	if (!bcm4360_open_utils)
 		return bcm4360_blob_hndcrc8(data, nbytes, crc);
 	return bcm4360_crc8(data, nbytes, (u8)crc);
+}
+
+/*
+ * The lookup of Broadcom's PHY (wlc_phy_cmn.c) in its own pointer to the
+ * board variables, without the NVRAM fallback (utils.md, phy_getvar): with
+ * Broadcom's PHY running (open_phy off) this was the closed function the
+ * driver executed most.
+ */
+char *phy_getvar(void *pi, const char *name)
+{
+	if (!bcm4360_open_utils)
+		return bcm4360_blob_phy_getvar(pi, name);
+	return (char *)bcm4360_getvar(FIELD(pi, PI_VARS, const char *), name, NULL);
 }

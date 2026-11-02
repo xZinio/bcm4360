@@ -1,5 +1,20 @@
 # Calibration control and transmit IQ/LO calibration of the AC-PHY (BCM4360)
 
+> **Corrections (read first).** Implementing this specification against the
+> object's trace showed errors that are not yet folded into the text below.
+> Where they disagree, [questions/phy-cal.md](../questions/phy-cal.md) is right
+> (its findings are reproduced access for access by `open/phy/phy_cal.c`):
+> * section 15 A.6: the "core-select" modifications of `0x739/0x73a/0x725`
+>   write the tempsense bandwidth word W (0xd5eb at 20 MHz), not the core
+>   number - item 3;
+> * the `PHY(0x19e)` bracket of A.5/A.7: A.5 enters a full bracket, A.7 leaves
+>   it after the ADC pulse - item 4; `sub_09bf99` brackets every selection,
+>   including the in-memory ones - item 5;
+> * `sub_09c66c` reads the three gain codes, writes them, then the bbmult;
+>   `wlc_phy_cordic` returns I = sine, Q = cosine with magnitude 2^16 (the tone
+>   scaling divides by 2^16); the gain LUT and LOFT tables are written
+>   interleaved by index - item 6.
+
 Status: work in progress, written function by function. Everything below was
 read in the decompiler output and checked in the disassembly; what was also
 checked against emulator traces is listed in "Verification". Register and
