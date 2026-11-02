@@ -69,8 +69,7 @@ take wlc_bmac_retrylimit_upd
 take wlc_bmac_write_ihr
 take wlc_bmac_write_template_ram
 # clocks, core reset, crystal, core disable (hybrid/mac_clk.c -> open/mac/bmac_clk.c,
-# bmac-init.md A10-A17, C7, C9, C11, C13, C14); until hybrid/objects.mk links them
-# Broadcom's own (weak) bodies run unchanged. The backplane functions they call stay
+# bmac-init.md A10-A17, C7, C9, C11, C13, C14). The backplane functions they call stay
 # Broadcom's (services of open/include/bcm4360/mac_env.h); the PHY functions they
 # call are the PHY layer's takes.
 take wlc_bmac_phyclk_fgc

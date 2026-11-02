@@ -229,17 +229,19 @@ void bcm4360_bmac_env_phy_switch_radio(struct bcm4360_mac *mac, bool on)
 	reload(mac);
 }
 
+typedef void (*dma_fn)(void *di);
+
 static void dma_call(struct bcm4360_mac *mac, u32 fifo, u32 slot)
 {
 	void *di;
-	void (*fn)(void *);
+	dma_fn fn;
 
 	if (fifo >= 6)
 		return;
 	di = FIELD(mac->env, WLC_HW_DI + 8 * fifo, void *);
 	if (!di)
 		return;
-	fn = FIELD(FIELD(di, 0, void *), slot, void (*)(void *));
+	fn = FIELD(FIELD(di, 0, void *), slot, dma_fn);
 	fn(di);
 }
 
