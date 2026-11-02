@@ -6,7 +6,9 @@
  *
  * Specification: docs/re/spec/bmac-init.md, sections A1-A7 and A9 (the
  * microcode host flags); the object memories and the setters on them: A8,
- * B4-B6, B11, E1, E3, E7, F1, F2.
+ * B4-B6, B11, E1, E3, E7, F1, F2; clocks and reset: A10-A17, C7, C9, C11,
+ * C13, C14; the initialisation: B1-B3, B6-B10, B12, E6, E10; up and down:
+ * C2-C6, C8, C10, C15, D3.
  */
 #ifndef BCM4360_MAC_H
 #define BCM4360_MAC_H
@@ -36,7 +38,7 @@ struct bcm4360_mac {
 
 	/* object memories and the state setters built on them (bmac-init.md
 	 * A8, B4-B6, B11, E1, E3, E7, F1, F2; task docs/re/tasks/bmac-mem.md) */
-	u8  up;			/* the interface is up (E7) */
+	u8  up;			/* the interface is up (E7; written by C4, C6) */
 	u8  hw_etheraddr[6];	/* the saved hardware MAC address (E1) */
 	u16 srl, lrl;		/* short / long retry limit (E7) */
 	u16 cwmin, cwmax;	/* contention window of the current band (B11) */
@@ -95,6 +97,13 @@ struct bcm4360_mac {
 	u32 btc_gpio_mask;	/* +0x0c */
 	u32 btc_gpio_out;	/* +0x10 */
 	u16 btc_shm_base;	/* +0x1a: 2 * SHM(0x92) (B1 step 32) */
+
+	/* up and down (bmac-init.md C2-C6, C8, C10, C15, D3; task
+	 * docs/re/tasks/bmac-updown.md). Also `up`, `clk`, `sbclk`, `noreset`
+	 * and the fields above. */
+	u32 ccrev;		/* ChipCommon revision (sih+0x14; C2 step 9) */
+	u32 led_gpio_mask;	/* wlc_hw+0x180: the GPIO lines of the LEDs (C2 step 9) */
+	u32 pcie2_war_freq;	/* wlc_hw+0x1c0: the argument of C2 step 7 */
 };
 
 void bcm4360_bmac_mctrl(struct bcm4360_mac *mac, u32 mask, u32 val);	/* A2 (+A1) */
@@ -147,6 +156,8 @@ s32 bcm4360_bmac_set_ctrl_bt_shd0(struct bcm4360_mac *mac, bool on);		/* C11 */
 void bcm4360_bmac_set_ctrl_srom(struct bcm4360_mac *mac);			/* C11 */
 bool bcm4360_bmac_radio_read_hwdisabled(struct bcm4360_mac *mac);		/* C13 */
 bool bcm4360_bmac_deviceremoved(struct bcm4360_mac *mac);			/* C14 */
+/* the fast (mode 0) or dynamic (mode 2) clock of A13, sub_064887, in bmac_clk.c */
+void bcm4360_bmac_clkctl_clk(struct bcm4360_mac *mac, u32 mode);		/* A13 */
 
 /* the initialisation: B1 with B2 (microcode download), B6, B7 (buffer memory
  * controller), B8, B10 (band init), B12 and the E10 helpers inside */
@@ -157,5 +168,17 @@ void bcm4360_bmac_set_extlna_pwrsave_shmem(struct bcm4360_mac *mac);		/* B10.15 
 void bcm4360_bmac_txbw_update(struct bcm4360_mac *mac);				/* B12 */
 void bcm4360_bmac_band_stf_ss_set(struct bcm4360_mac *mac, u8 mode);		/* B12 */
 void bcm4360_bmac_set_shortslot(struct bcm4360_mac *mac, bool shortslot);	/* E6 */
+
+/* up and down: C2-C6 and C15, with C8's sub_05fefa (flush of the queues) and
+ * C10 (sub_06333d, the coexistence GPIOs released) inside; the reset of C8;
+ * the check of the chip access at attach, D3 */
+void bcm4360_bmac_hw_up(struct bcm4360_mac *mac);				/* C2 */
+s32 bcm4360_bmac_up_prep(struct bcm4360_mac *mac);				/* C3 */
+s32 bcm4360_bmac_up_finish(struct bcm4360_mac *mac);				/* C4 */
+s32 bcm4360_bmac_down_prep(struct bcm4360_mac *mac);				/* C5 */
+s32 bcm4360_bmac_down_finish(struct bcm4360_mac *mac);				/* C6 */
+void bcm4360_bmac_hw_down(struct bcm4360_mac *mac);				/* C15 */
+void bcm4360_bmac_reset(struct bcm4360_mac *mac);				/* C8 */
+bool bcm4360_bmac_validate_chip_access(struct bcm4360_mac *mac);		/* D3 */
 
 #endif

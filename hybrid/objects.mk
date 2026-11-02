@@ -22,6 +22,9 @@ hybrid-objs := hybrid/card.o \
 # tools/re/hybrid.py for the emulator once ALL its sources exist, not yet in
 # the module.
 
+# MAC up and down (task docs/re/tasks/bmac-updown.md, switch open_mac)
+hybrid-new-macupdown-objs := hybrid/mac_updown.o open/mac/bmac_updown.o
+
 # The PHY layer (hybrid/phy.c, switch open_phy, default off): the adapter and
 # the open PHY (its register access, open/hw/access.o, is in the list above).
 # All 79 entry points exist (docs/re/spec/acphy-api*.md) and the whole session

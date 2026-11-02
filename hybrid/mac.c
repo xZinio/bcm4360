@@ -56,6 +56,8 @@
 #define WLC_HW_ANTSEL_TYPE	0x1a1	/* u8 */
 #define WLC_HW_GPIO_CHIPCTL	0x1a4	/* u32, B1 step 15 */
 #define WLC_HW_INTRCVLAZY	0x1ac	/* u32 */
+#define WLC_HW_LED_GPIO_MASK	0x180	/* u32, C2 step 9 */
+#define WLC_HW_PCIE2_WAR_FREQ	0x1c0	/* u32, C2 step 7 */
 /* coexistence state (E10) */
 #define BTC_FLAGS		0x08	/* u16 */
 #define BTC_GPIO_MASK		0x0c	/* u32 */
@@ -150,7 +152,10 @@ void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac)
 		mac->cccaps_ext = sih->cccaps_ext;
 		mac->boardvendor = sih->boardvendor;
 		mac->boardtype = sih->boardtype;
+		mac->ccrev = (u32)sih->ccrev;
 	}
+	mac->led_gpio_mask = FIELD(wlc_hw, WLC_HW_LED_GPIO_MASK, u32);
+	mac->pcie2_war_freq = FIELD(wlc_hw, WLC_HW_PCIE2_WAR_FREQ, u32);
 	mac->ucode_loaded = FIELD(wlc_hw, WLC_HW_UCODE_LOADED, u8);
 	mac->antsel_type = FIELD(wlc_hw, WLC_HW_ANTSEL_TYPE, u8);
 	mac->shortslot = FIELD(wlc_hw, WLC_HW_SHORTSLOT, u8);
@@ -184,6 +189,7 @@ void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac)
 		FIELD(wlc_hw, WLC_HW_ETHERADDR + i, u8) = mac->hw_etheraddr[i];
 	FIELD(wlc_hw, WLC_HW_SRL, u16) = mac->srl;
 	FIELD(wlc_hw, WLC_HW_LRL, u16) = mac->lrl;
+	FIELD(wlc_hw, WLC_HW_UP, u8) = mac->up;
 	if (cur) {
 		FIELD(cur, BAND_CWMIN, u16) = mac->cwmin;
 		FIELD(cur, BAND_CWMAX, u16) = mac->cwmax;

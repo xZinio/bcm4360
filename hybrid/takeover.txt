@@ -110,6 +110,32 @@ use d11ucode42
 use d11ac1initvals42
 use d11ac1bsinitvals42
 use btc_ucode_flags
+# up and down (hybrid/mac_updown.c -> open/mac/bmac_updown.c, bmac-init.md C2-C6, C8,
+# C10, C15, D3). The PCIe bridge, the clock and coexistence helpers of the backplane,
+# the 4360 PCIe work-around and the IFS energy-detect setting stay Broadcom's
+# (services of mac_env.h). Until open/mac/bmac_updown.c exists these takes keep
+# Broadcom's bodies (staged: hybrid-new-macupdown-objs).
+take wlc_bmac_hw_up
+take wlc_bmac_up_prep
+take wlc_bmac_up_finish
+take wlc_bmac_down_prep
+take wlc_bmac_down_finish
+take wlc_bmac_hw_down
+take wlc_bmac_reset
+take wlc_bmac_validate_chip_access
+use si_survive_perst_war
+use si_clkctl_init
+use si_pcie_ltr_war
+use si_pci_fixcfg
+use si_pci_setup
+use si_pci_up
+use si_pci_down
+use si_seci_down
+use si_pmu_res_req_timer_clr
+use si_btcgpiowar
+use si_gpiopull
+use wlc_bmac_4360_pcie2_war
+use wlc_bmac_ifsctl_edcrs_set
 
 # --- utilities (hybrid/utils.c -> open/lib/utils.c, docs/re/spec/utils.md)
 take getvar

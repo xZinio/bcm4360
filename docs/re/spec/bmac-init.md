@@ -1159,29 +1159,40 @@ Nothing is done if `pub+0x40` (`hw_up`) is already set. Steps (bus PCI, chip
 1. If `wlc+0x750` (offload state) exists: `si_survive_perst_war(sih, 1, 0,
    0)` (specification `chip`).
 2. `si_ldo_war(sih, chip id)` (bus PCI).
-3. MAC revision >= 40 on PCI: `si_pmu_res_init(sih, osh)` (`pmu.md`).
+3. MAC revision >= 40 on PCI: `si_pmu_res_init(sih, osh)` (`pmu.md`; `osh` is
+   the word `wlc_hw+0x10`). (Chip 0xa886 on any bus: the same call; chip
+   0x4350 on PCI: `si_pmu_chip_init(sih, osh)`. Not this card.)
 4. `wlc_bmac_xtal(wlc_hw, 1)` (C9), `si_clkctl_init(sih)`,
    `wlc_bmac_clkctl_clk(wlc_hw, 0)`. (At this time `clk` is 0: the last has
    no access, it only sets `forcefastclk` = 1.)
 5. `si_pcie_ltr_war(sih)`.
 6. `sub_06333d(wlc_hw)` (C10).
-7. Chips 0xa9c4, 0x4360, 0x4352: `wlc_bmac_4360_pcie2_war(wlc_hw, v)` with v
-   = the 32 bit word `wlc_hw+0x1c0` (C12: acts for chip revisions < 3 only).
-8. `si_pci_fixcfg(sih)`.
+7. Bus PCI, chips 0xa9c4, 0x4360, 0x4352: `wlc_bmac_4360_pcie2_war(wlc_hw, v)`
+   with v = the 32 bit word `wlc_hw+0x1c0` (C12: acts for chip revisions < 3
+   only).
+8. Bus PCI: `si_pci_fixcfg(sih)`. (Then, bus PCI, chips 0xa8d8, 0xa8d9,
+   0xa99d: the register pointer is fetched again with `si_setcore`; chip
+   0x4313: `si_clk_pmu_htavail_set`, `si_pmu_synth_pwrsw_4313_war`. Not this
+   card.)
 9. LEDs/GPIO, only if `sbclk` (`wlc_hw+0x187`) is set: with g = the 32 bit
    word `wlc_hw+0x180` (GPIO mask of the LEDs; 7 in the traces) and the LED
    table `wlc_hw+0x198`: `si_gpiocontrol(sih, g, 0, 0)`, `si_gpioled(sih, g,
    g)`; a = OR of `1 << (pin & 31)` over those of the 32 LED entries (24
    bytes each from table+8: pin in the first word) whose byte +4 is 0
    (presumably "active high" (unverified)); if bit 11 of `boardflags2` is
-   clear: `si_gpioout(sih, g,
-   a & g, 0)`, `si_gpioouten(sih, g, g, 0)`; else: `si_gpioout(sih, g,
-   ~(a & g) & g, 0)`, `si_gpioouten(sih, g, 0, 0)` and for ChipCommon
-   revisions >= 20 `si_gpiopull(sih, 1, g, 0)`, `si_gpiopull(sih, 0, g, 0)`.
-   (Belongs to the LED code; listed for the order.)
-10. `wlc_phy_por_inform(pi)`.
+   clear: r = `si_gpioout(sih, g, a & g, 0)`, `si_gpioouten(sih, g, g, 0)`;
+   else: `si_gpioout(sih, g, ~(a & g) & g, 0)`, r = `si_gpioouten(sih, g, 0,
+   0)` and for ChipCommon revisions >= 20 (`sih+0x14`) `si_gpiopull(sih, 1, g,
+   0)`, `si_gpiopull(sih, 0, g, 0)`. Then the LED state keeps r in its 32 bit
+   word `+0x308` and g in `+0x30c` (both functions return the register's new
+   value). (The LED table belongs to the LED code; listed for the order. The
+   two stored words were missing from the first version of this section;
+   added by the coordinator from the code.)
+10. `wlc_phy_por_inform(pi)` (`pi` of the current band).
 11. `ucode_loaded` (`wlc_hw+0xae`) = 0; `pub+0x40` = 1.
 12. (Chip 0x4313 and 0xa8dc work-arounds: not here.)
+
+Result: none (`void`).
 
 #### C3. wlc_bmac_up_prep (.text+0x06646a, 258 bytes, name original)
 
@@ -1191,12 +1202,14 @@ switch. Steps:
 1. (Chip 0x4350 rev 0: a chip control bit.)
 2. `wlc_bmac_xtal(wlc_hw, 1)`, `si_clkctl_init(sih)`,
    `wlc_bmac_clkctl_clk(wlc_hw, 0)`.
-3. Bus PCI: `si_pci_setup(sih, 1 << n)` with n = the core index of the MAC
-   (first word of the structure `wlc+0x38`).
+3. Bus PCI: `si_pci_setup(sih, 1 << (n & 31))` with n = the core index of
+   the MAC (first 32 bit word of the structure `wlc+0x38`). (Bus PCMCIA, 2:
+   `si_setcore` and `si_pcmcia_init`; not this card.)
 4. `wlc_bmac_radio_read_hwdisabled(wlc_hw)` (C13).
-5. If the radio is enabled: `si_pci_up(sih)` (bus PCI),
+5. If the radio is enabled: `si_pci_up(sih)` (bus PCI only),
    `wlc_bmac_corereset(wlc_hw, 0xffffffff)` (A14); return 0.
-6. Else: `si_pci_down(sih)`, `wlc_bmac_xtal(wlc_hw, 0)`; return -9.
+6. Else: `si_pci_down(sih)` (bus PCI only), `wlc_bmac_xtal(wlc_hw, 0)`;
+   return -9.
 
 #### C4. wlc_bmac_up_finish (.text+0x066409, 97 bytes, name original)
 
@@ -1220,7 +1233,9 @@ Nothing (result 0) if `up` is 0. Else:
 
 1. `wlc_hw_deviceremoved(wlc_hw)` (C14). If the card is there:
    `wl_intrsoff(wl)`, `wlc_bmac_clkctl_clk(wlc_hw, 0)`, and if `noreset` is 0
-   `sub_06333d(wlc_hw)` (C10). If it is gone: `wlc_hw+0x98` = 0.
+   `sub_06333d(wlc_hw)` (C10). If it is gone: `wlc_hw+0x98` = 0 (32 bit: the
+   current interrupt mask, which `wlc_intrsoff` sets to 0 and `wlc_intrson`
+   to `wlc_hw+0x9c`).
 2. (Chip 0x4331: `SHM(0x64) = 0x480`.)
 3. Result: `wlc_phy_down(pi)`.
 
@@ -1230,14 +1245,17 @@ Nothing (result 0) if `up` is 0. Else:
 
 1. `up` = 0; `wlc_phy_hw_state_upd(pi, 0)`.
 2. If the card is gone (`wlc_hw_deviceremoved`): `sbclk` = 0, `clk` = 0,
-   `wlc_phy_hw_clk_state_upd(pi, 0)`, `sub_05fefa(wlc_hw)` (C8); result 0.
+   `wlc_phy_hw_clk_state_upd(pi, 0)`, `sub_05fefa(wlc_hw)` (C8); return 0
+   (steps 3 and 4 are skipped).
 3. If the core is up (`si_iscoreup`):
    1. Read `D11(0x120)`; if bit 0 is set:
       `wlc_bmac_suspend_mac_and_wait(wlc_hw)`.
-   2. result = `wl_reset(wl)` of the glue = `wlc_reset(wlc)` (C1, C8: core
-      reset).
+   2. result = `wl_reset(wl)` of the glue (`wl` = the word `wlc+0x10`) =
+      `wlc_reset(wlc)` (C1, C8: core reset).
    3. `wlc_coredisable(wlc_hw)` (C7).
 4. If `noreset` is 0: `wlc_bmac_hw_down(wlc_hw)` (C15).
+
+Result: the value of step 3.2 if it ran, else 0.
 
 #### C7. wlc_coredisable (.text+0x06378d, 155 bytes, name original)
 
@@ -1255,16 +1273,26 @@ Nothing if the card is gone or `noreset` is set. Else:
 
 #### C8. wlc_bmac_reset (.text+0x066b3e, 79 bytes, name original), sub_05fefa (.text+0x05fefa, 122 bytes, name assigned: wlc_flushqueues)
 
-`wlc_bmac_reset(wlc_hw)`: a counter is incremented (32 bit at `+0xb4` of
-the counter block `pub+0xa0`); unless the card is gone:
-`wlc_bmac_corereset(wlc_hw, 0xffffffff)`; `sub_05fefa(wlc_hw)`;
-`wlc_reset_bmac_done(wlc)` (empty).
+`wlc_bmac_reset(wlc_hw)`:
 
-`sub_05fefa(wlc_hw)`: `wlc+0x68` = 0; for FIFO i = 0..5 with a DMA handle:
-transmit reclaim of everything (DMA function slot 0x60 with argument 1) and
-the 16 bit counter `+0x38 + 2*i` of the structure `wlc+0x38` = 0; then
-receive reclaim of FIFO 0 (slot 0xe0). In the traces this reads
-`D11(0x22c)` once.
+1. A counter is incremented (32 bit at `+0xb4` of the counter block whose
+   address is the word `pub+0xa0`).
+2. Only if the card is not gone (C14): `wlc_bmac_corereset(wlc_hw,
+   0xffffffff)` (A14).
+3. In either case: `sub_05fefa(wlc_hw)`, then `wlc_reset_bmac_done(wlc)` -
+   an empty function of `wlc.c` (its body is a return; nothing to call).
+
+`sub_05fefa(wlc_hw)` (named `wlc_flushqueues` here):
+
+1. `wlc+0x68` (32 bit) = 0.
+2. For FIFO i = 0..5 in this order, if it has a DMA engine (`wlc_hw+0x20 +
+   8*i` not 0): transmit reclaim of everything (DMA function slot 0x60 with
+   argument 1), then the 16 bit counter `+0x38 + 2*i` of the structure
+   whose address is the word `wlc+0x38` = 0.
+3. Receive reclaim of FIFO 0 (slot 0xe0; the object calls it without
+   checking that FIFO 0 has an engine). (MAC revision 4: also of FIFO 3.)
+
+In the traces this reads `D11(0x22c)` once.
 
 #### C9. wlc_bmac_xtal (.text+0x0632d4, 105 bytes), wlc_bmac_pllreq (.text+0x063524, 85 bytes), wlc_bmac_set_clk (.text+0x06603b, 68 bytes), names original
 
@@ -1363,7 +1391,13 @@ reads 0xffffffff; a working MAC has IHR_EN set and PSM_JMP_0 clear).
 Bus PCI:
 
 1. `wlc_bmac_set_ctrl_SROM(wlc_hw)` (C11).
-2. (`si_seci_down(sih)` under the conditions of `wlc_bmac_seci_upd`.)
+2. `si_seci_down(sih)` if all four hold: bit 0 of `boardflags`
+   (`wlc_hw+0x8c`) is set, bit 7 of `boardflags2` (`wlc_hw+0x90`) is clear,
+   bit 0 of the ChipCommon extended capabilities (`sih+0x1c`) is set, bit 29
+   of the MAC capabilities (`wlc_hw+0xa4`) is set - the conditions under
+   which B1 step 8 calls `si_seci_init(sih, 1)`. (Corrected by the
+   coordinator from the code; it said "under the conditions of
+   `wlc_bmac_seci_upd`".)
 3. `wlc_bmac_set_ctrl_bt_shd0(wlc_hw, 0)` (C11).
 4. If the offload state `wlc+0x750` exists: `si_survive_perst_war(sih, 0,
    0x204, 0)`, `si_pmu_res_req_timer_clr(sih)`.
@@ -1512,8 +1546,8 @@ it is the first core reset of the session (`wlc_bmac_attach`, around seq 431).
 
 #### D3. wlc_bmac_validate_chip_access (.text+0x062ef7, 381 bytes, name original)
 
-Confirm the MAC core answers. Result: 1 if OK, 0 if not. For MAC rev > 10 (this
-card):
+Confirm the MAC core answers. Result: 1 if OK, 0 if not (a `bool`). For MAC
+rev > 10 (this card):
 
 1. Save shared-memory word 0: `wlc_bmac_copyfrom_objmem(wlc_hw, 0, &saved, 4,
    0x10000)`.

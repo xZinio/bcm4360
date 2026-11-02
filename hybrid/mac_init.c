@@ -181,9 +181,9 @@ void bcm4360_bmac_env_gci_init(struct bcm4360_mac *mac)
 	si_gci_init(sih_of(mac));
 }
 
-void bcm4360_bmac_env_gpioouten(struct bcm4360_mac *mac, u32 mask, u32 val, u8 priority)
+u32 bcm4360_bmac_env_gpioouten(struct bcm4360_mac *mac, u32 mask, u32 val, u8 priority)
 {
-	si_gpioouten(sih_of(mac), mask, val, priority);
+	return si_gpioouten(sih_of(mac), mask, val, priority);
 }
 
 void bcm4360_bmac_env_phy_chanspec_radio_set(struct bcm4360_mac *mac, u16 chanspec)
