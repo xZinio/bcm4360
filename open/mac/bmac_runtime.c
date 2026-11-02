@@ -307,7 +307,7 @@ static bool phytype_suspends_mac(u16 t)
 }
 
 /* docs/re/spec/bmac-run.md R2, resume step 2: an 8-bit rotate left of `v` by `n` */
-static u8 rol8(u8 v, u32 n)
+static u8 fifo_rotl8(u8 v, u32 n)
 {
 	n &= FIFO_BITS - 1;
 	return (u8)((v << n) | (v >> (FIFO_BITS - n)));
@@ -367,7 +367,7 @@ void bcm4360_bmac_tx_fifo_resume(struct bcm4360_mac *mac, u32 fifo)
 	/* step 2: only the bit itself is cleared (0xfe rotated by `fifo`) */
 	if (mac->suspended_fifos == 0)
 		return;
-	mac->suspended_fifos &= rol8(0xfe, fifo);
+	mac->suspended_fifos &= fifo_rotl8(0xfe, fifo);
 	if (mac->suspended_fifos == 0)
 		bcm4360_bmac_wake_override_clear(mac, WAKE_REASON_TX_FIFO);
 }
