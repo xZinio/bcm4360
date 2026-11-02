@@ -93,6 +93,29 @@ use si_core_reset
 use si_core_disable
 use si_clkctl_xtal
 use si_deviceremoved
+# the initialisation (hybrid/mac_init.c -> open/mac/bmac_init.c, bmac-init.md B1-B3,
+# B6-B10, B12, E6, E10); until hybrid/objects.mk links them Broadcom's own (weak)
+# bodies run unchanged. The MAC functions not open yet that it calls, the backplane
+# and the glue stay Broadcom's (services of mac_env.h); the data it loads is
+# Broadcom's (hybrid/fwdata.h).
+take wlc_bmac_init
+take wlc_bmac_wowlucode_start
+take wlc_bmac_switch_macfreq
+take wlc_bmac_set_extlna_pwrsave_shmem
+take wlc_bmac_txbw_update
+take wlc_bmac_band_stf_ss_set
+take wlc_bmac_set_shortslot
+use si_clkctl_fast_pwrup_delay
+use si_seci_init
+use si_eci_init
+use si_gci_init
+use wlc_setxband
+use wlc_bmac_btc_mode_set
+use wlc_bmac_mute
+use d11ucode42
+use d11ac1initvals42
+use d11ac1bsinitvals42
+use btc_ucode_flags
 
 # --- utilities (hybrid/utils.c -> open/lib/utils.c, docs/re/spec/utils.md)
 take getvar

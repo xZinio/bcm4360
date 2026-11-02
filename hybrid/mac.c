@@ -45,6 +45,22 @@
 #define WLC_HW_FORCEFASTCLK	0x185	/* u8 */
 #define WLC_HW_SBCLK		0x187	/* u8 */
 #define WLC_HW_PHYCLK		0x190	/* u8 */
+#define WLC_HW_UCODE_LOADED	0x0ae	/* u8, B2 */
+#define WLC_HW_SHORTSLOT	0x102	/* u8, E6 */
+#define WLC_HW_SFBL		0x108	/* u16 */
+#define WLC_HW_LFBL		0x10a	/* u16 */
+#define WLC_HW_BOARDFLAGS	0x08c	/* u32 */
+#define WLC_HW_BOARDFLAGS2	0x090	/* u32 */
+#define WLC_HW_MACHWCAP		0x0a4	/* u32 */
+#define WLC_HW_STF_SS_MODE	0x1a0	/* u8, B12 */
+#define WLC_HW_ANTSEL_TYPE	0x1a1	/* u8 */
+#define WLC_HW_GPIO_CHIPCTL	0x1a4	/* u32, B1 step 15 */
+#define WLC_HW_INTRCVLAZY	0x1ac	/* u32 */
+/* coexistence state (E10) */
+#define BTC_FLAGS		0x08	/* u16 */
+#define BTC_GPIO_MASK		0x0c	/* u32 */
+#define BTC_GPIO_OUT		0x10	/* u32 */
+#define BTC_SHM_BASE		0x1a	/* u16 */
 /* band state: the host flag copies (A9), the contention window (B11), the PHY */
 #define BAND_MHFS		0x008	/* u16 [5] */
 #define BAND_MHFS_N		5
@@ -53,6 +69,8 @@
 #define BAND_COREFLAGS		0x018	/* u32 */
 #define BAND_PHYTYPE		0x01c	/* u16 */
 #define BAND_PI			0x028	/* the PHY of the band */
+#define BAND_TYPE		0x000	/* u32: 1 = 5 GHz, 2 = 2.4 GHz */
+#define BAND_PHYREV		0x01e	/* u16 */
 
 #define FIELD(p, off, type)	(*(type *)((u8 *)(p) + (off)))
 
@@ -121,12 +139,37 @@ void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac)
 		mac->band_has_phy = FIELD(cur, BAND_PI, void *) != NULL;
 		mac->band_phytype = FIELD(cur, BAND_PHYTYPE, u16);
 		mac->band_coreflags = FIELD(cur, BAND_COREFLAGS, u32);
+		mac->band_type = FIELD(cur, BAND_TYPE, u32);
+		mac->band_phyrev = FIELD(cur, BAND_PHYREV, u16);
 	}
 	if (sih) {
 		mac->bustype = sih->bustype;
 		mac->cccaps = sih->cccaps;
 		mac->pmurev = (u32)sih->pmurev;
 		mac->chiprev = sih->chiprev;
+		mac->cccaps_ext = sih->cccaps_ext;
+		mac->boardvendor = sih->boardvendor;
+		mac->boardtype = sih->boardtype;
+	}
+	mac->ucode_loaded = FIELD(wlc_hw, WLC_HW_UCODE_LOADED, u8);
+	mac->antsel_type = FIELD(wlc_hw, WLC_HW_ANTSEL_TYPE, u8);
+	mac->shortslot = FIELD(wlc_hw, WLC_HW_SHORTSLOT, u8);
+	mac->stf_ss_mode = FIELD(wlc_hw, WLC_HW_STF_SS_MODE, u8);
+	mac->sfbl = FIELD(wlc_hw, WLC_HW_SFBL, u16);
+	mac->lfbl = FIELD(wlc_hw, WLC_HW_LFBL, u16);
+	mac->boardflags = FIELD(wlc_hw, WLC_HW_BOARDFLAGS, u32);
+	mac->boardflags2 = FIELD(wlc_hw, WLC_HW_BOARDFLAGS2, u32);
+	mac->machwcap = FIELD(wlc_hw, WLC_HW_MACHWCAP, u32);
+	mac->intrcvlazy = FIELD(wlc_hw, WLC_HW_INTRCVLAZY, u32);
+	mac->gpio_chipctl = FIELD(wlc_hw, WLC_HW_GPIO_CHIPCTL, u32);
+	if (FIELD(wlc_hw, WLC_HW_BTC, void *)) {
+		void *btc = FIELD(wlc_hw, WLC_HW_BTC, void *);
+
+		mac->btc_valid = 1;
+		mac->btc_flags = FIELD(btc, BTC_FLAGS, u16);
+		mac->btc_gpio_mask = FIELD(btc, BTC_GPIO_MASK, u32);
+		mac->btc_gpio_out = FIELD(btc, BTC_GPIO_OUT, u32);
+		mac->btc_shm_base = FIELD(btc, BTC_SHM_BASE, u16);
 	}
 }
 
@@ -144,6 +187,14 @@ void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac)
 	if (cur) {
 		FIELD(cur, BAND_CWMIN, u16) = mac->cwmin;
 		FIELD(cur, BAND_CWMAX, u16) = mac->cwmax;
+	}
+	FIELD(wlc_hw, WLC_HW_UCODE_LOADED, u8) = mac->ucode_loaded;
+	FIELD(wlc_hw, WLC_HW_SHORTSLOT, u8) = mac->shortslot;
+	FIELD(wlc_hw, WLC_HW_STF_SS_MODE, u8) = mac->stf_ss_mode;
+	FIELD(wlc_hw, WLC_HW_FASTPWRUP_DLY, u16) = mac->fastpwrup_dly;
+	if (FIELD(wlc_hw, WLC_HW_BTC, void *)) {
+		FIELD(FIELD(wlc_hw, WLC_HW_BTC, void *), BTC_FLAGS, u16) = mac->btc_flags;
+		FIELD(FIELD(wlc_hw, WLC_HW_BTC, void *), BTC_SHM_BASE, u16) = mac->btc_shm_base;
 	}
 	FIELD(wlc_hw, WLC_HW_CLK, u8) = mac->clk;
 	FIELD(wlc_hw, WLC_HW_FORCEFASTCLK, u8) = mac->forcefastclk;

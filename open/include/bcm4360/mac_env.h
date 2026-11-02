@@ -57,4 +57,53 @@ void bcm4360_bmac_env_dma_rxreset(struct bcm4360_mac *mac, u32 fifo);	/* slot 0x
  */
 void bcm4360_bmac_env_clear_intstatus(struct bcm4360_mac *mac);
 
+/* --- for the initialisation (bmac-init.md B1-B12; task bmac-init) --- */
+
+/* backplane and PMU */
+u32 bcm4360_bmac_env_core_sflags(struct bcm4360_mac *mac, u32 mask, u32 val);
+							/* si_core_sflags */
+u16 bcm4360_bmac_env_clkctl_fast_pwrup_delay(struct bcm4360_mac *mac);
+							/* si_clkctl_fast_pwrup_delay */
+void bcm4360_bmac_env_pmu_rfldo(struct bcm4360_mac *mac, bool on);	/* si_pmu_rfldo */
+u32 bcm4360_bmac_env_pmu_bb_vcofreq(struct bcm4360_mac *mac, u32 xtalfreq);
+						/* si_pmu_get_bb_vcofreq(sih, osh, xtalfreq) */
+void bcm4360_bmac_env_seci_init(struct bcm4360_mac *mac, u8 mode);	/* si_seci_init */
+void bcm4360_bmac_env_eci_init(struct bcm4360_mac *mac);		/* si_eci_init */
+void bcm4360_bmac_env_gci_init(struct bcm4360_mac *mac);		/* si_gci_init */
+void bcm4360_bmac_env_gpioouten(struct bcm4360_mac *mac, u32 mask, u32 val, u8 priority);
+							/* si_gpioouten */
+
+/* the PHY of the current band */
+void bcm4360_bmac_env_phy_chanspec_radio_set(struct bcm4360_mac *mac, u16 chanspec);
+							/* wlc_phy_chanspec_radio_set */
+void bcm4360_bmac_env_phy_cal_init(struct bcm4360_mac *mac);	/* wlc_phy_cal_init */
+void bcm4360_bmac_env_phy_antsel_init(struct bcm4360_mac *mac, bool lut_init);
+							/* wlc_phy_antsel_init */
+void bcm4360_bmac_env_phy_init(struct bcm4360_mac *mac, u16 chanspec);	/* wlc_phy_init */
+
+/* the DMA engine of a FIFO (the function slots of B1 step 30) */
+void bcm4360_bmac_env_dma_txinit(struct bcm4360_mac *mac, u32 fifo);	/* slot 0x08 */
+void bcm4360_bmac_env_dma_rxinit(struct bcm4360_mac *mac, u32 fifo);	/* slot 0xa0 */
+void bcm4360_bmac_env_dma_rxfill(struct bcm4360_mac *mac, u32 fifo);	/* slot 0xd8 */
+
+/* MAC functions of Broadcom's that are not open yet (they change the state:
+ * the platform writes it back before and reads it again after) */
+void bcm4360_bmac_env_setxband(struct bcm4360_mac *mac, u32 unit);	/* wlc_setxband */
+void bcm4360_bmac_env_btc_mode_set(struct bcm4360_mac *mac, u32 mode);
+							/* wlc_bmac_btc_mode_set */
+void bcm4360_bmac_env_mute(struct bcm4360_mac *mac, bool on, u32 reason);	/* wlc_bmac_mute */
+
+/* the glue and the upper layer */
+u32 bcm4360_bmac_env_intrsoff(struct bcm4360_mac *mac);		/* wl_intrsoff */
+void bcm4360_bmac_env_intrsrestore(struct bcm4360_mac *mac, u32 mask);	/* wl_intrsrestore */
+/* the board variables (getvar on the card's variables, utils.md) */
+const char *bcm4360_bmac_env_getvar(struct bcm4360_mac *mac, const char *name);
+/* the interface's MAC address (B1 step 32.4: the 6 bytes at pub+0x08) */
+void bcm4360_bmac_env_pub_etheraddr(struct bcm4360_mac *mac, u8 *addr);
+/* B1 step 27: the byte wlc+0x718; if it is not 0 it is set to 0. Result: it
+ * was not 0 */
+bool bcm4360_bmac_env_wlc_take_flag_718(struct bcm4360_mac *mac);
+/* B1 step 30: the 32-bit word wlc+0x68 := 0 */
+void bcm4360_bmac_env_wlc_clear_68(struct bcm4360_mac *mac);
+
 #endif

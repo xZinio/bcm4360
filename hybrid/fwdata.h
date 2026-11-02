@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: ISC */
 /*
- * Data of Broadcom that the open PHY loads at runtime (hw_fw_data() of
- * open/include/bcm4360/hw.h): PHY tables, transmit gain tables, radio tables.
+ * Data of Broadcom that the open code loads at runtime (hw_fw_data() of
+ * open/include/bcm4360/hw.h): PHY tables, transmit gain tables, radio tables,
+ * and for the MAC the microcode, its initialisation lists and a coexistence
+ * table.
  * In the hybrid module it is read where it is, in the linked copy of
  * Broadcom's object (hybrid/takeover.txt makes these symbols global). Names
  * and sizes in bytes are those of lib/wlc_hybrid.o_shipped, version
@@ -47,3 +49,9 @@ HYB_FW(prefregs_2069_rev3, 92)
 HYB_FW(prefregs_2069_rev4, 100)
 HYB_FW(rx_farrow_tbl, 4428)
 HYB_FW(tx_farrow_dac1_tbl, 4428)
+
+/* the MAC (bmac-init.md B1, B2, B10, E10) */
+HYB_FW(btc_ucode_flags, 36)
+HYB_FW(d11ac1bsinitvals42, 592)
+HYB_FW(d11ac1initvals42, 4888)
+HYB_FW(d11ucode42, 43400)

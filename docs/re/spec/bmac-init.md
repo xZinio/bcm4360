@@ -1691,15 +1691,18 @@ masks stay 0 and `sub_06106b` stays inert.
 `wlc_bmac_btc_flags_to_mhf`): translate the coexistence flags word (`btc+0x08`)
 into host-flag bits, all with `bands` = 2 except one:
 * `wlc_bmac_mhf(wlc_hw, 1, 0x0200, (flags & 1) ? 0x200 : 0, 2)`;
-* for flag bits 1..6, OR the matching 16-bit word of the named table
-  `btc_ucode_flags` (entries at +6, stride 4) into an accumulator `a`;
+* for flag bits k = 1..6 that are set, OR the 16-bit word at byte offset
+  6 + 4 (k - 1) of the named table `btc_ucode_flags` (36 bytes, Broadcom's
+  data) into an accumulator `a` (starting at 0);
 * `wlc_bmac_mhf(wlc_hw, 2, 0x1504, a & 0xfdf7, 2)`; if `(a & 0xedf7)` = 0 also
   `wlc_bmac_mhf(wlc_hw, 2, 0x1000, a & 0x1000, 0)` (current band);
 * `wlc_bmac_mhf(wlc_hw, 4, 0x0006, (flags bit7 ? 2 : 0) | (flags bit8 ? 4 : 0), 2)`;
-* on the Apple board (`sih+0x30` = 0x106b) with board type 0x10f/0xef/0xf4/0x10e,
-  **or chip id 0x4360**: `wlc_bmac_mhf(wlc_hw, 4, 0x0001, 1, 2)` - so on the 4360
-  host flag 5 bit 0 is always set here. With coexistence off (`flags` = 0) the
-  other calls clear their bits.
+* if the board vendor (`sih+0x30`) is 0x106b (Apple) **and** (the board type
+  `sih+0x28` is 0x10f, 0xef, 0xf4 or 0x10e, **or** the chip id is 0x4360):
+  `wlc_bmac_mhf(wlc_hw, 4, 0x0001, 1, 2)` - so on the Apple 4360 board host
+  flag 5 bit 0 is always set here. (Corrected 2026-11-02 by the coordinator
+  from the code: the vendor test applies to the chip-id case too.) With
+  coexistence off (`flags` = 0) the other calls clear their bits.
 
 `wlc_bmac_update_bt_chanspec(wlc_hw, chanspec, scanning, param4)`
 (.text+0x060317, 312 bytes, original): tell the Bluetooth side the current

@@ -71,6 +71,30 @@ struct bcm4360_mac {
 	u32 cccaps;		/* ChipCommon capabilities (bit 28: PMU) */
 	u32 pmurev;		/* PMU revision */
 	u32 chiprev;		/* chip revision */
+
+	/* the initialisation (bmac-init.md B1-B3, B6-B10, B12, E6 and the two
+	 * coexistence helpers of E10; task docs/re/tasks/bmac-coreinit.md) */
+	u8  ucode_loaded;	/* the microcode is downloaded (B2; wlc_hw+0xae) */
+	u8  antsel_type;	/* antenna selection type (B1 step 13) */
+	u8  shortslot;		/* short slot time requested (E6, B10) */
+	u8  stf_ss_mode;	/* mode of band_stf_ss_set (B12; wlc_hw+0x1a0) */
+	u32 band_type;		/* the current band's type: 1 = 5 GHz, 2 = 2.4 GHz */
+	u16 band_phyrev;	/* the current band's PHY revision */
+	u16 sfbl, lfbl;		/* short / long fallback limit (B1 step 28) */
+	u32 boardflags;		/* wlc_hw+0x8c */
+	u32 boardflags2;	/* wlc_hw+0x90 */
+	u32 machwcap;		/* MAC capabilities (wlc_hw+0xa4) */
+	u32 intrcvlazy;		/* receive interrupt control (B1 step 21) */
+	u32 gpio_chipctl;	/* the 32-bit word of B1 step 15 */
+	u32 cccaps_ext;		/* ChipCommon extended capabilities */
+	u32 boardvendor;	/* 0x106b: Apple */
+	u32 boardtype;
+	/* the coexistence state (E10; all 0 if there is none) */
+	u8  btc_valid;		/* there is a coexistence state */
+	u16 btc_flags;		/* +0x08 */
+	u32 btc_gpio_mask;	/* +0x0c */
+	u32 btc_gpio_out;	/* +0x10 */
+	u16 btc_shm_base;	/* +0x1a: 2 * SHM(0x92) (B1 step 32) */
 };
 
 void bcm4360_bmac_mctrl(struct bcm4360_mac *mac, u32 mask, u32 val);	/* A2 (+A1) */
@@ -123,5 +147,15 @@ s32 bcm4360_bmac_set_ctrl_bt_shd0(struct bcm4360_mac *mac, bool on);		/* C11 */
 void bcm4360_bmac_set_ctrl_srom(struct bcm4360_mac *mac);			/* C11 */
 bool bcm4360_bmac_radio_read_hwdisabled(struct bcm4360_mac *mac);		/* C13 */
 bool bcm4360_bmac_deviceremoved(struct bcm4360_mac *mac);			/* C14 */
+
+/* the initialisation: B1 with B2 (microcode download), B6, B7 (buffer memory
+ * controller), B8, B10 (band init), B12 and the E10 helpers inside */
+void bcm4360_bmac_init(struct bcm4360_mac *mac, u16 chanspec, bool mute);	/* B1 */
+s32 bcm4360_bmac_wowlucode_start(struct bcm4360_mac *mac);			/* B3 */
+void bcm4360_bmac_switch_macfreq(struct bcm4360_mac *mac, u8 spurmode);	/* B9 */
+void bcm4360_bmac_set_extlna_pwrsave_shmem(struct bcm4360_mac *mac);		/* B10.15 */
+void bcm4360_bmac_txbw_update(struct bcm4360_mac *mac);				/* B12 */
+void bcm4360_bmac_band_stf_ss_set(struct bcm4360_mac *mac, u8 mode);		/* B12 */
+void bcm4360_bmac_set_shortslot(struct bcm4360_mac *mac, bool shortslot);	/* E6 */
 
 #endif
