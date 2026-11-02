@@ -15,6 +15,7 @@
  */
 #include <bcm4360/phy.h>
 #include <bcm4360/phy_env.h>
+#include "phy_noise.h"
 
 /* ----------------------------------------------------------- constants */
 
@@ -25,6 +26,7 @@
 #define RXH_RSSI		0x1c	/* out, s8: the RSSI of the frame in dBm */
 #define RXH_RSSI_INVALID	0x1f	/* out, u8: 0 = the RSSI is valid */
 #define RXH_RSSI_PER_CORE	0x20	/* out, s8 per core (acphy-cal-rx.md, step 7) */
+#define RXH_RSSI_QDB		0x24	/* out, u8: the quarter-dB remainder; 0 but for LCN PHYs */
 
 /*
  * The early-out of wlc_phy_rssi_compute: only for MAC core revisions above
@@ -48,13 +50,17 @@
 #define TEMP_ROUND		25
 #define TEMP_DIV		50
 
-/* the noise path (acphy-api-rx.md, "Noise", acphy-desense.md C3, C4) */
-#define SHM_NOISE_HANDSHAKE	0x8c	/* read, value ignored */
+/* the noise path (acphy-api-rx.md, "Noise, completed", N0a) */
+#define SHM_NOISE_CHAN		0x8c	/* low byte: channel of the measurement (N5; N6 ignores it) */
 #define SHM_NOISE_RESULT	0x308	/* per core c: low word 0x308 + 4c, high 0x30a + 4c */
 #define SHM_NOISE_WORDS		(2 * BCM4360_PHY_CORES_MAX)	/* 0x308..0x312 */
+#define SHM_NOISE_0x314		0x314	/* read by N2; used by other PHY types only */
 #define NOISE_POWER_SHIFT	9
 #define NOISE_FLOOR_DBM		(-92)	/* 0xa4 */
 #define NOISE_HISTORY		16	/* entries of the per-core history (pi+0xed4, pi+0xef4) */
+#define NOISE_DBM_OFFSET	104	/* N2: dBm = compute_dB - 104 */
+#define NOISE_CRS_OFFSET	37	/* N2: pi_ac+0x14+c = compute_dB - 37 */
+#define NOISE_POWER_WORDS	4	/* N3: the local arrays pw[4], dbm[4] */
 
 /* D11(0x124), the MAC command register (bmac-init.md); bit 4 starts the noise measurement */
 #define D11_REG_MACCMD		0x124
@@ -231,7 +237,8 @@ static s32 rssi_compute_acphy(struct bcm4360_phy *phy, u8 *h)
 /*
  * acphy-api-rx.md, "wlc_phy_rssi_compute (AC-PHY)": the RSSI of a received
  * frame into its header (rxh+0x1c), or the frame marked as without a valid
- * RSSI.
+ * RSSI. The common end clears the remainder byte rxh+0x24 on both paths
+ * ("The received-frame header").
  */
 void bcm4360_phy_rssi_compute(struct bcm4360_phy *phy, void *rxh)
 {
@@ -240,86 +247,154 @@ void bcm4360_phy_rssi_compute(struct bcm4360_phy *phy, void *rxh)
 
 	if (phy->board.corerev >= RSSI_CORE_REV_MIN &&
 	    !(rxh_u16(h, RXH_RXSTATUS2) & RXH_RXSTATUS2_PHYST_OK)) {
-		h[RXH_RSSI] = 0;
 		h[RXH_RSSI_INVALID] = 1;
+		h[RXH_RSSI] = 0;
+		h[RXH_RSSI_QDB] = 0;
 		return;
 	}
 
 	rssi = rssi_compute_acphy(phy, h);
 	h[RXH_RSSI] = (u8)(s8)rssi;
 	h[RXH_RSSI_INVALID] = 0;
+	h[RXH_RSSI_QDB] = 0;
 }
 
 /* ------------------------------------------------------------ noise */
 
 /*
- * acphy-api-rx.md, "wlc_phy_noise_read_shmem" (acphy-desense.md C3): read the
- * noise power of each core that the microcode measured, keep the per-core
- * values in the history, and return the largest. sub_0b701e, the write-back to
- * the shared memory that a non-zero measurement goes through first, is not
- * specified (questions, Q5); in the model every measurement is 0, so it is
- * not reached, nor is the carrier-sense calibration.
+ * acphy-api-rx.md, N1 (wlc_phy_compute_dB): a coarse 10 log10 of each of `n`
+ * values: 3 dB per bit of the highest set bit among the bits 1..31, 2 dB more
+ * if the bit below it is set. No access.
  */
-static s8 noise_read_shmem(struct bcm4360_phy *phy)
+static void noise_compute_db(const u32 *in, u8 *out, u32 n)
 {
-	s16 dbm[BCM4360_PHY_CORES_MAX] = { 0 };
-	s16 *hist[2] = { phy->bssinit_a, phy->bssinit_b };
-	u32 n = phy_cores(phy), c, total = 0;
-	s16 best = NOISE_FLOOR_DBM;
+	u32 i;
 
-	for (c = 0; c < n; c++) {
-		u16 lo = bcm4360_shm_read(phy->hw, (u16)(SHM_NOISE_RESULT + 4 * c));
-		u16 hi = bcm4360_shm_read(phy->hw, (u16)(SHM_NOISE_RESULT + 4 * c + 2));
-		u32 power = (u32)hi << 16 | lo;
+	for (i = 0; i < n; i++) {
+		u32 v = in[i], m = 0, b = 0, k;
 
-		total += power;
-		dbm[c] = power ? (s16)(power >> NOISE_POWER_SHIFT) : NOISE_FLOOR_DBM;
+		for (k = 31; k >= 1; k--) {			/* step 1 */
+			if (v & BIT(k)) {
+				m = k;
+				break;
+			}
+		}
+		if (m > 0)					/* step 2 */
+			b = (v >> (m - 1)) & 1;
+		out[i] = (u8)(3 * m + 2 * b);			/* step 3 */
 	}
+}
 
-	if (total != 0) {
-		/* sub_0b701e(pi, power, dbm, 0): not specified (questions, Q5) */
-		if (phy->noise_pending == BCM4360_PHY_NOISE_CRSMIN || phy->crsmincal.noise_refused)
-			bcm4360_phy_crs_min_pwr_cal_acphy(phy, 0);
+/*
+ * acphy-api-rx.md, N2 (sub_0b701e, wlc_phy_noise_calc), AC-PHY, gain 0: the
+ * per-core dBm of the shifted powers, and the per-core input of the
+ * carrier-sense calibration (pi_ac+0x14+c) into `crs_in`.
+ */
+static void noise_calc(struct bcm4360_phy *phy, const u32 *pw, s8 *dbm, s8 *crs_in)
+{
+	u8 d[NOISE_POWER_WORDS];
+	u32 n = phy_cores(phy), c;
+
+	bcm4360_shm_read(phy->hw, SHM_NOISE_0x314);		/* step 1 */
+	noise_compute_db(pw, d, n);				/* step 2 */
+	for (c = 0; c < n; c++) {				/* step 3 */
+		dbm[c] = (s8)(d[c] - NOISE_DBM_OFFSET);
+		crs_in[c] = (s8)(d[c] - NOISE_CRS_OFFSET);
 	}
-
-	/* the per-core history (pi+0xed4, pi+0xef4; index pi+0xf54) */
-	for (c = 0; c < n && c < ARRAY_SIZE(hist); c++)
-		hist[c][phy->bssinit_f54] = dbm[c];
-	phy->bssinit_f54 = (u8)((phy->bssinit_f54 + 1) % NOISE_HISTORY);
-
-	for (c = 0; c < n; c++)
-		if (c == 0 || dbm[c] > best)
-			best = dbm[c];
-
-	/* the current slot of the noise window */
-	phy->interference.noise_window[phy->interference.noise_index] = (u8)(s8)best;
-	return (s8)best;
 }
 
 /* the next slot of the noise window sh+0x96 (sh+0xa0, modulo 8) */
-static void noise_window_advance(struct bcm4360_phy *phy)
+static void noise_window_push(struct bcm4360_phy *phy, s8 v)
 {
 	struct bcm4360_phy_interference *in = &phy->interference;
 
+	in->noise_window[in->noise_index] = (u8)v;
 	in->noise_index = (in->noise_index + 1) % ARRAY_SIZE(in->noise_window);
 }
 
 /*
- * acphy-api-rx.md, "wlc_phy_noise_sample_acphy" (acphy-desense.md C3): one
- * noise sample into the noise window; -92 dBm while the clock is off.
+ * acphy-api-rx.md, N3 (wlc_phy_noise_read_shmem): read the microcode's result,
+ * convert it (N2), run the carrier-sense calibration for a calibration
+ * sample, keep the per-core values in the history and the largest (at least
+ * -92 dBm) in the noise window; return it.
+ */
+static s8 noise_read_shmem(struct bcm4360_phy *phy)
+{
+	u32 pw[NOISE_POWER_WORDS] = { 0 };			/* step 1 */
+	s8 dbm[NOISE_POWER_WORDS] = { 0 };
+	s8 crs_in[NOISE_POWER_WORDS] = { 0 };
+	s16 *hist[2] = { phy->bssinit_a, phy->bssinit_b };
+	u32 n = phy_cores(phy), c, total = 0;
+	s8 best = NOISE_FLOOR_DBM;
+
+	for (c = 0; c < n; c++) {				/* step 2 */
+		u16 lo = bcm4360_shm_read(phy->hw, (u16)(SHM_NOISE_RESULT + 4 * c));
+		u16 hi = bcm4360_shm_read(phy->hw, (u16)(SHM_NOISE_RESULT + 4 * c + 2));
+		u32 p = (u32)hi << 16 | lo;
+
+		if (p == 0)
+			dbm[c] = NOISE_FLOOR_DBM;
+		else
+			pw[c] = p >> NOISE_POWER_SHIFT;
+		total += p;
+	}
+
+	if (total != 0) {					/* step 3 */
+		noise_calc(phy, pw, dbm, crs_in);		/* 3.2: every core */
+		if (phy->noise_pending == BCM4360_PHY_NOISE_CRSMIN ||
+		    phy->crsmincal.noise_refused)		/* 3.3 */
+			bcm4360_phy_crs_min_pwr_cal_noise(phy, crs_in);
+	}
+
+	/*
+	 * step 4: the per-core history (pi+0xed4, pi+0xef4; a third core's at
+	 * pi+0xf14 is not kept by the open code, nothing reads it)
+	 */
+	for (c = 0; c < n; c++) {
+		if (c < ARRAY_SIZE(hist))
+			hist[c][phy->bssinit_f54] = dbm[c];
+		if (dbm[c] > best)
+			best = dbm[c];
+	}
+	phy->bssinit_f54 = (u8)((phy->bssinit_f54 + 1) % NOISE_HISTORY);	/* step 5 */
+	noise_window_push(phy, best);				/* step 6 */
+	return best;						/* step 7 */
+}
+
+/*
+ * acphy-api-rx.md, N6 (wlc_phy_noise_sample_acphy): one more noise reading,
+ * into the noise window a second time; -92 dBm while the clock is off.
  */
 static s8 noise_sample_acphy(struct bcm4360_phy *phy)
 {
-	struct bcm4360_phy_interference *in = &phy->interference;
 	s8 v;
 
-	if (!phy->clk)
+	if (!phy->clk)						/* step 1 */
 		return NOISE_FLOOR_DBM;
-	bcm4360_shm_read(phy->hw, SHM_NOISE_HANDSHAKE);
-	v = noise_read_shmem(phy);
-	in->noise_window[in->noise_index] = (u8)v;
-	noise_window_advance(phy);
+	bcm4360_shm_read(phy->hw, SHM_NOISE_CHAN);		/* step 2: not used */
+	v = noise_read_shmem(phy);				/* step 3 */
+	noise_window_push(phy, v);				/* step 4 */
 	return v;
+}
+
+/*
+ * acphy-api-rx.md, N4 (wlc_phy_noise_cb): complete the pending request with
+ * the value `v` measured on channel `chan`.
+ */
+static void noise_cb(struct bcm4360_phy *phy, u8 chan, s8 v)
+{
+	if (!phy->noise_pending)
+		return;
+	if (phy->noise_pending & BCM4360_PHY_NOISE_WATCHDOG) {	/* step 1 */
+		if (phy->noise_chan == chan)
+			noise_window_push(phy, v);
+		phy->noise_pending &= (u8)~BCM4360_PHY_NOISE_WATCHDOG;
+	}
+	if (phy->noise_pending & BCM4360_PHY_NOISE_EXTERNAL) {	/* step 2 */
+		phy->noise_pending &= (u8)~BCM4360_PHY_NOISE_EXTERNAL;
+		bcm4360_mac_noise_cb(phy->hw, chan, v);
+	}
+	phy->noise_pending &= (u8)~BCM4360_PHY_NOISE_CRSMIN;	/* step 3 */
 }
 
 /*
@@ -410,17 +485,16 @@ void bcm4360_phy_noise_sample_request(struct bcm4360_phy *phy, u8 reason, u8 cha
 }
 
 /*
- * acphy-api-rx.md, "wlc_phy_noise_sample_intr": the microcode has measured the
- * noise; read the result as wlc_phy_noise_read_shmem does, move on in the
- * noise window and complete the pending requests (wlc_phy_noise_cb clears the
- * bits 0, 1 and 2 of pi+0x18f, acphy-api-watchdog.md, Q3).
+ * acphy-api-rx.md, N5 (wlc_phy_noise_sample_intr): the microcode has measured
+ * the noise; read the channel, the result (N3) and complete the request (N4).
+ * No clock test and no "pending" test.
  */
 void bcm4360_phy_noise_sample_intr(struct bcm4360_phy *phy)
 {
-	noise_read_shmem(phy);
-	noise_window_advance(phy);
-	phy->noise_pending &= (u8)~(BCM4360_PHY_NOISE_WATCHDOG | BCM4360_PHY_NOISE_EXTERNAL |
-				    BCM4360_PHY_NOISE_CRSMIN);
+	u8 chan = (u8)bcm4360_shm_read(phy->hw, SHM_NOISE_CHAN);	/* step 1 */
+	s8 v = noise_read_shmem(phy);					/* step 2 */
+
+	noise_cb(phy, chan, v);						/* step 3 */
 }
 
 /*

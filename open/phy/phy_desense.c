@@ -17,6 +17,7 @@
  */
 #include <bcm4360/phy.h>
 #include <bcm4360/phy_env.h>
+#include "phy_noise.h"
 
 /* PHY registers accessed here, named by their address (purpose unknown). */
 #define ACPHY_REG_0x19e		0x19e	/* bit 1: freeze the RF sequencer */
@@ -718,7 +719,9 @@ static void phy_set_090b77(struct bcm4360_phy *phy, bool nonzero)
  * acphy-desense.md C2 (sub_08f41b, wlc_phy_set_crs_thresh_acphy): the per-core
  * carrier-sense / energy-detect minimum-power threshold registers. Core 0 gets
  * the absolute power; the other cores get the offset of their power relative to
- * core 0.
+ * core 0. Every core < pi+0x168 is written, also one whose bit is not set in
+ * sh+0xa7: the specification says "each present core", the soak's single-chain
+ * boards show core 1 written (docs/re/questions/phy-soak.md, Q7).
  */
 static void phy_set_crs_thresh(struct bcm4360_phy *phy, u8 pwr, u8 off1, u8 off2)
 {
@@ -736,8 +739,6 @@ static void phy_set_crs_thresh(struct bcm4360_phy *phy, u8 pwr, u8 off1, u8 off2
 	}
 
 	for (c = 0; c < phy_cores(phy); c++) {
-		if (!phy_core_present(phy, c))
-			continue;
 		if (c == 0) {
 			bcm4360_phy_mod(io, crs_core0_regs[0], 0x00ff, a);
 			bcm4360_phy_mod(io, crs_core0_regs[1], 0x00ff, b);
@@ -1167,26 +1168,26 @@ static s32 crs_ref_adjust(u32 bw)
 }
 
 /*
- * acphy-desense.md C1 (wlc_phy_crs_min_pwr_cal_acphy): keep, per sub-band and
- * core, a reference of the received/noise level, and from it set the carrier-
- * sense minimum-power thresholds. restore != 0 reprograms from the stored
- * references without a new measurement (the channel-change path, A1 step 9);
- * restore == 0 pushes a fresh measurement (the noise-sample path). Measured
- * inputs read 0 in the model, so the calibrate branch is written from the spec.
+ * acphy-desense.md C1 (wlc_phy_crs_min_pwr_cal_acphy), with its "Corrections
+ * (phy-noise)": keep, per sub-band and core, a reference of the noise level,
+ * and from it set the carrier-sense minimum-power thresholds. restore != 0
+ * reprograms from the stored references without a new measurement (the
+ * channel-change path, A1 step 9); restore == 0 pushes the measurement
+ * `noise_in` (pi_ac+0x14+c, written by sub_0b701e just before; the
+ * noise-sample path, acphy-api-rx.md N3).
  */
-void bcm4360_phy_crs_min_pwr_cal_acphy(struct bcm4360_phy *phy, u8 restore)
+static void crs_min_pwr_cal(struct bcm4360_phy *phy, u8 restore, const s8 *noise_in)
 {
 	struct bcm4360_phy_crsmincal *cal = &phy->crsmincal;
 	const u8 *tab = crs_table(phy_bw_index(phy));
 	s32 bias = crs_index_bias(phy_bw_index(phy));
 	s32 adj = crs_ref_adjust(phy_bw_index(phy));
 	u8 sb = bcm4360_phy_get_chan_freq_range(phy, 0);
-	s32 lvl[BCM4360_PHY_CORE_SLOTS];
+	s8 lvl[BCM4360_PHY_CORE_SLOTS] = { 0 };
 	u8 pwr[BCM4360_PHY_CORE_SLOTS];
 	u8 off1 = 0, off2 = 0;
 	s32 cvar = phy->ver.phy_rev >= 2 ? 2 : 3;
-	bool changed = false;
-	u32 done = 0;
+	u32 changed = 0;
 	u32 c;
 
 	pwr[0] = CRS_MIN_PWR_DEFAULT;
@@ -1194,31 +1195,27 @@ void bcm4360_phy_crs_min_pwr_cal_acphy(struct bcm4360_phy *phy, u8 restore)
 	pwr[2] = 0;
 	pwr[3] = 0;
 
-	/*
-	 * step 1: push the newest measurement into the ring (calibrate path
-	 * only). The per-core input pi_ac[0x14+c] reads 0 in the model, so the
-	 * pushed value is 1; this path is not reached (no noise interrupt).
-	 */
+	/* step 1: push the newest measurement + 1 into the ring (calibrate path only) */
 	if (restore == 0) {
 		for (c = 0; c < phy_cores(phy); c++)
 			if (phy_core_present(phy, c))
-				cal->sample[cal->next_sample][c] = 1;
+				cal->sample[cal->next_sample][c] = (s8)(noise_in[c] + 1);
 		cal->next_sample = (cal->next_sample + 1) & 3;
 	}
 
-	/* step 2: per present core */
+	/* step 2: per present core, counting the cores whose reference changed */
 	for (c = 0; c < phy_cores(phy); c++) {
-		s32 idx;
+		s8 idx;
 
 		if (!phy_core_present(phy, c))
 			continue;
-		done++;
 
 		if (restore == 0) {
 			s32 sum, cnt, s;
+			s8 r, diff;
 
 			if (cal->sample[0][c] == 0)
-				return;		/* the ring is empty for this core */
+				return;		/* ring slot 0 empty: return at once */
 			sum = 0;
 			cnt = 0;
 			for (s = 0; s < BCM4360_PHY_CRSMIN_SAMPLES; s++) {
@@ -1227,23 +1224,18 @@ void bcm4360_phy_crs_min_pwr_cal_acphy(struct bcm4360_phy *phy, u8 restore)
 				sum += cal->sample[s][c];
 				cnt++;
 			}
-			lvl[c] = sum / cnt;
-			{
-				s32 r = cal->noise[sb][c] + adj;
-				s32 diff = r - lvl[c];
-
-				if (diff < 0)
-					diff = -diff;
-				if (diff >= cvar || cal->state[0] != 0) {
-					changed = true;
-					cal->noise[sb][c] = (s8)(lvl[c] - adj);
-				}
+			lvl[c] = (s8)(sum / cnt);	/* truncation toward zero */
+			r = (s8)(cal->noise[sb][c] + adj);
+			diff = (s8)(r - lvl[c]);
+			if (diff <= -cvar || diff >= cvar || cal->state[0] != 0) {
+				changed++;
+				cal->noise[sb][c] = (s8)(lvl[c] - adj);
 			}
 		} else {
-			lvl[c] = cal->noise[sb][c] + adj;
+			lvl[c] = (s8)(cal->noise[sb][c] + adj);
 		}
 
-		idx = lvl[c] + bias;
+		idx = (s8)(lvl[c] + bias);
 		if (idx > 14)
 			idx = 14;
 		if (idx < 0)
@@ -1255,11 +1247,12 @@ void bcm4360_phy_crs_min_pwr_cal_acphy(struct bcm4360_phy *phy, u8 restore)
 			off2 = (u8)(pwr[2] - pwr[0]);
 	}
 
-	/* step 3.1 */
-	if (done == 0 && restore == 0)
-		return;
-	if (changed && restore == 0)
+	/* step 3.1: the calibrate path reprograms only if a reference changed */
+	if (restore == 0) {
+		if (!changed)
+			return;
 		cal->state[0] = 0;			/* pi_ac+0x33d */
+	}
 
 	/* step 3.2 */
 	cal->state[1] = 1;				/* pi_ac+0x33e */
@@ -1284,6 +1277,25 @@ void bcm4360_phy_crs_min_pwr_cal_acphy(struct bcm4360_phy *phy, u8 restore)
 	} else {
 		cal->state[1] = 2;
 	}
+}
+
+/*
+ * acphy-desense.md C1 (wlc_phy_crs_min_pwr_cal_acphy). The calibrate path
+ * (restore = 0) is reached only through the noise reading, which passes its
+ * input with bcm4360_phy_crs_min_pwr_cal_noise; called here with restore = 0
+ * the input is the state after a channel change (pi_ac+0x14.. = 0).
+ */
+void bcm4360_phy_crs_min_pwr_cal_acphy(struct bcm4360_phy *phy, u8 restore)
+{
+	static const s8 none[BCM4360_PHY_CORE_SLOTS] = { 0 };
+
+	crs_min_pwr_cal(phy, restore, none);
+}
+
+/* acphy-desense.md C1 with restore = 0, from the noise reading (phy_noise.h) */
+void bcm4360_phy_crs_min_pwr_cal_noise(struct bcm4360_phy *phy, const s8 *noise_in)
+{
+	crs_min_pwr_cal(phy, 0, noise_in);
 }
 
 /*
@@ -1380,14 +1392,16 @@ void bcm4360_phy_hwaci_engine_acphy(struct bcm4360_phy *phy)
 	rec->hwaci_hold = rec->hwaci_hold ? (u8)(rec->hwaci_hold - 1) : 0;
 	bcm4360_mac_suspend(phy->hw);
 
-	/* step 4: wide-band detector (measured registers read 0) */
+	/*
+	 * step 4: wide-band detector (measured registers read 0); every core <
+	 * pi+0x168 is read, also one whose bit is not set in sh+0xa7 (single-chain
+	 * boards of the soak; docs/re/questions/phy-soak.md, Q7)
+	 */
 	if (mode & BCM4360_INTERFERENCE_W2NB) {
 		s32 sa = 0, sb2 = 0, sc = 0, sd = 0;
 		u32 n = phy_cores(phy);
 
 		for (c = 0; c < n; c++) {
-			if (!phy_core_present(phy, c))
-				continue;
 			if (c == 0) {
 				sa += bcm4360_phy_read(io, 0x7af);
 				sb2 += bcm4360_phy_read(io, 0x7ab);

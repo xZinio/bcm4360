@@ -1020,6 +1020,10 @@ void bcm4360_phy_precal_txgain_acphy(struct bcm4360_phy *phy, u8 *records)
 	u8 band = bcm4360_phy_get_chan_freq_range(phy, 0);
 	u32 c;
 
+	/* step 1: the per-core "gain schedule loaded" flags (cal+0x65+c) */
+	for (c = 0; c < phy_cores(phy); c++)
+		phy->cal.state.core_flag[c] = 0;
+
 	for (c = 0; c < phy_cores(phy); c++) {
 		u8 i;
 

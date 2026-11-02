@@ -889,8 +889,9 @@ static const u8 txcal_sel_start[5] = { 0, 0, 1, 2, 3 };
 static const u8 txcal_sel_state[5] = { 12, 0, 13, 14, 15 };
 
 /*
- * acphy-cal-tx section 15 (sub_0abc76, wlc_phy_cal_txiqlo_acphy). Single-shot
- * only is exercised (mphase = 0). Returns 0, or nonzero if the tone failed.
+ * acphy-cal-tx section 15 (sub_0abc76, wlc_phy_cal_txiqlo_acphy): the whole
+ * command list (mphase = 0) or the two commands of the phase cal[1] (mphase =
+ * 1). Returns 0, or nonzero if the tone failed.
  */
 static u32 phy_cal_txiqlo(struct bcm4360_phy *phy, u8 sm, u8 mphase, u8 part)
 {
@@ -978,29 +979,46 @@ static u32 phy_cal_txiqlo(struct bcm4360_phy *phy, u8 sm, u8 mphase, u8 part)
 	txcal_txgain_save_set(phy, st->gainrec[0], gsave);	/* A.8 */
 	bcm4360_phy_write(io, ACPHY_REG_0x382, CAL_ENGINE_ARM);	/* A.9 */
 
-	/* B. Seed the coefficients (single-shot / first mphase step) */
-	if (st->phase < 3) {
-		for (c = 0; c < n; c++) {
-			u16 z[2] = { 0, 0 };
+	/*
+	 * B. Seed the coefficients: the intermediate area cal+0x2c from zero
+	 * (sm = 0) or from the final results cal+4 (sm = 1), then the start
+	 * values a,b (selection 0) and, for part 0, d, e, f (selections 1, 2, 3)
+	 * from it. The specification has this "only while cal[1] < 3"; the soak
+	 * shows it in every phase of the multi-phase sequence
+	 * (docs/re/questions/phy-soak.md, Q6).
+	 */
+	for (c = 0; c < n; c++) {
+		u16 *v = st->coef_inter[c];
+		u32 k;
 
-			phy_cal_coeffs(phy, 1, z, 0, c);
-			if (part == 0) {
-				phy_cal_coeffs(phy, 1, z, 1, c);
-				phy_cal_coeffs(phy, 1, z, 2, c);
-				phy_cal_coeffs(phy, 1, z, 3, c);
-			}
+		for (k = 0; k < BCM4360_CAL_COEFFS; k++)
+			v[k] = sm ? st->coef_final[c][k] : 0;
+		phy_cal_coeffs(phy, 1, &v[0], 0, c);
+		if (part == 0) {
+			phy_cal_coeffs(phy, 1, &v[2], 1, c);
+			phy_cal_coeffs(phy, 1, &v[3], 2, c);
+			phy_cal_coeffs(phy, 1, &v[4], 3, c);
 		}
 	}
 
-	/* C. Choose the command list */
+	/*
+	 * C. Choose the command list; single-shot: the whole list, multi-phase:
+	 * two commands per phase (lo = cal[1] * 2 - 4 for part 0, - 0x1c for
+	 * part 1; the loop is empty when lo > hi)
+	 */
 	if (sm == 0) {
 		list = part ? txcal_cmd_sm0_p1 : txcal_cmd_sm0_p0;
 	} else {
 		list = part ? txcal_cmd_sm1_p1 : txcal_cmd_sm1_p0;
 	}
 	cnt = part ? 2 : 6;
-	lo = 0;
-	hi = n * cnt - 1;
+	if (!mphase) {
+		lo = 0;
+		hi = n * cnt - 1;
+	} else {
+		lo = (u32)st->phase * 2 - (part ? 0x1c : 4);
+		hi = min(lo + 1, n * cnt - 1);
+	}
 
 	/* D. The tone */
 	{
@@ -1069,8 +1087,8 @@ static u32 phy_cal_txiqlo(struct bcm4360_phy *phy, u8 sm, u8 mphase, u8 part)
 			loft[core] = r[0];
 	}
 
-	/* F. Apply the results */
-	if (part == 0) {
+	/* F. Apply the results, when the list is finished (single-shot, phase 0xc / 0x10) */
+	if (part == 0 && (!mphase || st->phase == 0x0c)) {
 		for (c = 0; c < n; c++) {
 			u16 ab[2], d[1], e[1], f[1];
 
@@ -1089,7 +1107,7 @@ static u32 phy_cal_txiqlo(struct bcm4360_phy *phy, u8 sm, u8 mphase, u8 part)
 		}
 		st->restart_ok = 1;
 		st->last_chanspec = chanspec;
-	} else {
+	} else if (part == 1 && (!mphase || st->phase == 0x10)) {
 		for (c = 0; c < n; c++) {
 			u16 ab[2];
 
@@ -1110,7 +1128,6 @@ restore:
 	txcal_radio_restore(phy, radio_save);
 	bcm4360_phy_write(io, ACPHY_REG_0x140, u8140);
 	bcm4360_phy_stay_in_carriersearch(phy, false);
-	(void)mphase;
 	return tone_ok;
 }
 
@@ -1200,15 +1217,21 @@ static void phy_rxcal_radio_setup(struct bcm4360_phy *phy, u16 save[][6])
 			bcm4360_radio_mod(io, R2069_REG_0x020 | b, 0x0003, 0);
 			bcm4360_radio_mod(io, R2069_REG_0x022 | b, 0x0006, 0);
 		} else {
-			/* 5 GHz (unverified): registers 0x23, 0x3d, 0x21 */
+			/*
+			 * 5 GHz: registers 0x23, 0x3d, 0x21. As the soak shows
+			 * (docs/re/questions/phy-soak.md, Q2): bit 0 of 0x23 is set
+			 * before the loopback enable 0x200, and there is no 0x80 mod.
+			 * The register is 0 at that point, so the mask of the bit-0
+			 * mod is not observable; 0x1 is taken.
+			 */
 			bcm4360_radio_mod(io, R2069_REG_0x023 | b, 0x0100, 0);
 			bcm4360_radio_mod(io, R2069_REG_0x03d | b, 0x0010, 0);
 			bcm4360_radio_mod(io, R2069_REG_0x023 | b, 0x0020, 0);
 			bcm4360_radio_mod(io, R2069_REG_0x023 | b, 0x0004, 0);
 			bcm4360_radio_mod(io, R2069_REG_0x021 | b, 0x0100, 0);
 			bcm4360_radio_mod(io, R2069_REG_0x021 | b, 0x0004, 0x0004);
+			bcm4360_radio_mod(io, R2069_REG_0x023 | b, 0x0001, 0x0001);
 			bcm4360_radio_mod(io, R2069_REG_0x023 | b, 0x0200, 0x0200);
-			bcm4360_radio_mod(io, R2069_REG_0x023 | b, 0x0080, 0x0080);
 			bcm4360_radio_mod(io, R2069_REG_0x021 | b, 0x0003, 0);
 			bcm4360_radio_mod(io, R2069_REG_0x023 | b, 0x0006, 0);
 		}
@@ -1305,8 +1328,11 @@ static const u16 rxcal_restore25[25] = {
 
 #define RXCAL_SLOTS	0x28	/* (reg - 0x720) for 0x720..0x747 */
 
-/* the fixed per-core override mods of step 7 (after the W distribution) */
-static const struct lb_mod rxcal_override[] = {
+/*
+ * the fixed per-core override mods of step 7 (after the W distribution), in two
+ * parts: between them the 5 GHz mod of PHY(0x729) bit 5 (rxcal_override_5g)
+ */
+static const struct lb_mod rxcal_override_a[] = {
 	{ 0x729, 0x0020, 0 }, { 0x721, 0x0020, 0x0020 },
 	{ 0x729, 0x0040, 0 }, { 0x721, 0x0040, 0x0040 },
 	{ 0x729, 0x0800, 0 }, { 0x721, 0x0800, 0x0800 },
@@ -1315,6 +1341,12 @@ static const struct lb_mod rxcal_override[] = {
 	{ 0x728, 0x3800, 0 }, { 0x721, 0x4000, 0x4000 },
 	{ 0x728, 0x0002, 0 },			/* R = 0 for radio rev 4 */
 	{ 0x720, 0x0002, 0x0002 },
+};
+
+/* step 7: on 5 GHz for PHY revisions other than 0 (radio major revision 0: once) */
+static const struct lb_mod rxcal_override_5g = { 0x729, 0x0020, 0x0020 };
+
+static const struct lb_mod rxcal_override[] = {
 	{ 0x729, 0x0200, 0x0200 }, { 0x721, 0x0200, 0x0200 },
 	{ 0x736, 0x0080, 0 }, { 0x724, 0x0080, 0x0080 },
 	{ 0x736, 0x0004, 0 }, { 0x724, 0x0004, 0x0004 },
@@ -1382,6 +1414,12 @@ static void phy_rxcal_phy_setup(struct bcm4360_phy *phy, struct rxcal_save *sv, 
 		bcm4360_phy_mod(io, ACPHY_REG_0x721 + b, 0x0001, 0x0001);
 		bcm4360_phy_mod(io, ACPHY_REG_0x729 + b, 0x0001, 0x0001);
 		phy_distribute_w(io, b, w);
+		for (i = 0; i < ARRAY_SIZE(rxcal_override_a); i++)
+			bcm4360_phy_mod(io, rxcal_override_a[i].reg + b,
+					rxcal_override_a[i].mask, rxcal_override_a[i].val);
+		if (!phy_is_2g(phy) && phy->ver.phy_rev != 0)
+			bcm4360_phy_mod(io, rxcal_override_5g.reg + b, rxcal_override_5g.mask,
+					rxcal_override_5g.val);
 		for (i = 0; i < ARRAY_SIZE(rxcal_override); i++)
 			bcm4360_phy_mod(io, rxcal_override[i].reg + b,
 					rxcal_override[i].mask, rxcal_override[i].val);
@@ -1438,7 +1476,9 @@ static void phy_rxcal_phy_restore(struct bcm4360_phy *phy, struct rxcal_save *sv
  * acphy-cal-rx (sub_0ad89a, wlc_phy_rxcal_txgain_setup_acphy): the gain search.
  * The 2.4 GHz gain table is Broadcom data; in the model every estimate reads 0
  * so the search climbs gi to 10 and force-settles. The triple values are filled
- * from the trace.
+ * from the trace. The 5 GHz table (DAT_0054dbe0) is not specified; the 2.4 GHz
+ * one stands in for it, which the soak shows to be wrong at 5 GHz
+ * (docs/re/questions/phy-soak.md, Q4).
  */
 static const s16 rxcal_gain_2g[11][3] = {	/* {s3, s7, s5}; s5 = tx index 10 */
 	{ 0, 0, 10 }, { 0, 1, 10 }, { 0, 2, 10 }, { 0, 3, 10 }, { 0, 4, 10 },
@@ -1454,7 +1494,12 @@ static void phy_rxcal_gain_search(struct bcm4360_phy *phy)
 	u16 seed[BCM4360_PHY_CORES_MAX];
 	u8 gi[BCM4360_PHY_CORES_MAX], dir[BCM4360_PHY_CORES_MAX], done[BCM4360_PHY_CORES_MAX];
 	u16 paldo = is5g ? 6 : 0;	/* 0 on 2.4 GHz / radio rev 4 (trace) */
-	s32 khz = 1000;			/* tone frequency (trace; 20 MHz) */
+	/*
+	 * the tone frequency: 1000 kHz at 20 MHz (questions/phy-cal.md, 9), 4000
+	 * at 80 MHz (soak); the specification's 4000 / 2000 / 1000 with the
+	 * bandwidth labels the other way round (questions/phy-soak.md, Q3)
+	 */
+	s32 khz = 1000 << phy_bwix(phy);
 	u16 br, br2;
 	u32 c, settled;
 
@@ -1600,6 +1645,8 @@ static void phy_rxiqcal(struct bcm4360_phy *phy)
 	s16 tones[6];
 	s32 angle[6][BCM4360_PHY_CORES_MAX], gainr[6][BCM4360_PHY_CORES_MAX];
 	u32 ntones, k, c;
+	/* step 1: the image second estimate, not for PHY revision 1 on 5 GHz */
+	bool img = !(phy->ver.phy_rev == ACPHY_REV_1 && !phy_is_2g(phy));
 
 	bcm4360_phy_stay_in_carriersearch(phy, true);		/* step 2 */
 	phy_force_rfseq(phy, 2);
@@ -1636,15 +1683,18 @@ static void phy_rxiqcal(struct bcm4360_phy *phy)
 
 		bcm4360_phy_tx_tone_acphy(phy, tones[k], 0xb5, 0, 0, 0);
 		phy_rx_iq_est(phy, est0, 0x4000, 0x20, 0, 0);
-		phy_rxcal_radio_restore(phy, radio_save);	/* img == 1 */
-		phy_rx_iq_est(phy, est1, 0x4000, 0x20, 0, 0);
-		phy_rxcal_radio_setup(phy, radio_save);
+		if (img) {
+			phy_rxcal_radio_restore(phy, radio_save);
+			phy_rx_iq_est(phy, est1, 0x4000, 0x20, 0, 0);
+			phy_rxcal_radio_setup(phy, radio_save);
+		}
 		bcm4360_phy_stopplayback_acphy(phy);
 		for (c = 0; c < n; c++) {
 			phy_calc_iqcc(est0[c], out);
 			angle[k][c] = out[0];
 			gainr[k][c] = out[1];
-			phy_calc_iqcc(est1[c], out);	/* image second estimate */
+			if (img)
+				phy_calc_iqcc(est1[c], out);	/* image second estimate */
 		}
 	}
 
@@ -1913,13 +1963,171 @@ static void phy_cals_cleanup(struct bcm4360_phy *phy, bool en, u8 rxsave, u8 txs
 }
 
 /*
+ * acphy-cal-tx section 6 (wlc_phy_cal_perical_mphase_reset): stop the
+ * multi-phase sequence (the same as the static one of phy_api.c, which this
+ * file cannot call)
+ */
+static void phy_cal_mphase_reset(struct bcm4360_phy *phy)
+{
+	if (phy->timer_phycal)
+		bcm4360_timer_del(phy->hw, phy->timer_phycal);
+	phy->cal.state.phase = 0;
+	phy->cal.state.subphase = 0;
+}
+
+/* acphy-cal-tx section 7 (wlc_phy_cal_perical_mphase_restart): from phase 1 again */
+static void phy_cal_mphase_restart(struct bcm4360_phy *phy)
+{
+	phy->cal.state.phase = 1;
+	phy->cal.state.subphase = 0;
+}
+
+/* acphy-cal-tx section 1, phase 0 step 7: the "calibration done" marker */
+static void phy_cal_marker(struct bcm4360_phy *phy)
+{
+	struct bcm4360_phy_io *io = &phy->io;
+	u16 bracket = tbl_bracket_enter(io);
+
+	tbl_write16(io, TBL_BBMULT, TBL_BBMULT_MARKER, CAL_MARKER);
+	tbl_bracket_leave(io, bracket);
+}
+
+/* the durations of sub_0925cc per phase (acphy-cal-tx, "The phycal shared-memory word") */
+#define CAL_DUR_SINGLE		29000
+#define CAL_DUR_PRECAL		0x3c
+#define CAL_DUR_TXCAL		0x1130
+#define CAL_DUR_RXCAL		0x251c
+#define CAL_DUR_VCO		300
+#define CAL_DUR_IDLETSSI	0x60e
+
+/* the phases of the multi-phase sequence (cal[1], acphy-cal-tx section 1) */
+#define CAL_PHASE_PRECAL	0x01
+#define CAL_PHASE_TXA_FIRST	0x02
+#define CAL_PHASE_TXA_REV0_LAST	0x0a	/* PHY revision 0: 0x0b, 0x0c only advance */
+#define CAL_PHASE_TXA_LAST	0x0c
+#define CAL_PHASE_GAP		0x0d
+#define CAL_PHASE_TXB_FIRST	0x0e
+#define CAL_PHASE_TXB_LAST	0x10
+#define CAL_PHASE_RXCAL		0x11
+#define CAL_PHASE_VCO		0x12
+#define CAL_PHASE_IDLETSSI	0x13
+
+/* acphy-cal-tx section 1, phase 0: everything in one call */
+static void phy_cals_single(struct bcm4360_phy *phy, u8 sm)
+{
+	struct bcm4360_phy_cal_state *st = &phy->cal.state;
+
+	phy_cal_suspend_setup(phy, CAL_DUR_SINGLE);		/* 1 */
+	st->last_cal_time = phy->now;				/* 2: sh+0x34 */
+	st->last_chanspec = phy->radio_chanspec;
+	if (st->first_cal)					/* 3 */
+		bcm4360_phy_txpwrctrl_idle_tssi_meas_acphy(phy);
+	bcm4360_phy_precal_txgain_acphy(phy, st->gainrec[0]);	/* 4 */
+	phy_cal_txiqlo(phy, sm, 0, 0);				/* 5 */
+	phy_cal_txiqlo(phy, sm, 0, 1);
+	phy_rxiqcal(phy);					/* 6 */
+	phy_cal_marker(phy);					/* 7 */
+	st->first_cal = 0;					/* 8 */
+	phy->cal.acphy_0x44a = 0;
+	phy_scanroam_cache(phy, 1);
+}
+
+/*
+ * acphy-cal-tx section 1, phases 2 to 0xc and 0xe to 0x10: one slice of the
+ * transmit calibration (part A or B). False if the tone could not be built
+ * (the sequence is then reset).
+ */
+static bool phy_cals_txcal_phase(struct bcm4360_phy *phy, u8 sm, u8 part)
+{
+	phy_cal_suspend_setup(phy, CAL_DUR_TXCAL);
+	/* pi+0xf86 bit 4 / bit 0 (pi_ac+0x44c): 0 on this board */
+	if (phy_cal_txiqlo(phy, sm, 1, part)) {
+		phy_cal_mphase_reset(phy);
+		return false;
+	}
+	return true;
+}
+
+/*
+ * acphy-cal-tx section 1, the branch on the phase of the multi-phase sequence
+ * (phases 1 to 0x13). True if the phase suspended the MAC (the cleanup
+ * follows), false if it only advanced or reset the sequence.
+ */
+static bool phy_cals_mphase(struct bcm4360_phy *phy, u8 phase, u8 sm)
+{
+	struct bcm4360_phy_cal_state *st = &phy->cal.state;
+
+	if (phase == CAL_PHASE_PRECAL) {
+		phy_cal_suspend_setup(phy, CAL_DUR_PRECAL);
+		st->last_cal_time = phy->now;
+		st->last_chanspec = phy->radio_chanspec;
+		bcm4360_phy_precal_txgain_acphy(phy, st->gainrec[0]);
+		st->phase++;
+		return true;
+	}
+	if (phase >= CAL_PHASE_TXA_FIRST && phase <= CAL_PHASE_TXA_LAST) {
+		if (phase > CAL_PHASE_TXA_REV0_LAST && phy->ver.phy_rev != ACPHY_REV_1) {
+			st->phase++;			/* as phase 0xd: advance only */
+			return false;
+		}
+		if (!phy_cals_txcal_phase(phy, sm, 0))
+			return true;
+		if (phase == CAL_PHASE_TXA_LAST)
+			st->phase++;			/* skips the gap 0xd */
+		st->phase++;
+		return true;
+	}
+	if (phase == CAL_PHASE_GAP) {
+		st->phase++;
+		return false;
+	}
+	if (phase >= CAL_PHASE_TXB_FIRST && phase <= CAL_PHASE_TXB_LAST) {
+		if (!phy_cals_txcal_phase(phy, sm, 1))
+			return true;
+		st->phase++;
+		return true;
+	}
+	if (phase == CAL_PHASE_RXCAL) {
+		phy_cal_suspend_setup(phy, CAL_DUR_RXCAL);
+		phy_rxiqcal(phy);
+		phy->cal.acphy_0x44a = 0;
+		phy_scanroam_cache(phy, 1);
+		st->phase++;
+		return true;
+	}
+	if (phase == CAL_PHASE_VCO) {
+		phy_cal_suspend_setup(phy, CAL_DUR_VCO);
+		bcm4360_radio_vcocal(&phy->radio);		/* sub_09311b */
+		bcm4360_radio_vcocal_wait(&phy->radio, true);	/* sub_093e47(pi, 1) */
+		st->last_cal_time = phy->now;
+		st->last_chanspec = phy->radio_chanspec;
+		if (!st->first_cal) {
+			phy_cal_marker(phy);
+			phy_cal_mphase_reset(phy);		/* the sequence is finished */
+		} else {
+			st->phase++;
+		}
+		return true;
+	}
+	if (phase == CAL_PHASE_IDLETSSI) {
+		phy_cal_suspend_setup(phy, CAL_DUR_IDLETSSI);
+		bcm4360_phy_txpwrctrl_idle_tssi_meas_acphy(phy);
+		st->first_cal = 0;
+		phy_cal_marker(phy);
+		phy_cal_mphase_reset(phy);
+		return true;
+	}
+	phy_cal_mphase_reset(phy);				/* other phases */
+	return false;
+}
+
+/*
  * acphy-cal-tx section 1 (wlc_phy_cals_acphy): run or advance a calibration.
- * `phase` is the mphase search mode forwarded to the transmit cal.
+ * `phase_mode` is the mphase search mode forwarded to the transmit cal.
  */
 void bcm4360_phy_cals(struct bcm4360_phy *phy, u32 phase_mode)
 {
 	struct bcm4360_phy_cal_state *st = &phy->cal.state;
-	struct bcm4360_phy_io *io = &phy->io;
 	u16 chanspec = phy->radio_chanspec;
 	u8 mode = (u8)phase_mode;
 	u8 rxsave, txsave;
@@ -1936,7 +2144,7 @@ void bcm4360_phy_cals(struct bcm4360_phy *phy, u32 phase_mode)
 	phy->txchain = phy->hw_txchain;
 	bcm4360_phy_rxcore_setstate(phy, phy->hw_rxchain);
 
-	if ((phase == 0x11 || phase == 0) && phy->crsmincal.enable) {	/* common 3 */
+	if ((phase == CAL_PHASE_RXCAL || phase == 0) && phy->crsmincal.enable) { /* common 3 */
 		phy->crsmincal.state[0] = 1;
 		/*
 		 * the common request sub_0baff6 (phy_rx.c) clears the result words
@@ -1950,49 +2158,56 @@ void bcm4360_phy_cals(struct bcm4360_phy *phy, u32 phase_mode)
 	sm = (chanspec == st->last_chanspec && st->restart_ok) ? mode : 0;	/* common 4 */
 
 	if (phase > 1 && st->last_chanspec != chanspec) {	/* common 5 */
-		st->phase = 1;
-		st->subphase = 0;
+		phy_cal_mphase_restart(phy);
+		phase = st->phase;	/* start over: the branch runs phase 1 */
 	}
 
 	en = phy->txpwr.hwpwrctrl;				/* common 6 */
 
 	if (phase == 0) {
-		phy_cal_suspend_setup(phy, 29000);		/* 1 */
-		st->last_cal_time = 0;				/* 2 (sh+0x34 has no source) */
-		st->last_chanspec = chanspec;
-		if (st->first_cal)				/* 3 */
-			bcm4360_phy_txpwrctrl_idle_tssi_meas_acphy(phy);
-		bcm4360_phy_precal_txgain_acphy(phy, st->gainrec[0]);	/* 4 */
-		phy_cal_txiqlo(phy, sm, 0, 0);			/* 5 */
-		phy_cal_txiqlo(phy, sm, 0, 1);
-		phy_rxiqcal(phy);				/* 6 */
-		{						/* 7 */
-			u16 bracket = tbl_bracket_enter(io);
-
-			tbl_write16(io, TBL_BBMULT, TBL_BBMULT_MARKER, CAL_MARKER);
-			tbl_bracket_leave(io, bracket);
-		}
-		st->first_cal = 0;				/* 8 */
-		phy->cal.acphy_0x44a = 0;
-		phy_scanroam_cache(phy, 1);
-		phy_cals_cleanup(phy, en, rxsave, txsave);	/* 9 */
-		return;
+		phy_cals_single(phy, sm);
+	} else if (!phy_cals_mphase(phy, phase, sm)) {
+		return;			/* nothing was suspended: no cleanup */
 	}
-
-	/* the multi-phase machine is implemented but not exercised by the test */
-	phy_cals_cleanup(phy, en, rxsave, txsave);
+	phy_cals_cleanup(phy, en, rxsave, txsave);		/* cleanup */
 }
+
+/* sub_0b56ce: the repeat interval of the chip 0xa8e5 */
+#define CAL_TIMER_CHIP_A8E5	0xa8e5
+#define CAL_TIMER_A8E5_MS	0x28
+/* sub_0b56ce step 4: a hold flag postpones the whole sequence by 1 s */
+#define CAL_TIMER_HOLD_MASK	0x021e
+#define CAL_TIMER_HOLD_MS	1000
 
 /*
  * acphy-cal-tx section 5 (sub_0b56ce, wlc_phy_cal_perical_mphase_tmr_cb): the
- * phycal timer callback. Nothing is armed here (the open scheduler never calls
- * perical), so cal[1] is 0 and it returns at once.
+ * phycal timer callback; runs one phase of the multi-phase sequence and arms
+ * the timer again for the next one.
  */
 void bcm4360_phy_timer_phycal(struct bcm4360_phy *phy)
 {
-	if (phy->cal.state.phase == 0)
+	struct bcm4360_phy_cal_state *st = &phy->cal.state;
+	u32 iv = phy->cal.phase_delay_ms;			/* 1 */
+
+	if (phy->board.chip == CAL_TIMER_CHIP_A8E5)
+		iv = CAL_TIMER_A8E5_MS;
+	if (st->phase == 0)					/* 2 */
 		return;
-	/* the remaining phases run the multi-phase machine; not exercised */
+	if (!phy->up) {						/* 3 */
+		phy_cal_mphase_reset(phy);
+		return;
+	}
+	if (!(phy->hold & CAL_TIMER_HOLD_MASK)) {		/* 4 */
+		bcm4360_phy_cals(phy, st->search_mode);
+	} else {
+		st->phase = 1;
+		st->subphase = 0;
+		iv = CAL_TIMER_HOLD_MS;
+	}
+	if (st->phase != 0)					/* 5 */
+		bcm4360_timer_add(phy->hw, phy->timer_phycal, iv, false);
+	else
+		phy_cal_mphase_reset(phy);
 }
 
 /* acphy-api.md, A13: restore the scan/roam calibration cache (hold_upd) */

@@ -411,6 +411,9 @@ void bcm4360_phy_cal_init(struct bcm4360_phy *phy)
 	phy->cal.init_done = true;				/* step 6 */
 }
 
+/* acphy-cal-tx.md, section 3 step 6: the first phase runs 5 ms after the arming */
+#define CAL_MPHASE_FIRST_MS	5
+
 /* acphy-cal-tx.md, sections 4 and 6: arm / reset the multi-phase timer */
 static void cal_mphase_schedule(struct bcm4360_phy *phy, u32 ms)
 {
@@ -495,7 +498,7 @@ void bcm4360_phy_cal_perical(struct bcm4360_phy *phy, u8 reason)
 		return;
 	}
 	phy->cal.state.search_mode = 1;
-	cal_mphase_schedule(phy, phy->cal.phase_delay_ms);
+	cal_mphase_schedule(phy, CAL_MPHASE_FIRST_MS);			/* step 6 */
 }
 
 /* ----------------------------------------------------- A10, A11: ioctl, iovar */
