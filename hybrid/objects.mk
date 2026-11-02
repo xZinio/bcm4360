@@ -10,6 +10,7 @@ hybrid-objs := hybrid/card.o \
                hybrid/mac.o open/mac/bmac_ctrl.o open/mac/bmac_mhf.o \
                hybrid/mac_mem.o open/mac/bmac_mem.o \
                hybrid/mac_clk.o open/mac/bmac_clk.o \
+               hybrid/mac_init.o open/mac/bmac_init.o \
                hybrid/utils.o open/lib/utils.o \
                hybrid/clm.o open/lib/clm.o \
                hybrid/ppr.o open/lib/ratepwr.o \
@@ -18,7 +19,6 @@ hybrid-objs := hybrid/card.o \
 # Being written, one variable hybrid-new*-objs per layer: each is linked by
 # tools/re/hybrid.py for the emulator once ALL its sources exist, not yet in
 # the module.
-hybrid-new-macinit-objs := hybrid/mac_init.o open/mac/bmac_init.o
 hybrid-new-si-objs := hybrid/si.o open/chip/si.o
 
 # The PHY layer (hybrid/phy.c, switch open_phy, default off): the adapter and

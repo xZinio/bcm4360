@@ -89,8 +89,7 @@ take wlc_bmac_set_ctrl_SROM
 take wlc_bmac_radio_read_hwdisabled
 take wlc_hw_deviceremoved
 # the initialisation (hybrid/mac_init.c -> open/mac/bmac_init.c, bmac-init.md B1-B3,
-# B6-B10, B12, E6, E10); until hybrid/objects.mk links them Broadcom's own (weak)
-# bodies run unchanged. The MAC functions not open yet that it calls, the backplane
+# B6-B10, B12, E6, E10). The MAC functions not open yet that it calls, the backplane
 # and the glue stay Broadcom's (services of mac_env.h); the data it loads is
 # Broadcom's (hybrid/fwdata.h).
 take wlc_bmac_init

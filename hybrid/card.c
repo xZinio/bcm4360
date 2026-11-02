@@ -25,7 +25,7 @@ MODULE_PARM_DESC(open_pmu, "PMU and clocks: open code (1, default) or Broadcom's
 module_param_named(open_access, bcm4360_open_access, bool, 0444);
 MODULE_PARM_DESC(open_access, "PHY/radio/table/shared-memory register access: open code (1, default) or Broadcom's (0)");
 module_param_named(open_mac, bcm4360_open_mac, bool, 0444);
-MODULE_PARM_DESC(open_mac, "MAC control, suspend/enable, host flags, object memories, clocks and core reset: open code (1, default) or Broadcom's (0)");
+MODULE_PARM_DESC(open_mac, "MAC control, host flags, object memories, clocks, core reset, initialisation: open code (1, default) or Broadcom's (0)");
 module_param_named(open_utils, bcm4360_open_utils, bool, 0444);
 MODULE_PARM_DESC(open_utils, "board variables, number parsing, CRC-8: open code (1, default) or Broadcom's (0)");
 module_param_named(open_clm, bcm4360_open_clm, bool, 0444);
