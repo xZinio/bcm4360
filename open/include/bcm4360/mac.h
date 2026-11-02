@@ -8,7 +8,8 @@
  * microcode host flags); the object memories and the setters on them: A8,
  * B4-B6, B11, E1, E3, E7, F1, F2; clocks and reset: A10-A17, C7, C9, C11,
  * C13, C14; the initialisation: B1-B3, B6-B10, B12, E6, E10; up and down:
- * C2-C6, C8, C10, C15, D3.
+ * C2-C6, C8, C10, C15, D3; the channel and the band: acphy-chanspec.md
+ * sections 1-3 and bmac-init.md E4.
  */
 #ifndef BCM4360_MAC_H
 #define BCM4360_MAC_H
@@ -104,6 +105,12 @@ struct bcm4360_mac {
 	u32 ccrev;		/* ChipCommon revision (sih+0x14; C2 step 9) */
 	u32 led_gpio_mask;	/* wlc_hw+0x180: the GPIO lines of the LEDs (C2 step 9) */
 	u32 pcie2_war_freq;	/* wlc_hw+0x1c0: the argument of C2 step 7 */
+
+	/* the channel and the band (acphy-chanspec.md sections 1-3, bmac-init.md
+	 * E4; task docs/re/tasks/bmac-chan.md) */
+	u32 nbands;		/* wlc_hw+0x118: number of bands (2 for the 4360) */
+	u32 band_unit;		/* the current band's unit, its 32-bit word +0x04 */
+	u16 devid;		/* wlc_hw+0x82: PCI device id (0x43a0) */
 };
 
 void bcm4360_bmac_mctrl(struct bcm4360_mac *mac, u32 mask, u32 val);	/* A2 (+A1) */
@@ -180,5 +187,17 @@ s32 bcm4360_bmac_down_finish(struct bcm4360_mac *mac);				/* C6 */
 void bcm4360_bmac_hw_down(struct bcm4360_mac *mac);				/* C15 */
 void bcm4360_bmac_reset(struct bcm4360_mac *mac);				/* C8 */
 bool bcm4360_bmac_validate_chip_access(struct bcm4360_mac *mac);		/* D3 */
+
+/* the channel and the band: acphy-chanspec.md sections 1-3, bmac-init.md E4.
+ * `limits` is the PHY's handle of the channel's power limits, passed on. */
+void bcm4360_bmac_set_chanspec(struct bcm4360_mac *mac, u16 chanspec, bool mute,
+			       void *limits);					/* chanspec 1 */
+void bcm4360_bmac_setxband(struct bcm4360_mac *mac, u32 unit);		/* chanspec 2 */
+void bcm4360_bmac_bw_set(struct bcm4360_mac *mac, u16 bw);			/* chanspec 3 */
+void bcm4360_bmac_bw_reset(struct bcm4360_mac *mac);				/* chanspec 3 */
+void bcm4360_bmac_mute(struct bcm4360_mac *mac, bool on, u32 reason);		/* E4 */
+/* exported for it from bmac_ctrl.c and bmac_init.c */
+void bcm4360_bmac_mctrl_write(struct bcm4360_mac *mac);				/* A1 */
+void bcm4360_bmac_bsinit(struct bcm4360_mac *mac, u16 chanspec, bool bandswitch); /* B10 */
 
 #endif

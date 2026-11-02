@@ -252,7 +252,6 @@ in `wlc_hw` unless the structure is named):
 | Offset | Size | Name | Meaning |
 |---|---|---|---|
 | 0x08 | 8 | corestate | 0x60-byte block allocated at attach (also at `wlc+0x28`) |
-| 0x64 | 1 | (E4) | `wlc_bmac_mute` resumes tx FIFO 1 on unmute only when 0 |
 | 0x9c | 4 | defmacintmask | default interrupt mask 0xb0e7a860; `wl_intrson` writes it to `D11(0x12c)` |
 | 0xa7 | 1 | machwcap byte | bit 5 (0x20) gates coexistence |
 | 0xae | 1 | ucode_loaded | microcode downloaded (B2); cleared by `wlc_bmac_hw_up`, `wlc_bmac_btc_wire_set` |
@@ -1620,7 +1619,10 @@ passed on to the PHY). Steps:
 
 1. `on` != 0 (mute): suspend transmit FIFOs 1, 3, 0, 2
    (`wlc_bmac_tx_fifo_suspend`, spec `bmac-data`). `on` == 0 (unmute): resume
-   FIFO 1 only if the byte `wlc_hw+0x64` is 0, then resume FIFOs 3, 0, 2.
+   FIFO 1 (`wlc_bmac_tx_fifo_resume`) only if the byte **`wlc+0x64`** (of the
+   upper layer's structure, whose address is the word `wlc_hw+0x00`) is 0,
+   then resume FIFOs 3, 0, 2. (Corrected by the coordinator from the code: the
+   first version said `wlc_hw+0x64`.)
 2. Rewrite address-match entry 63 (rev >= 40):
    * mute: `wlc_bmac_write_amt(wlc_hw, 0x3f, 00:00:00:00:00:00, 0)` - the local
      address no longer matches, so the MAC stops acknowledging.

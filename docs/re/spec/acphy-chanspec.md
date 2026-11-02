@@ -233,9 +233,11 @@ channel. Steps:
         `wlc_bmac_mctrl(wlc_hw, 0xffffffff, 0x04000400)`. Not seen in the traces.
      3. `wl_intrsoff` of the glue (result kept): `D11(0x12c)` = 0, read back.
      4. PHY types other than AC (11) and N revision >= 3: radio off and PHY
-        clock off. **Not for the AC-PHY: radio and clock stay on.**
+        clock off. **Not for the AC-PHY: radio and clock stay on.** (MAC
+        revisions < 17 also read `D11(0x120)` here. Not this card.)
      5. `wlc_setxband(wlc_hw, unit)`, section 2.
-     6. (N-PHY/A-PHY only: PLL reset loop. Not for the AC-PHY.)
+     6. (PHY types 0 and 2 with MAC revision > 4: PLL reset loop; then PHY
+        types other than AC: PHY clock on again. Not for the AC-PHY.)
      7. `sub_06656c(wlc_hw, chanspec, 1)` (`wlc_bmac_bsinit`, specification
         `bmac-init`). With the third argument 1 and a MAC revision >= 40 it
         does **not** call `wlc_phy_init`: the PHY is not initialised again on
@@ -249,8 +251,9 @@ channel. Steps:
    step 7.
 6. Driver up:
    1. `wlc_phy_chanspec_set(pi, chanspec)` (section 4). For the PCI device ids
-      0x43a0 (this card), 0x43a3, 0x43ae and 0x43b1 it is called always, for
-      other devices only if the chanspec differs from `wlc_phy_chanspec_get(pi)`.
+      (16 bit `wlc_hw+0x82`) 0x43a0 (this card), 0x43a3, 0x43ae and 0x43b1 it
+      is called always, for other devices only if the chanspec differs from
+      `wlc_phy_chanspec_get(pi)`.
    2. `wlc_phy_txpower_limit_set(pi, limits, chanspec)`.
    3. `wlc_bmac_mute(wlc_hw, mute, 0)`.
 7. If fast was 0 in step 1: `sub_064887(wlc_hw, 2)` (read `D11(0x1e0)`, write
@@ -262,7 +265,9 @@ channel. Steps:
 
 Inputs: `wlc_hw`, band unit (0 = 2.4 GHz, 1 = 5 GHz). Steps:
 
-1. `wlc_hw+0xe8` = `wlc_hw+0xf0 + 8*unit`; `wlc+0x40` = `wlc+0x50 + 8*unit`.
+1. `wlc_hw+0xe8` = the word at `wlc_hw+0xf0 + 8*unit` (the band state of that
+   unit becomes the current one); `wlc+0x40` = the word at `wlc+0x50 + 8*unit`
+   (the same for the upper layer).
 2. If `wlc_hw+0x187` != 0 and `wlc_hw+0x184` = 0: `cflags(0x2000, unit == 0 ?
    0x2000 : 0)`.
 

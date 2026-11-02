@@ -176,4 +176,44 @@ void bcm4360_bmac_env_led_entry(struct bcm4360_mac *mac, u32 i, u32 *pin, u8 *fl
 /* the 32-bit words +0x308 := val and +0x30c := mask */
 void bcm4360_bmac_env_led_gpio_store(struct bcm4360_mac *mac, u32 val, u32 mask);
 
+/* --- for the channel and the band (acphy-chanspec.md 1-3, bmac-init.md E4; task
+ * bmac-chan) --- */
+
+/*
+ * acphy-chanspec.md section 2 step 1: band `unit` (0 = 2.4 GHz, 1 = 5 GHz)
+ * becomes the current band of the MAC and of the upper layer. The platform
+ * writes the state back before and reads it again after: every field of the
+ * current band (`current_band`, `band_*`, `cwmin`, `cwmax`) then describes
+ * the new band.
+ */
+void bcm4360_bmac_env_band_select(struct bcm4360_mac *mac, u32 unit);
+/* wlc_phy_chanspec_radio_set on the PHY of band `unit`, which need not be the
+ * current band (section 1 step 3.1) */
+void bcm4360_bmac_env_band_phy_chanspec_radio_set(struct bcm4360_mac *mac, u32 unit,
+						  u16 chanspec);
+/* the PHY of the current band */
+void bcm4360_bmac_env_phy_initcal_enable(struct bcm4360_mac *mac, bool on);
+							/* wlc_phy_initcal_enable */
+void bcm4360_bmac_env_phy_txpower_limit_set(struct bcm4360_mac *mac, void *limits,
+					    u16 chanspec);	/* wlc_phy_txpower_limit_set */
+void bcm4360_bmac_env_phy_chanspec_set(struct bcm4360_mac *mac, u16 chanspec);
+							/* wlc_phy_chanspec_set */
+u16 bcm4360_bmac_env_phy_chanspec_get(struct bcm4360_mac *mac);	/* wlc_phy_chanspec_get */
+void bcm4360_bmac_env_phy_bw_state_set(struct bcm4360_mac *mac, u16 bw);
+							/* wlc_phy_bw_state_set */
+void bcm4360_bmac_env_phy_mute_upd(struct bcm4360_mac *mac, bool on, u32 reason);
+							/* wlc_phy_mute_upd */
+/* MAC functions of Broadcom's not open yet (bmac-data section 2): the platform
+ * writes the state back before and reads it again after */
+void bcm4360_bmac_env_tx_fifo_suspend(struct bcm4360_mac *mac, u32 fifo);
+							/* wlc_bmac_tx_fifo_suspend */
+void bcm4360_bmac_env_tx_fifo_resume(struct bcm4360_mac *mac, u32 fifo);
+							/* wlc_bmac_tx_fifo_resume */
+/* the pending interrupt bits wlc_hw+0x94 (section 1 step 3.8; not a field:
+ * the interrupt handler writes them at any time) */
+u32 bcm4360_bmac_env_intstatus(struct bcm4360_mac *mac);
+void bcm4360_bmac_env_set_intstatus(struct bcm4360_mac *mac, u32 v);
+/* E4 step 1: the byte wlc+0x64 is not 0 */
+bool bcm4360_bmac_env_wlc_flag_64(struct bcm4360_mac *mac);
+
 #endif

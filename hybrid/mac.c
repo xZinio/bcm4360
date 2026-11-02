@@ -58,6 +58,8 @@
 #define WLC_HW_INTRCVLAZY	0x1ac	/* u32 */
 #define WLC_HW_LED_GPIO_MASK	0x180	/* u32, C2 step 9 */
 #define WLC_HW_PCIE2_WAR_FREQ	0x1c0	/* u32, C2 step 7 */
+#define WLC_HW_DEVID		0x082	/* u16 */
+#define WLC_HW_NBANDS		0x118	/* u32 */
 /* coexistence state (E10) */
 #define BTC_FLAGS		0x08	/* u16 */
 #define BTC_GPIO_MASK		0x0c	/* u32 */
@@ -72,6 +74,7 @@
 #define BAND_PHYTYPE		0x01c	/* u16 */
 #define BAND_PI			0x028	/* the PHY of the band */
 #define BAND_TYPE		0x000	/* u32: 1 = 5 GHz, 2 = 2.4 GHz */
+#define BAND_UNIT		0x004	/* u32 */
 #define BAND_PHYREV		0x01e	/* u16 */
 
 #define FIELD(p, off, type)	(*(type *)((u8 *)(p) + (off)))
@@ -143,7 +146,10 @@ void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac)
 		mac->band_coreflags = FIELD(cur, BAND_COREFLAGS, u32);
 		mac->band_type = FIELD(cur, BAND_TYPE, u32);
 		mac->band_phyrev = FIELD(cur, BAND_PHYREV, u16);
+		mac->band_unit = FIELD(cur, BAND_UNIT, u32);
 	}
+	mac->nbands = FIELD(wlc_hw, WLC_HW_NBANDS, u32);
+	mac->devid = FIELD(wlc_hw, WLC_HW_DEVID, u16);
 	if (sih) {
 		mac->bustype = sih->bustype;
 		mac->cccaps = sih->cccaps;

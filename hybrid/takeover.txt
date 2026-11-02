@@ -103,9 +103,8 @@ use si_clkctl_fast_pwrup_delay
 use si_seci_init
 use si_eci_init
 use si_gci_init
-use wlc_setxband
+# (wlc_setxband, wlc_bmac_mute: taken by the channel and band group below)
 use wlc_bmac_btc_mode_set
-use wlc_bmac_mute
 use d11ucode42
 use d11ac1initvals42
 use d11ac1bsinitvals42
@@ -135,6 +134,17 @@ use si_btcgpiowar
 use si_gpiopull
 use wlc_bmac_4360_pcie2_war
 use wlc_bmac_ifsctl_edcrs_set
+# the channel and the band, the transmitter mute (hybrid/mac_chan.c -> open/mac/bmac_chan.c,
+# acphy-chanspec.md sections 1-3, bmac-init.md E4). The transmit FIFO suspend/resume stay
+# Broadcom's (services of mac_env.h). Until open/mac/bmac_chan.c exists these takes keep
+# Broadcom's bodies (staged: hybrid-new-macchan-objs).
+take wlc_bmac_set_chanspec
+take wlc_setxband
+take wlc_bmac_bw_set
+take wlc_bmac_bw_reset
+take wlc_bmac_mute
+use wlc_bmac_tx_fifo_suspend
+use wlc_bmac_tx_fifo_resume
 
 # --- utilities (hybrid/utils.c -> open/lib/utils.c, docs/re/spec/utils.md)
 take getvar
