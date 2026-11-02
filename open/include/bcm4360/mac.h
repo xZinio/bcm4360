@@ -113,6 +113,14 @@ struct bcm4360_mac {
 	u16 devid;		/* wlc_hw+0x82: PCI device id (0x43a0) */
 	u16 chanspec;		/* wlc_hw+0x11c: the current chanspec (acphy-chanspec.md
 				 * section 1 step 2; E9 reads its bandwidth bits) */
+
+	/* Bluetooth coexistence (bmac-run.md R3; task docs/re/tasks/bmac-btc.md).
+	 * Also btc_valid, btc_mode, btc_flags, btc_gpio_mask, btc_gpio_out above,
+	 * which R3 writes. */
+	s32 btc_wire;		/* btc+0x04: 2-, 3- or 4-wire interface */
+	u8  btc_aa2g;		/* btc+0x18: the SROM variable aa2g */
+	u32 machwcap_backup;	/* wlc_hw+0xa8: the copy of machwcap made at attach */
+	s8  btswitch;		/* wlc_hw+0x1bc: the Bluetooth switch (-1 = 0xff: none) */
 };
 
 void bcm4360_bmac_mctrl(struct bcm4360_mac *mac, u32 mask, u32 val);	/* A2 (+A1) */
@@ -225,5 +233,17 @@ void bcm4360_bmac_stf_get_rateset_shm_offset(struct bcm4360_mac *mac, const u8 *
 void bcm4360_bmac_stf_set_rateset_shm_offset(struct bcm4360_mac *mac, u32 count, u16 off,
 					     const u8 *entries);		/* R6 */
 void bcm4360_bmac_read_tsf(struct bcm4360_mac *mac, u32 *lo, u32 *hi);		/* R7 */
+
+/* Bluetooth coexistence (bmac-run.md R3) */
+s32 bcm4360_bmac_btc_mode_set(struct bcm4360_mac *mac, s32 mode);		/* R3 */
+s32 bcm4360_bmac_btc_wire_set(struct bcm4360_mac *mac, s32 wire);		/* R3 */
+s32 bcm4360_bmac_btc_wire_get(struct bcm4360_mac *mac);			/* R3 */
+s32 bcm4360_bmac_set_btswitch(struct bcm4360_mac *mac, s8 sw);			/* R3 */
+void bcm4360_bmac_update_bt_chanspec(struct bcm4360_mac *mac, u16 chanspec, bool scanning,
+				     bool p4);					/* R3 */
+void bcm4360_bmac_seci_upd(struct bcm4360_mac *mac);				/* R3 */
+/* exported for them from bmac_init.c (the two coexistence helpers of B10/E10) */
+void bcm4360_bmac_btc_flags_to_mhf(struct bcm4360_mac *mac);		/* R3 sub_062b79 */
+void bcm4360_bmac_btc_gpio_enable(struct bcm4360_mac *mac);		/* R3 sub_06106b */
 
 #endif

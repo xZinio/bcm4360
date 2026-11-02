@@ -62,6 +62,11 @@
 #define WLC_HW_NBANDS		0x118	/* u32 */
 #define WLC_HW_CHANSPEC		0x11c	/* u16 */
 /* coexistence state (E10) */
+#define BTC_MODE		0x00	/* u32 */
+#define BTC_WIRE		0x04	/* s32 */
+#define BTC_AA2G		0x18	/* u8 */
+#define WLC_HW_MACHWCAP_BACKUP	0x0a8	/* u32 */
+#define WLC_HW_BTSWITCH		0x1bc	/* s8 */
 #define BTC_FLAGS		0x08	/* u16 */
 #define BTC_GPIO_MASK		0x0c	/* u32 */
 #define BTC_GPIO_OUT		0x10	/* u32 */
@@ -183,7 +188,11 @@ void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac)
 		mac->btc_gpio_mask = FIELD(btc, BTC_GPIO_MASK, u32);
 		mac->btc_gpio_out = FIELD(btc, BTC_GPIO_OUT, u32);
 		mac->btc_shm_base = FIELD(btc, BTC_SHM_BASE, u16);
+		mac->btc_wire = FIELD(btc, BTC_WIRE, s32);
+		mac->btc_aa2g = FIELD(btc, BTC_AA2G, u8);
 	}
+	mac->machwcap_backup = FIELD(wlc_hw, WLC_HW_MACHWCAP_BACKUP, u32);
+	mac->btswitch = FIELD(wlc_hw, WLC_HW_BTSWITCH, s8);
 }
 
 void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac)
@@ -208,9 +217,16 @@ void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac)
 	FIELD(wlc_hw, WLC_HW_STF_SS_MODE, u8) = mac->stf_ss_mode;
 	FIELD(wlc_hw, WLC_HW_FASTPWRUP_DLY, u16) = mac->fastpwrup_dly;
 	if (FIELD(wlc_hw, WLC_HW_BTC, void *)) {
-		FIELD(FIELD(wlc_hw, WLC_HW_BTC, void *), BTC_FLAGS, u16) = mac->btc_flags;
-		FIELD(FIELD(wlc_hw, WLC_HW_BTC, void *), BTC_SHM_BASE, u16) = mac->btc_shm_base;
+		void *btc = FIELD(wlc_hw, WLC_HW_BTC, void *);
+
+		FIELD(btc, BTC_FLAGS, u16) = mac->btc_flags;
+		FIELD(btc, BTC_SHM_BASE, u16) = mac->btc_shm_base;
+		FIELD(btc, BTC_MODE, u32) = mac->btc_mode;
+		FIELD(btc, BTC_WIRE, s32) = mac->btc_wire;
+		FIELD(btc, BTC_GPIO_MASK, u32) = mac->btc_gpio_mask;
+		FIELD(btc, BTC_GPIO_OUT, u32) = mac->btc_gpio_out;
 	}
+	FIELD(wlc_hw, WLC_HW_BTSWITCH, s8) = mac->btswitch;
 	FIELD(wlc_hw, WLC_HW_CLK, u8) = mac->clk;
 	FIELD(wlc_hw, WLC_HW_FORCEFASTCLK, u8) = mac->forcefastclk;
 	FIELD(wlc_hw, WLC_HW_SBCLK, u8) = mac->sbclk;

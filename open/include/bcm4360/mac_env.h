@@ -227,4 +227,16 @@ void bcm4360_bmac_env_dma_txsuspend(struct bcm4360_mac *mac, u32 fifo);	/* slot 
 void bcm4360_bmac_env_dma_txresume(struct bcm4360_mac *mac, u32 fifo);	/* slot 0x28 */
 bool bcm4360_bmac_env_dma_txsuspended(struct bcm4360_mac *mac, u32 fifo);	/* slot 0x30 */
 
+/* --- Bluetooth coexistence (bmac-run.md R3; task bmac-btc) --- */
+
+/* backplane (spec chip) */
+void bcm4360_bmac_env_eci_notify_bt(struct bcm4360_mac *mac, u32 mask, u32 val, u32 interrupt);
+							/* si_eci_notify_bt */
+void bcm4360_bmac_env_seci_upd(struct bcm4360_mac *mac, bool enable);	/* si_seci_upd */
+/* the upper layer's coexistence mode (wlc_btc_mode_get(wlc)) */
+s32 bcm4360_bmac_env_wlc_btc_mode(struct bcm4360_mac *mac);
+/* the PHY of the current band */
+void bcm4360_bmac_env_phy_set_femctrl_bt_wlan_ovrd(struct bcm4360_mac *mac, s8 sw);
+							/* wlc_phy_set_femctrl_bt_wlan_ovrd */
+
 #endif
