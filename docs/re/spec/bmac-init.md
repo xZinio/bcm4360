@@ -1430,6 +1430,12 @@ accesses); the start sequence B3 and everything else is repeated.
 
 ### D. Attach, detach and chip validation
 
+**D1, D2 and D4 are superseded by [`bmac-attach.md`](bmac-attach.md)**
+(complete and implementable; its "Corrections" lists what is wrong below, for
+example D2 13.2: bit 31 of the MAC capabilities is not cleared on revision
+42, and the third argument of `wlc_phy_attach` is the band type). D3 stays
+valid (and is implemented). The text below is kept for reference.
+
 #### D1. wlc_hw_attach (wlc_hw.c, .text+0x0798ff, 241 bytes), wlc_hw_detach (.text+0x079884, 123 bytes), names original
 
 `wlc_hw_attach(wlc, osh, unit, &err)` allocates the hardware state and returns
