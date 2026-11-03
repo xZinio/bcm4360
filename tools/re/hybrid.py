@@ -226,6 +226,12 @@ class Run:
             m.w8(m.r64(d.wlc) + PUB_HW_UP, 0)
             m.call('si_pci_sleep', m.r64(m.r64(d.wlc) + PUB_SIH))
             r = 0
+        elif what == 'fatal':
+            # what the driver does after a fatal error of the core (a FIFO
+            # error, a DMA error): wlc_fatal_error -> the glue's wl_init ->
+            # wlc_reset, wlc_init - while up, possibly associated
+            m.call('wlc_fatal_error', d.wlc)
+            r = 0
         elif what == 'resume':
             r = s32(m.call('wlc_up', d.wlc))           # wl_resume: wl_up
         elif word == 'radio':
@@ -458,7 +464,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('cmd', choices=('build', 'check', 'share', 'selftest', 'srom', 'chan',
-                                    'iovar', 'small', 'rate', 'cca', 'dma'))
+                                    'iovar', 'small', 'rate', 'cca', 'dma', 'stf'))
     ap.add_argument('--model', action='store_true',
                     help='chan, iovar: compare the object with the Python model of the '
                          'specification (coordinator) instead of the hybrid core')
@@ -497,6 +503,9 @@ def main():
     if ns.cmd == 'cca':
         import cca_scenarios
         return 1 if cca_scenarios.cca_check(off, ns.show, on=on) else 0
+    if ns.cmd == 'stf':
+        import stf_scenarios
+        return 1 if stf_scenarios.stf_check(off, ns.show, on=on) else 0
     if ns.cmd == 'dma':
         import dma_scenarios
         return 1 if dma_scenarios.dma_check(off, ns.show, on=on) else 0

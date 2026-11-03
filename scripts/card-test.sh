@@ -9,6 +9,7 @@
 #                   [--no-capture] [--no-24] [--suspend] [--hotspot NAME] [--gap SEC]
 #                   [--extra PARAMS] [--no-off] [--confirm PARAMS]
 #                   [--captures "NAME:PARAMS;NAME:PARAMS"] [--def-repeat N]
+#                   [--quick "NAME:PARAMS;NAME:PARAMS"]
 #
 # --extra adds module parameters to the stages def and phy (e.g. "open_pmu=0"
 # to test the open PHY while the PMU layer is under suspicion); --no-off
@@ -16,6 +17,10 @@
 # (e.g. to confirm a failure the bisection found); --captures replaces the
 # default recordings ("broadcom:<every switch off>;openphy:open_phy=1");
 # --def-repeat loads the defaults N times in all (intermittent failures).
+# --quick replaces all stages by a short matrix: for each configuration, a
+# load, two radio switches (rfkill, as NetworkManager's "radio off/on"), then
+# a measurement (throughput both ways, then a scan) and a minute's watch; a
+# failure there is recorded and the next configuration's load goes on.
 # Every swap also reads the card's identity and PMU registers
 # (peek-on-target.py) 20 s after loading, into peek-LABEL.txt.
 #
@@ -71,6 +76,7 @@ hotspot=
 gap=90
 extra=
 def_repeat=1
+quick=
 skip_off=0
 confirm=
 captures=
@@ -90,6 +96,7 @@ while [ $# -gt 0 ]; do
 	--confirm) confirm=$2; shift 2 ;;
 	--captures) captures=$2; shift 2 ;;
 	--def-repeat) def_repeat=$2; shift 2 ;;
+	--quick) quick=$2; shift 2 ;;
 	*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
 done
@@ -575,6 +582,29 @@ t_start=$(date +%s)
 
 say "----- base: the installed driver -----"
 measure base
+
+# the matrix of --quick: the step that fails ends that configuration only;
+# the whole configuration counts as busy for the guard (6 minutes), and the
+# next load recovers the card
+if [ -n "$quick" ]; then
+	IFS=';' read -r -a qlist <<< "$quick"
+	for q in "${qlist[@]}"; do
+		ql=${q%%:*}
+		qp=${q#*:}
+		[ "$qp" = ALLOFF ] && qp=$ALL_OFF
+		say "----- quick $ql: ${qp:-defaults} -----"
+		busy
+		if swap "$qp" "$ql"; then
+			busy
+			cycle "$ql-radio-1" radio_off_on && busy &&
+				cycle "$ql-radio-2" radio_off_on && busy &&
+				measure "$ql-load" && watch_link 60 "$ql-load" && measure "$ql-after"
+		fi
+		idle
+	done
+	say "RESULT: quick matrix done ($(($(date +%s) - t_start)) s)"
+	exit 0
+fi
 
 say "----- peek: identity of the card -----"
 (cd "$out" && timeout 60 python3 -I "$root/tools/re/peek-on-target.py" > "$out/peek.txt" 2> "$out/peek.err")
