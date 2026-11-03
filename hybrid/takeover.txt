@@ -517,3 +517,14 @@ take wlc_rateset_mcs_build
 take wlc_rateset_bw_mcs_filter
 take wlc_rateset_copy
 take wlc_rate_rspec_reference_rate
+
+# --- channel statistics (hybrid/cca.c -> open/lib/cca.c, docs/re/spec/cca-stf.md part 1,
+# switch open_cca): the whole of wlc_cca.c; its module functions (down, watchdog,
+# iovar handler) have no symbols and are reached through the module table
+take wlc_cca_attach
+take wlc_cca_detach
+take cca_stats_upd
+take cca_stats_tsf_upd
+take cca_query_stats
+take wlc_cca_get_chanspec
+use wlc_read_tsf

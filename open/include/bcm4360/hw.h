@@ -46,6 +46,8 @@ u32 osl_pci_read_config(void *osh, unsigned int offset, unsigned int size);
 void osl_pci_write_config(void *osh, unsigned int offset, unsigned int size,
 			  unsigned int val);
 void osl_delay(unsigned int usec);
+/* milliseconds since the system started (wraps) */
+unsigned int osl_sysuptime(void);
 void *osl_malloc(void *osh, unsigned int size);
 void osl_mfree(void *osh, void *addr, unsigned int size);
 void *osl_memset(void *d, int c, size_t n);
