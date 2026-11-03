@@ -9,7 +9,7 @@
 #                   [--no-capture] [--no-24] [--suspend] [--hotspot NAME] [--gap SEC]
 #                   [--extra PARAMS] [--no-off] [--confirm PARAMS]
 #                   [--captures "NAME:PARAMS;NAME:PARAMS"] [--def-repeat N]
-#                   [--quick "NAME:PARAMS;NAME:PARAMS"]
+#                   [--quick "NAME:PARAMS;NAME:PARAMS"] [--cycles N] [--no-measure]
 #
 # --extra adds module parameters to the stages def and phy (e.g. "open_pmu=0"
 # to test the open PHY while the PMU layer is under suspicion); --no-off
@@ -21,6 +21,8 @@
 # load, two radio switches (rfkill, as NetworkManager's "radio off/on"), then
 # a measurement (throughput both ways, then a scan) and a minute's watch; a
 # failure there is recorded and the next configuration's load goes on.
+# --cycles sets the number of radio switches per configuration (default 2),
+# --no-measure leaves out the measurement after them.
 # Every swap also reads the card's identity and PMU registers
 # (peek-on-target.py) 20 s after loading, into peek-LABEL.txt.
 #
@@ -77,6 +79,8 @@ gap=90
 extra=
 def_repeat=1
 quick=
+cycles=2
+measure_after=1
 skip_off=0
 confirm=
 captures=
@@ -97,6 +101,8 @@ while [ $# -gt 0 ]; do
 	--captures) captures=$2; shift 2 ;;
 	--def-repeat) def_repeat=$2; shift 2 ;;
 	--quick) quick=$2; shift 2 ;;
+	--cycles) cycles=$2; shift 2 ;;
+	--no-measure) measure_after=0; shift ;;
 	*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
 done
@@ -596,9 +602,16 @@ if [ -n "$quick" ]; then
 		busy
 		if swap "$qp" "$ql"; then
 			busy
-			cycle "$ql-radio-1" radio_off_on && busy &&
-				cycle "$ql-radio-2" radio_off_on && busy &&
+			passed=0
+			for k in $(seq 1 "$cycles"); do
+				cycle "$ql-radio-$k" radio_off_on || break
+				busy
+				passed=$k
+			done
+			say "CYCLES $ql: $passed of $cycles radio switches reconnected"
+			if [ "$passed" -eq "$cycles" ] && [ "$measure_after" -eq 1 ]; then
 				measure "$ql-load" && watch_link 60 "$ql-load" && measure "$ql-after"
+			fi
 		fi
 		idle
 	done
