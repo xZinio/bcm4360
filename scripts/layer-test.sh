@@ -42,7 +42,7 @@ done
 [ "$(id -u)" -eq 0 ] || { echo "layer-test.sh must run as root" >&2; exit 2; }
 
 # every switch of the hybrid build (hybrid/card.c and the adapters)
-layers="pmu access mac utils clm ppr srom si dma phy"
+layers="pmu access mac utils clm ppr srom si dma chan iovar phy"
 all_off=
 for l in $layers; do all_off="$all_off open_$l=0"; done
 

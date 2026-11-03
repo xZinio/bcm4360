@@ -97,6 +97,8 @@ attach, up, nine channel changes, watchdog, down, up, down, detach:
 | the same + the open AC-PHY (`open_phy=1`) | 107,732 bytes (53.8 %) | 98,356 bytes | **93.3 %** |
 | + MAC clocks/reset/initialisation/up and down/channel and band/run time/coexistence, backplane, DMA engines (2026-11-02) | 160,443 bytes (80.1 %) | 74,069 bytes | **92.9 %** |
 | the same + the open AC-PHY (`open_phy=1`) | 88,970 bytes (44.4 %) | 127,190 bytes | **95.3 %** |
+| + chanspec helpers and channel validity, the iovar dispatcher (2026-11-03) | 158,509 bytes (79.1 %) | 77,249 bytes | **95.0 %** |
+| the same + the open AC-PHY (`open_phy=1`) | 87,040 bytes (43.4 %) | 130,446 bytes | **97.8 %** |
 
 The last column counts every execution of a basic block: the register access
 primitives and the board-variable lookup (`getvar`, about a fifth of all

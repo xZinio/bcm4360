@@ -48,6 +48,8 @@ was compared there.
 | DMA engines | `open_dma` | on | `dma_attach` returns an open engine whose function table (49 slots) is the adapter's; `dma_addrwidth` | `dma.c` -> `open/mac/dma.c` | [bmac-data](../docs/re/spec/bmac-data.md) section 1 |
 | per-rate power container | `open_ppr` | on | all 50 `ppr_*` functions of `wlc_ppr.c` (the open PHY's transmit power reaches them too) | `ppr.c` -> `open/lib/ratepwr.c` | [ppr](../docs/re/spec/ppr.md) |
 | board variables from SROM/OTP | `open_srom` | on | `srom_var_init` (PCI: SROM read and CRC, OTP and NVRAM fall-backs, the revision-11 conversion, the variable buffer), `srom_read`; the backplane, OTP and NVRAM functions they call stay Broadcom's | `srom.c` -> `open/chip/srom.c` | [srom-otp](../docs/re/spec/srom-otp.md) |
+| chanspecs, channel validity | `open_chan` | on | 13: the chanspec helpers of `bcmwifi_channels.c` (`wf_chspec_malformed`, `wf_chspec_ctlchan`, `wf_chspec_ctlchspec`, `wf_chspec_primary40_chspec`, `wf_chspec_80`, `wf_channel2mhz`) and the validity checks of `wlc_channel.c` (`wlc_valid_chanspec`, `wlc_valid_chanspec_db`, `wlc_valid_channel20*`, `wlc_valid_40/80chanspec_in_band`); the channel manager's state and the database stay Broadcom's/the CLM layer's | `chan.c` -> `open/lib/channel.c` | [channel](../docs/re/spec/channel.md) |
+| driver variables (iovars) | `open_iovar` | on | `wlc_iovar_op`: the lookup of a variable in the 64 modules' tables and the dispatch to the module (the request check, the BSS configurations and the modules' handlers stay Broadcom's) | `iovar.c` -> `open/lib/iovar.c` | [iovar](../docs/re/spec/iovar.md) |
 | PHY and radio | `open_phy` | **off** | all 79 entry points of the MAC into the PHY (takeover.txt) | `phy.c` -> `open/phy/*` (+ `open/hw/access.c`) | [acphy-api](../docs/re/spec/acphy-api.md) and the `acphy-*` specs |
 | regulatory database | `open_clm` | on | 16 `clm_*` entry points of `wlc_clm.c` (the database stays Broadcom's data) | `clm.c` -> `open/lib/clm.c` | [clm](../docs/re/spec/clm.md) |
 | utilities | `open_utils` | on | 8: `getvar`, `getintvar`, `getintvararray`, `getintvararraysize`, `bcm_strtoul`, `bcm_bitcount`, `hndcrc8`, and Broadcom's PHY's own lookup `phy_getvar` (the global NVRAM, `nvram_get`, stays Broadcom's) | `utils.c` -> `open/lib/utils.c` | [utils](../docs/re/spec/utils.md) |
@@ -71,7 +73,7 @@ takes the module through three configurations, each a run of
 reconnect, checks the link, the gateway, DNS and the kernel log, and goes back
 to the previous driver if anything fails):
 
-1. every switch off (`open_pmu=0 ... open_dma=0`): the hybrid build running
+1. every switch off (`open_pmu=0 ... open_iovar=0`): the hybrid build running
    Broadcom's own functions - tests the build mechanism itself;
 2. the defaults: every layer open except the PHY;
 3. the defaults with the open PHY (`open_phy=1`).
@@ -139,6 +141,8 @@ is the real card.
 | the same + the open PHY (`open_phy=1`) | 89,935 bytes (44.9 %) | 125,760 bytes | **95.3 %** |
 | + MAC Bluetooth coexistence (default) | 160,443 bytes (80.1 %) | 74,069 bytes | **92.9 %** |
 | the same + the open PHY (`open_phy=1`) | 88,970 bytes (44.4 %) | 127,190 bytes | **95.3 %** |
+| + chanspecs and channel validity, driver variables (default, 2026-11-03) | 158,509 bytes (79.1 %) | 77,249 bytes | **95.0 %** |
+| the same + the open PHY (`open_phy=1`) | 87,040 bytes (43.4 %) | 130,446 bytes | **97.8 %** |
 
 With the open PHY switched on, the whole session is identical to the object
 (41,416 accesses: attach, up, nine channel changes in both bands and all
@@ -163,7 +167,7 @@ primitives and the variable lookup are small but run constantly (`getvar`
 alone was about a fifth of everything the driver executes). `check` gives
 "the same" with all layers on and with each switched off; the module builds
 against linux-headers 7.2.11-arch1-1 with GCC 16.2.1 without warnings from
-`open/` or `hybrid/`, and each of the 295 taken functions has exactly one
+`open/` or `hybrid/`, and each of the 309 taken functions has exactly one
 strong definition, the adapter's (layers still being written, staged as
 `hybrid-new*-objs` in `objects.mk`, keep Broadcom's body until they are
 linked).
@@ -182,6 +186,15 @@ with measured IQ powers, the periodic multi-phase calibration, measured
 temperatures, RSSI and noise. The soak runs 73 % of the open PHY's code
 (the rest: front-end overrides of other boards, the debug ioctls and
 iovars, entry points of modes the emulator does not use).
+
+Layers that make no access to the card are compared by their results:
+`python hybrid.py chan` calls the chanspec helpers for all 65,536 chanspecs
+and the validity checks for every channel and bandwidth in 261 states (nine
+countries, both bands, band lock, capability variations) on the object alone
+and on the hybrid core, 2,459,676 calls; `python hybrid.py iovar` gets and
+sets all 405 driver variables (with the `bsscfg:` prefix and odd names too),
+3,054 calls, comparing results, value buffers and every access. Both: the
+same, also with their switch off.
 
 `python hybrid.py srom` attaches the driver from ten different cards
 (SROM images, a blank SROM, the image in the OTP, a blank OTP) on the object

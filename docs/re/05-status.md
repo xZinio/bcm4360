@@ -22,11 +22,13 @@ band, the run-time functions, Bluetooth coexistence), the utilities
 of `bcmutils.c` and Broadcom's PHY's variable lookup (8), the regulatory
 database interpreter (16 of `wlc_clm.c`), the per-rate transmit power
 container (all 50 of `wlc_ppr.c`), the board variables from SROM/OTP
-(`srom_var_init`), the backplane functions (34 `si_*`) and the DMA engines are
-taken over and verified identical over a full session, with each layer's
-fallback too. **As of 2026-11-02, 92.9% of everything the driver executes in
-that session is open code by default** (95.3% with the open PHY switched on,
-when the Broadcom code that runs is 44.4% of the object alone). The default
+(`srom_var_init`), the backplane functions (34 `si_*`), the DMA engines, and
+(2026-11-03) the chanspec helpers and channel validity checks (13) and the
+iovar dispatcher (`wlc_iovar_op`) are taken over and verified identical over a
+full session, with each layer's fallback too. **As of 2026-11-03, 95.0% of
+everything the driver executes in that session is open code by default**
+(97.8% with the open PHY switched on, when the Broadcom code that runs is
+43.4% of the object alone). The default
 layers are also identical to the object over `tools/re/phy_soak.py`'s long
 session (every channel and bandwidth, association stand-ins with the full
 calibration on four channels, long watchdog runs, measured temperatures, IQ

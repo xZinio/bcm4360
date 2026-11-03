@@ -20,17 +20,13 @@ hybrid-objs := hybrid/card.o \
                hybrid/ppr.o open/lib/ratepwr.o \
                hybrid/srom.o open/chip/srom.o \
                hybrid/si.o open/chip/si.o \
-               hybrid/dma.o open/mac/dma.o
+               hybrid/dma.o open/mac/dma.o \
+               hybrid/chan.o open/lib/channel.o \
+               hybrid/iovar.o open/lib/iovar.o
 
 # Being written, one variable hybrid-new*-objs per layer: each is linked by
 # tools/re/hybrid.py for the emulator once ALL its sources exist, not yet in
 # the module.
-
-# chanspec helpers and channel validity (docs/re/spec/channel.md, switch open_chan)
-hybrid-new-chan-objs := hybrid/chan.o open/lib/channel.o
-
-# iovar dispatcher (docs/re/spec/iovar.md, switch open_iovar)
-hybrid-new-iovar-objs := hybrid/iovar.o open/lib/iovar.o
 
 # The PHY layer (hybrid/phy.c, switch open_phy, default off): the adapter and
 # the open PHY (its register access, open/hw/access.o, is in the list above).
