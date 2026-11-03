@@ -51,7 +51,7 @@ MAC_GROUPS = {'mac_ctrl': 0x001, 'mac_mem': 0x002, 'mac_clk': 0x004, 'mac_init':
               'mac_updown': 0x010, 'mac_chan': 0x020, 'mac_runtime': 0x040, 'mac_btc': 0x080,
               'mac_sem': 0x100}
 LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils', 'clm', 'ppr', 'srom', 'si', 'dma',
-          'chan', 'iovar', 'nvram', 'rate', 'cca', 'stf')   # the switches bcm4360_open_<layer>
+          'chan', 'iovar', 'nvram', 'rate', 'cca', 'stf', 'stf_policy')   # bcm4360_open_<layer>
 
 CHANNELS = ['1', '6', '11', '36', '36/40', '36/80', '149/80', '157/40', '165']
 
@@ -91,7 +91,16 @@ UNDEFINED_TBL = {('W', 'tbl.14', 0x33, 6): 0xffffffff}
 # per-rate power offsets): run on the object alone with the stack filled 0x00
 # or 0xaa at its entry, it writes different values to SHM(0x5d4)/SHM(0x5d6)
 # (1 or 3) and makes a different number of accesses.
-STACK_ZEROED = ('wlc_update_txppr_offset',)
+#
+# wlc_beacon_phytxctl (wlc.c, the beacon's PHY control words in SHM(0xcc..
+# 0xd0)): its second word depends on stack it never wrote. Found by
+# stf_scenarios.py (2026-11-03): with the open spatial policy calling it, the
+# word came out 0x00d0/0x00d8 where the object wrote 0x0008/0x0170, the
+# arguments and every state compared being equal; zeroing the stack at the
+# entry of wlc_beacon_phytxctl (or of wlc_beacon_phytxctl_txant_upd, called
+# right before it) makes all 3,000 cases identical. A station sends no
+# beacons, so the word has no effect on this driver.
+STACK_ZEROED = ('wlc_update_txppr_offset', 'wlc_beacon_phytxctl')
 
 
 def staged_groups():

@@ -537,4 +537,19 @@ use wlc_read_tsf
 take wlc_update_txppr_offset
 use wlc_ol_curpwr_upd
 use wlc_stf_txchain_set
-use wlc_stf_spatial_policy_set
+# the spatial policy (transmit cores per rate class), the core words in shared
+# memory and the single-stream mode (cca-stf.md part 2, the same switch)
+take wlc_stf_spatial_policy_set
+take wlc_stf_spatialpolicy_set_complete
+take wlc_stf_txcore_shmem_write
+take wlc_stf_ss_update
+take wlc_stf_ss_algo_channel_get
+use wlc_bmac_txant_set
+use wlc_valid_rate
+use wlc_suspend_mac_and_wait
+use wlc_enable_mac
+use wlc_beacon_phytxctl_txant_upd
+use wlc_beacon_phytxctl
+use wlc_txc_upd
+use wlc_write_shm
+use wlc_mhf
