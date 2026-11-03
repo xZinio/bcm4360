@@ -181,6 +181,7 @@ def run(directory, trace=None, srom_out=None, quiet=False):
         try:
             d.attach()
             if d.wlc:
+                d.glue()
                 d.up()
         except EmuError as e:
             err = e

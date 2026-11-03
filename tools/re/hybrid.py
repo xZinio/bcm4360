@@ -32,12 +32,13 @@ import argparse
 import collections
 import os
 import re
+import struct
 import subprocess
 import sys
 
 import ab
 from blob import BASES, Blob
-from emu import EmuError
+from emu import EmuError, s32
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = ab.ROOT
@@ -46,9 +47,24 @@ OUT = os.environ.get('HYBRID_OUT') or os.path.join(ROOT, 're-out', 'hybrid')
 BLOB = os.path.join(ROOT, 'lib', 'wlc_hybrid.o_shipped')
 CORE = os.path.join(OUT, 'core.o')
 LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils', 'clm', 'ppr', 'srom', 'si', 'dma',
-          'chan', 'iovar', 'nvram', 'rate', 'cca')   # the switches bcm4360_open_<layer>
+          'chan', 'iovar', 'nvram', 'rate', 'cca', 'stf')   # the switches bcm4360_open_<layer>
 
 CHANNELS = ['1', '6', '11', '36', '36/40', '36/80', '149/80', '157/40', '165']
+
+# What the real driver does that SESSION leaves out (2026-11-03 card tests):
+# the glue's settings after attach, MPC left on (the radio is powered down
+# while the card is idle), scans, interface down/up, suspend/resume and the
+# radio switch. src/include/wlioctl.h, wlc_pub.h (docs/re/spec/bmac-init.md).
+WLC_SET_RADIO = 38
+WLC_SET_PASSIVE_SCAN = 49
+WLC_SCAN = 50
+WLC_E_SCAN_COMPLETE = 69
+PUB_HW_UP = 0x40
+PUB_SIH = 0x100
+REAL = (['attach', 'glue', 'up', 'wait 2', 'scan', 'wait 1', 'scan passive', 'wait 15',
+         'radio off', 'wait 3', 'radio on', 'wait 3', 'scan', 'ifdown', 'wait 5', 'ifup',
+         'wait 3', 'scan', 'suspend', 'resume', 'wait 3', 'scan', 'mpc 0', '36/80',
+         'watchdog', 'mpc 1', 'wait 30', 'scan', 'down', 'detach'])
 SESSION = (['attach', 'mpc 0', 'up'] + CHANNELS +
            ['watchdog', 'down', 'up', '36/80', 'watchdog', 'down', 'detach'])
 
@@ -185,8 +201,38 @@ class Run:
     def step(self, what):
         from run_chan import chanspec
         d, m = self.d, self.m
+        word, _, arg = what.partition(' ')
         if what == 'attach':
             r = 0 if d.attach() else d.err or -1
+        elif what == 'glue':
+            d.glue()
+            r = 0
+        elif word == 'mpc':
+            r = d.iovar_setint('mpc', int(arg))
+        elif word == 'wait':
+            # the clock advances, every timer due in that time fires
+            m.os.run_timers(m, m.os.now_us // 1000 + int(float(arg) * 1000))
+            r = 0
+        elif word == 'scan':
+            r = self.scan(arg == 'passive')
+        elif what == 'ifdown':
+            r = s32(m.call('wlc_down', d.wlc))         # wl_down of the glue
+        elif what == 'ifup':
+            r = s32(m.call('wlc_up', d.wlc))           # wl_up of the glue
+        elif what == 'suspend':
+            # wl_suspend of the glue (no offload engine): wl_down, pub->hw_up
+            # cleared so that the resume powers the hardware up again, PCI sleep
+            m.call('wlc_down', d.wlc)
+            m.w8(m.r64(d.wlc) + PUB_HW_UP, 0)
+            m.call('si_pci_sleep', m.r64(m.r64(d.wlc) + PUB_SIH))
+            r = 0
+        elif what == 'resume':
+            r = s32(m.call('wlc_up', d.wlc))           # wl_resume: wl_up
+        elif word == 'radio':
+            # WLC_SET_RADIO as the glue's rfkill and set_tx_power send it:
+            # mask << 16 | value, bit 0 = software disable
+            v = (1 << 16) | (1 if arg == 'off' else 0)
+            r = d.ioctl(WLC_SET_RADIO, struct.pack('<I', v))[0]
         elif what == 'mpc 0':
             r = d.iovar_setint('mpc', 0)
         elif what == 'up':
@@ -202,6 +248,25 @@ class Run:
             r = d.iovar_setint('chanspec', chanspec(m, what))
         self.results.append((what, r))
         return r
+
+    def scan(self, passive):
+        """A broadcast scan as the glue's cfg80211 scan asks for it
+        (WLC_SET_PASSIVE_SCAN, WLC_SCAN with an empty SSID), run until the
+        scan-complete event or 30 s: (results of both ioctls, the event's
+        status or None)."""
+        d, m = self.d, self.m
+        r1 = d.ioctl(WLC_SET_PASSIVE_SCAN, struct.pack('<i', 1 if passive else 0))[0]
+        n0 = len(m.os.events)
+        r2 = d.ioctl(WLC_SCAN, bytes(36))[0]
+        status = None
+        for _ in range(300):
+            for e in m.os.events[n0:]:
+                if struct.unpack_from('<I', e, 4)[0] == WLC_E_SCAN_COMPLETE:
+                    status = struct.unpack_from('<I', e, 8)[0]
+            if status is not None:
+                break
+            m.os.run_timers(m, m.os.now_us // 1000 + 100)
+        return (r1, r2, status)
 
     def session(self, steps=SESSION, stop_on_error=True):
         """Run the steps. With stop_on_error False an error of the emulation
@@ -230,10 +295,10 @@ class Run:
         return out
 
 
-def check(off=(), show=20, patch=None, on=()):
+def check(off=(), show=20, patch=None, on=(), steps=SESSION):
     core = build(quiet=True)
-    ref = Run().session()
-    got = Run(core, off=off, patch=patch, on=on).session(stop_on_error=False)
+    ref = Run().session(steps)
+    got = Run(core, off=off, patch=patch, on=on).session(steps, stop_on_error=False)
     want, have = ref.logical(), got.logical()
     bad = 0
     if got.error:
@@ -257,7 +322,7 @@ def check(off=(), show=20, patch=None, on=()):
         bad += 1
         ab.compare(want, have, show)
     print('session (%d steps), switched on: %s, off: %s: %d accesses of the object, %d of '
-          'the hybrid core, %s' % (len(SESSION), ', '.join(on) or '-', ', '.join(off) or '-',
+          'the hybrid core, %s' % (len(steps), ', '.join(on) or '-', ', '.join(off) or '-',
                                    len(want), len(have), 'the same' if not bad else 'DIFFERENT'))
     return bad
 
@@ -393,13 +458,17 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('cmd', choices=('build', 'check', 'share', 'selftest', 'srom', 'chan',
-                                    'iovar', 'small', 'rate', 'cca'))
+                                    'iovar', 'small', 'rate', 'cca', 'dma'))
     ap.add_argument('--model', action='store_true',
                     help='chan, iovar: compare the object with the Python model of the '
                          'specification (coordinator) instead of the hybrid core')
     ap.add_argument('--off', default='', help='layers to switch off: ' + ', '.join(LAYERS))
     ap.add_argument('--on', default='', help='layers to switch on: ' + ', '.join(LAYERS))
     ap.add_argument('--show', type=int, default=20)
+    ap.add_argument('--steps', default='',
+                    help='check: comma-separated steps instead of the session, or "real" '
+                         '(what the real driver does besides: scans, MPC, radio switch, '
+                         'interface down/up, suspend/resume)')
     ns = ap.parse_args()
     if ns.cmd == 'build':
         print(build())
@@ -428,7 +497,15 @@ def main():
     if ns.cmd == 'cca':
         import cca_scenarios
         return 1 if cca_scenarios.cca_check(off, ns.show, on=on) else 0
-    return 1 if check(off, ns.show, on=on) else 0
+    if ns.cmd == 'dma':
+        import dma_scenarios
+        return 1 if dma_scenarios.dma_check(off, ns.show, on=on) else 0
+    steps = SESSION
+    if ns.steps == 'real':
+        steps = REAL
+    elif ns.steps:
+        steps = ns.steps.split(',')
+    return 1 if check(off, ns.show, on=on, steps=steps) else 0
 
 
 if __name__ == '__main__':

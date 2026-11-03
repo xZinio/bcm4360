@@ -528,3 +528,13 @@ take cca_stats_tsf_upd
 take cca_query_stats
 take wlc_cca_get_chanspec
 use wlc_read_tsf
+
+# --- transmit power offsets of the chains (hybrid/stf.c -> open/lib/stf.c,
+# docs/re/spec/cca-stf.md part 2, switch open_stf): wlc_update_txppr_offset,
+# called by the PHY's service wlapi_high_update_txppr_offset after every
+# computation of the power targets; its callback sub_172c6c and the spatial
+# policy of the band (sub_174cd5) are part of the open function
+take wlc_update_txppr_offset
+use wlc_ol_curpwr_upd
+use wlc_stf_txchain_set
+use wlc_stf_spatial_policy_set

@@ -65,6 +65,18 @@ class Driver:
             self.pub = m.call('wlc_pub', self.wlc)
         return self.wlc
 
+    def glue(self):
+        """What the Linux glue does after wlc_attach and before the interface
+        comes up (src/wl/sys/wl_linux.c, wl_attach, in this order; the
+        module parameter nompc is 0, so "mpc" is left alone). Recordings of
+        the real driver (mmiotrace.py replay) contain these accesses."""
+        self.iovar_setint('scan_passive_time', 170)
+        self.iovar_setint('qtxpower', 23 * 4)
+        self.iovar_setint('leddc', 0xa0000)
+        self.ioctl(86, struct.pack('<i', 2))        # WLC_SET_PM, PM_FAST
+        self.iovar_setint('vlan_mode', 0)
+        self.ioctl(20, struct.pack('<i', 1))        # WLC_SET_INFRA, 1
+
     @property
     def err(self):
         return s32(self.m.r32(self.perr))
