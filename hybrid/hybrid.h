@@ -85,6 +85,14 @@ void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac);
 void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac);
 
 /*
+ * hybrid/si.c: the open view of a backplane handle of the object (struct
+ * bcm4360_si, bcm4360/si.h); false if Broadcom's function must run (switch
+ * open_si off, not an AXI backplane on PCI of a BCM4360-family chip).
+ */
+struct bcm4360_si;
+bool hyb_si_view(void *sih, struct bcm4360_si *si);
+
+/*
  * Switches, one per layer: true selects the open code. They are module
  * parameters of bcm4360.ko (read when a card is attached), and variables
  * that the emulator sets in its tests.
@@ -101,5 +109,6 @@ extern bool bcm4360_open_si;
 extern bool bcm4360_open_dma;
 extern bool bcm4360_open_chan;
 extern bool bcm4360_open_iovar;
+extern bool bcm4360_open_nvram;
 
 #endif

@@ -268,16 +268,39 @@ def install(m):
     D('osl_dma_map', 6, lambda m, osh, va, size, direction, p, dmah: va & 0xffffffff)
     D('osl_dma_unmap', 4, lambda m, osh, pa, size, direction: 0)
 
-    # ---- files: none exist (the names asked for are kept in os.images)
+    # ---- files: none exist unless a test puts them into os.files ({name:
+    # bytes}); the names asked for are kept in os.images. An open file is a
+    # small emulated block (its handle) with the read position.
     os.images = []
+    os.files = {}
+    os.open_files = {}
 
     def osl_os_open_image(m, name):
-        os.images.append((m.string(name), m.caller()))
+        name = m.string(name)
+        os.images.append((name, m.caller()))
+        if name not in os.files:
+            return 0
+        h = m.malloc(16, fill=0)
+        os.open_files[h] = [os.files[name], 0]
+        return h
+
+    def osl_os_get_image_block(m, buf, n, image):
+        n &= 0xffffffff
+        f = os.open_files.get(image)
+        if f is None or n & 0x80000000:
+            return 0
+        chunk = f[0][f[1]:f[1] + n]
+        f[1] += len(chunk)
+        m.write(buf, chunk)
+        return len(chunk)
+
+    def osl_os_close_image(m, image):
+        os.open_files.pop(image, None)
         return 0
 
     D('osl_os_open_image', 1, osl_os_open_image)
-    D('osl_os_get_image_block', 3, lambda m, buf, n, image: 0)
-    D('osl_os_close_image', 1, lambda m, image: 0)
+    D('osl_os_get_image_block', 3, osl_os_get_image_block)
+    D('osl_os_close_image', 1, osl_os_close_image)
 
     # ---- packets
     def osl_pktget(m, osh, length):

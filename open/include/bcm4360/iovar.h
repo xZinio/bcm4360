@@ -46,6 +46,34 @@ struct bcm4360_iovar_wlc {
 s32 bcm4360_iovar_op(const struct bcm4360_iovar_wlc *w, const char *name, void *params,
 		     s32 p_len, void *arg, s32 len, bool set, void *wlcif);
 
+/*
+ * iovar.md, "Module register and unregister": a slot of the module table
+ * (64 of them), the layout the caller's other code reads. The functions are
+ * stored, not called, so their type does not matter here.
+ */
+typedef void (*bcm4360_module_fn)(void);
+
+struct bcm4360_module {
+	char name[32];
+	const struct bcm4360_iovar *iovars;
+	void *hdl;
+	bcm4360_module_fn watchdog_fn;
+	bcm4360_module_fn iovar_fn;
+	bcm4360_module_fn up_fn;
+	bcm4360_module_fn down_fn;
+};
+
+#define BCM4360_BCME_NORESOURCE		(-22)
+#define BCM4360_BCME_NOTFOUND		(-30)
+
+/* wlc_module_register; `table`: the 64 slots */
+s32 bcm4360_module_register(struct bcm4360_module *table, const struct bcm4360_iovar *iovars,
+			    const char *name, void *hdl, bcm4360_module_fn iovar_fn,
+			    bcm4360_module_fn watchdog_fn, bcm4360_module_fn up_fn,
+			    bcm4360_module_fn down_fn);
+/* wlc_module_unregister; `table` NULL: the caller has no wlc (step 1) */
+s32 bcm4360_module_unregister(struct bcm4360_module *table, const char *name, void *hdl);
+
 /* services of the caller (iovar.md, Scope) */
 
 /* the iovar table of module slot `slot` (0..63), NULL for an empty slot */

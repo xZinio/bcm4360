@@ -49,8 +49,9 @@ MODULE_PARM_DESC(open_si, "backplane: core selection, register access, wrapper, 
 typedef u32 (*intr_off_fn)(void *arg);
 typedef void (*intr_restore_fn)(void *arg, u32 state);
 
-/* fills the open view of the backplane; false: Broadcom's function must run */
-static bool si_view(void *sih, struct bcm4360_si *si)
+/* fills the open view of the backplane; false: Broadcom's function must run
+ * (also used by the other backplane adapters, hybrid.h) */
+bool hyb_si_view(void *sih, struct bcm4360_si *si)
 {
 	const struct hyb_si_pub *pub = sih;
 	struct hyb_card *card;
@@ -131,7 +132,7 @@ type si_##name params							\
 {									\
 	struct bcm4360_si si;						\
 									\
-	if (!si_view(sih, &si))						\
+	if (!hyb_si_view(sih, &si))					\
 		return bcm4360_blob_si_##name blob_args;		\
 	return bcm4360_si_##name open_args;				\
 }
@@ -140,7 +141,7 @@ void si_##name params							\
 {									\
 	struct bcm4360_si si;						\
 									\
-	if (!si_view(sih, &si)) {					\
+	if (!hyb_si_view(sih, &si)) {				\
 		bcm4360_blob_si_##name blob_args;			\
 		return;							\
 	}								\

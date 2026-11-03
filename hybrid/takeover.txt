@@ -43,8 +43,7 @@ take wlc_phy_table_write_acphy
 take wlc_phy_table_read_acphy
 take wlc_bmac_read_shm
 take wlc_bmac_write_shm
-use tcm_sem_enter
-use tcm_sem_exit
+# (tcm_sem_enter/exit, which the shared-memory functions call: taken over below)
 
 # --- MAC control (hybrid/mac.c -> open/mac, docs/re/spec/bmac-init.md A1-A9)
 take wlc_bmac_mctrl
@@ -121,7 +120,7 @@ take wlc_bmac_down_finish
 take wlc_bmac_hw_down
 take wlc_bmac_reset
 take wlc_bmac_validate_chip_access
-use si_survive_perst_war
+# (si_survive_perst_war: taken over below, PCIe bridge)
 use si_clkctl_init
 use si_pcie_ltr_war
 use si_pci_fixcfg
@@ -175,7 +174,7 @@ take bcm_strtoul
 take bcm_bitcount
 take hndcrc8
 take phy_getvar
-use nvram_get
+# (nvram_get, the fallback of getvar: taken over below)
 
 # --- regulatory database (hybrid/clm.c -> open/lib/clm.c, docs/re/spec/clm.md)
 take clm_init
@@ -405,7 +404,7 @@ use si_chipcontrl_srom4360
 use otp_read_region
 use si_getdevpathvar
 use si_getnvramflvar
-use nvram_getall
+# (nvram_getall: taken over below)
 use si_devpath
 use si_coded_devpathvar
 use si_osh
@@ -479,3 +478,30 @@ take wlc_valid_chanspec_db
 take wlc_iovar_op
 use wlc_iovar_check
 use wlc_bsscfg_find
+
+# --- the semaphore shared with the offload firmware of the on-chip ARM
+# (hybrid/mac_sem.c -> open/mac/offload.c, docs/re/spec/bmac-init.md A8,
+# switch open_mac). Its largest spin count is a static variable of
+# wlc_offloads.c without a symbol, which the offload code reads too.
+name tcm_sem_max_spins .bss 0x3004
+take tcm_sem_enter
+take tcm_sem_exit
+
+# --- the board variables of nvram.txt (hybrid/nvram.c -> open/chip/nvram.c,
+# docs/re/spec/srom-otp.md "NVRAM", switch open_nvram): every function of
+# nvram_ro.c that reaches its list, which is private to the file
+take nvram_init
+take nvram_append
+take nvram_get
+take nvram_getall
+take nvram_exit
+take nvram_get_global_vars
+
+# --- the module table (hybrid/iovar_mod.c -> open/lib/module.c,
+# docs/re/spec/iovar.md "Module register and unregister", switch open_iovar)
+take wlc_module_register
+take wlc_module_unregister
+
+# --- the PCIe bridge (hybrid/si_perst.c -> open/chip/si_pcie.c, docs/re/spec/chip.md,
+# switch open_si)
+take si_survive_perst_war

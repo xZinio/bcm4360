@@ -54,8 +54,18 @@ int osl_memcmp(const void *a, const void *b, size_t n);
 int osl_strcmp(const char *a, const char *b);
 int osl_strncmp(const char *a, const char *b, unsigned int n);
 int osl_strlen(const char *s);
+char *osl_strncpy(char *d, const char *s, unsigned int n);
 int osl_snprintf(char *buf, size_t n, const char *fmt, ...)
 	__attribute__((format(printf, 3, 4)));
+
+/*
+ * Files of the host (Broadcom's OS layer, src/shared/linux_osl.c): open by
+ * name (NULL if there is no such file), read the next block (bytes read, 0 at
+ * the end), close.
+ */
+void *osl_os_open_image(char *filename);
+int osl_os_get_image_block(char *buf, int len, void *image);
+void osl_os_close_image(void *image);
 
 /*
  * Packets and DMA memory (the DMA engine, docs/re/spec/bmac-data.md): the
@@ -162,6 +172,8 @@ const void *hw_fw_data(struct bcm4360_hw *hw, const char *name, u32 *size);
 #define hw_strcmp(a, b)		osl_strcmp((a), (b))
 #define hw_strncmp(a, b, n)	osl_strncmp((a), (b), (n))
 #define hw_strlen(s)		osl_strlen(s)
+/* strncpy of the OS layer (on Linux 7.2 and later: strscpy_pad) */
+#define hw_strncpy(d, s, n)	osl_strncpy((d), (s), (n))
 /* the kernel's snprintf: at most n - 1 characters and a NUL, result the
  * length the whole text would have; %c of 0 stores a zero byte */
 #define hw_snprintf		osl_snprintf

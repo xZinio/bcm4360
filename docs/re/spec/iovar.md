@@ -110,6 +110,64 @@ Notes:
 * `val_size` for a buffer is taken from `len` before the prefix adjustment
   of step 3.4.
 
+## Module register and unregister
+
+(Coordinator, 2026-11-03, from the disassembly.) The modules of the driver
+enter themselves in the module table when they are attached and leave it
+when they are detached; the dispatcher above, the watchdog and the up/down
+code of `wlc.c` read the table. 29 modules register in the session.
+
+| Function | .text offset | Size | Name |
+|---|---|---|---|
+| `wlc_module_register` | 0x02b504 | 189 | original |
+| `wlc_module_unregister` | 0x035c57 | 109 | original |
+
+Prototypes (public, `src/wl/sys/wlc_pub.h`):
+`int wlc_module_register(wlc_pub_t *pub, const bcm_iovar_t *iovars, const
+char *name, void *hdl, iovar_fn_t iovar_fn, watchdog_fn_t watchdog_fn, up_fn_t
+up_fn, down_fn_t down_fn)` and `int wlc_module_unregister(wlc_pub_t *pub,
+const char *name, void *hdl)`. The first word of `pub` is `wlc`.
+
+### The module slot
+
+The table (`wlc+0x358` points to it) has 64 slots of 0x50 bytes:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0x00 | 32 | name (NUL-terminated; first byte 0 = free slot) |
+| 0x20 | 8 | `iovars` (the iovar table, may be NULL) |
+| 0x28 | 8 | `hdl` (the module's handle) |
+| 0x30 | 8 | `watchdog_fn` |
+| 0x38 | 8 | `iovar_fn` |
+| 0x40 | 8 | `up_fn` |
+| 0x48 | 8 | `down_fn` |
+
+### Procedure: `wlc_module_register`
+
+1. `wlc = *pub` (not checked).
+2. For each slot 0..63 in order: if the first byte of its name is 0, it is
+   the free slot: copy the name into it with the OS layer's
+   `osl_strncpy(slot name, name, 31)` (`strncpy`: at most 31 bytes; if the
+   name is shorter, the rest of the 31 bytes is filled with zeros; byte 31 is
+   not written - the emulator's semantics; the Linux glue implements it with
+   `strscpy_pad` from kernel 7.2 on, which keeps at most 30 characters and a
+   NUL; an implementation calls the same OS function), then store `iovars`,
+   `hdl`, `iovar_fn`, `watchdog_fn`, `up_fn`, `down_fn` in their fields;
+   result 0.
+3. No free slot: result -22 (`BCME_NORESOURCE`), nothing changed.
+
+Nothing checks whether the name is already registered. A module registered
+with an empty name ("") leaves its slot looking free: the next register
+takes the same slot.
+
+### Procedure: `wlc_module_unregister`
+
+1. `wlc = *pub`; if it is NULL: result -30 (`BCME_NOTFOUND`).
+2. For each slot 0..63 in order (free slots too): if `strcmp(slot name,
+   name)` is 0 and the slot's `hdl` equals `hdl`: zero the whole slot (0x50
+   bytes); result 0.
+3. None: result -30.
+
 ## Verification
 
 `tools/re/iovar_scenarios.py` (run as `python hybrid.py iovar`) brings the

@@ -14,6 +14,9 @@ traces have to be the same.
     hybrid.py check [--on L,..] [--off L,..]   the session on both cores, compared
     hybrid.py share                    how much of the code that runs is Broadcom's
     hybrid.py selftest                 a broken open function must be found
+    hybrid.py srom | chan | iovar | small   direct calls of one layer's functions
+                                       on both cores (srom: ten cards; small:
+                                       small_scenarios.py), compared
 
 --on and --off set the switches of layers of the hybrid core (bcm4360_open_<layer>,
 hybrid/hybrid.h), whatever their defaults; switched off, a layer falls back to
@@ -43,7 +46,7 @@ OUT = os.environ.get('HYBRID_OUT') or os.path.join(ROOT, 're-out', 'hybrid')
 BLOB = os.path.join(ROOT, 'lib', 'wlc_hybrid.o_shipped')
 CORE = os.path.join(OUT, 'core.o')
 LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils', 'clm', 'ppr', 'srom', 'si', 'dma',
-          'chan', 'iovar')   # the switches bcm4360_open_<layer>
+          'chan', 'iovar', 'nvram')   # the switches bcm4360_open_<layer>
 
 CHANNELS = ['1', '6', '11', '36', '36/40', '36/80', '149/80', '157/40', '165']
 SESSION = (['attach', 'mpc 0', 'up'] + CHANNELS +
@@ -390,7 +393,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('cmd', choices=('build', 'check', 'share', 'selftest', 'srom', 'chan',
-                                    'iovar'))
+                                    'iovar', 'small'))
     ap.add_argument('--model', action='store_true',
                     help='chan, iovar: compare the object with the Python model of the '
                          'specification (coordinator) instead of the hybrid core')
@@ -416,6 +419,9 @@ def main():
     if ns.cmd == 'iovar':
         import iovar_scenarios
         return 1 if iovar_scenarios.iovar_check(off, ns.show, on=on, model=ns.model) else 0
+    if ns.cmd == 'small':
+        import small_scenarios
+        return 1 if small_scenarios.small_check(off, ns.show, on=on, model=ns.model) else 0
     return 1 if check(off, ns.show, on=on) else 0
 
 

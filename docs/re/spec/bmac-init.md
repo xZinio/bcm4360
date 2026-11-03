@@ -423,6 +423,23 @@ pointer `+0x90` (a structure shared with the ARM) is not 0; then `enter` stores
 stores 0 in `+0x14`. **Without offloads (the normal case and all traces) both
 do nothing.** No register of the card is involved.
 
+Exactly (coordinator, from the code, 2026-11-03), with `S` the shared
+structure and its words read and written as plain 32 bit memory accesses
+(each read done again in every round, in this order):
+
+* `enter`: if there is no `S` (one of the three conditions above fails):
+  nothing. Else: `S+0x14 = 1`, then `S+0x1c = 1`, `n = 0`. Loop: read
+  `S+0x18`; if it is not 1, leave the loop; read `S+0x1c`; if it is not 1,
+  leave the loop; if `n` is 100000, leave the loop; `n = n + 1`; again. After
+  the loop: if `n` is not 0 and `n` is greater than the driver-wide counter
+  `max_spins` (a signed 32 bit static variable of wlc_offloads.c, .bss+0x3004,
+  0 at load, never reset; the offload code reports it), `max_spins = n`.
+  (When the loop ends at the limit `n` is 100000.)
+* `exit`: if there is `S`: `S+0x14 = 0`. Nothing else (`max_spins` is not
+  touched).
+* `tcm_sem_cleanup` (.text+0x07eb9d) is not part of this: it is called only
+  by the wake-on-WLAN code.
+
 #### A9. wlc_bmac_mhf (.text+0x062995, 260 bytes), wlc_bmac_mhf_get (.text+0x05fd8b, 63 bytes), names original
 
 Host flags are five 16 bit words that tell the microcode how to behave. The

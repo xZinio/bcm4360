@@ -1013,7 +1013,10 @@ bytes from `osl_malloc`:
   `n` bytes becomes NUL, `buf[n] = 0` (one byte past the buffer when `n` is
   0x1000), `n += 1`, close the image; `copy = osl_malloc(n)`, copy `n`
   bytes, `nvram_append(sih, copy, n)`. Free `buf` (0x1000). Result -1 if
-  `nvram_append` failed, else 0.
+  `nvram_append` failed, else 0. (Coordinator, 2026-11-03, from the code: if
+  `copy` cannot be allocated, nothing is appended and the result is 0; the
+  image is opened only after `buf` was allocated; the result is -1 when it
+  could not be opened, after `buf` was freed.)
 * `nvram_append(sih, data, len)` (.text+0x019a0d, original): node =
   `osl_malloc(0x18)` (NULL: -27); fill as in the table; insert at the head.
 * `nvram_get(name)` (.text+0x019916, original): for each node from the head,
@@ -1026,6 +1029,54 @@ bytes from `osl_malloc`:
   no space is left (`count <= 0`): -14; else one more NUL, 0.
 * `nvram_exit` (`si_detach`), `nvram_get_global_vars`, `nvram_set`/`unset`/
   `reset`/`commit` (stubs): not used by the attach path.
+* (Coordinator, 2026-11-03, from the code.) `nvram_exit(sih)` (.text+0x01999d):
+  if the list is not empty: free the data of the **head node only**
+  (`osl_mfree(osh, data, length)` with the head's fields; the data of other
+  nodes is not freed), then free every node from the head on
+  (`osl_mfree(osh, node, header size)`, the header size read from the node,
+  the next pointer read before the node is freed). In every case the list is
+  empty afterwards. `osh` is `si_osh(sih)`.
+* `nvram_get_global_vars(&vars, &len)` (.text+0x019830): `vars` = the data
+  pointer of the head node, `len` = its length (32 bit). The list must not be
+  empty (the object reads through a NULL head). Nothing in the object calls
+  it.
+* `nvram_set`, `nvram_unset`, `nvram_reset`, `nvram_commit`: 8 byte stubs
+  that do not touch the list (not taken over).
+
+Detail of `nvram_getall` (from the code): within a node the strings are
+copied one by one; the check comes before each copy, with the total of the
+node so far including the string being added (its length plus its NUL)
+compared to the space left at the start of the node: if the total is
+greater, the result is -14 at once (the strings copied before it stay). After
+a node the space left and the destination move on by the node's total. At the
+end: space left less than 1: -14; else a NUL is stored at the destination and
+the result is 0. `count` is a signed 32 bit number.
+
+Detail of `nvram_get` (from the code): per node, `strlen(name)` bytes are
+compared with `memcmp` (so a string shorter than the name is compared past
+its end, up to that many bytes, inside the data or not), then the byte after
+them must be `=`; the result is the address just after the `=`. The walk of a
+node ends at its first empty string or when the next string would start at or
+after the end of the data (length bytes from the start).
+
+### Notes for an implementation of nvram_ro.c (hybrid take-over)
+
+* Nothing outside `nvram_ro.c` reads or writes the list head (`.bss+0x300`:
+  only these six functions refer to it), so an implementation keeps its own
+  list (one per driver, as in the object: a static variable, empty at load).
+* Allocations and frees must be the object's, in the same order and with the
+  same sizes: the node `osl_malloc(0x18)` (an implementation's node must fit
+  in 0x18 bytes and is freed with that size), the work buffer 0x1000, the copy
+  `n` bytes. The heap of the emulator hands out addresses in allocation order,
+  and later allocations (DMA rings, whose addresses the driver writes to the
+  card) must land at the same places.
+* `osh`: Broadcom's functions take `sih` and call `si_osh(sih)`; an
+  implementation receives the OS handle (and, for `nvram_init`, the bus type,
+  `sih+4`, 1 = PCI) from its caller.
+* The image services are those of the OS layer (`src/shared/linux_osl.c`):
+  `osl_os_open_image(name)` (handle, NULL if the file does not exist),
+  `osl_os_get_image_block(buf, len, image)` (bytes read, 0 at the end),
+  `osl_os_close_image(image)`.
 
 Consequence of the whitespace rule: an empty line or two blanks in a row in
 `nvram.txt` produce an empty string, and both `nvram_get` and `nvram_getall`

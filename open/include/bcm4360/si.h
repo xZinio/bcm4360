@@ -101,4 +101,11 @@ bool bcm4360_si_pci_war16165(const struct bcm4360_si *si);
 bool bcm4360_si_ldo_war(struct bcm4360_si *si, u32 devid);
 u32 bcm4360_si_tcm_size(struct bcm4360_si *si);
 
+/*
+ * The PCIe bridge (chip.md: nicpci.c and the si_pci* functions; file
+ * open/chip/si_pcie.c): si_survive_perst_war with pcie_survive_perst. The
+ * registers of the PCIe core are reached through the fixed window hw->pcie.
+ */
+void bcm4360_si_survive_perst_war(struct bcm4360_si *si, bool reset, u32 mask, u32 val);
+
 #endif

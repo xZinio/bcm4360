@@ -15,6 +15,11 @@
 #                Broadcom's own body stays reachable as bcm4360_blob_NAME.
 #   use NAME     a function or data object of the object that the open code
 #                calls or reads. NAME becomes a global symbol, unchanged.
+#   name NAME SECTION OFFSET
+#                a data object of the object that has no symbol (a static
+#                variable of Broadcom's), at OFFSET in SECTION: a new global
+#                symbol NAME is added there, so that an adapter can pass its
+#                address. The object's code still reaches it as before.
 #
 # Nothing else changes: the code and data of the object are copied as they
 # are, only the binding of these symbols differs. The script runs where the
@@ -45,12 +50,28 @@ weak=$tmp/weak
 : > "$weak"
 n_take=0
 n_use=0
+n_name=0
 while read -r kind name rest; do
 	case $kind in
 	''|'#'*) continue ;;
 	esac
 	[ -n "$name" ] || { echo "$list: '$kind' without a name" >&2; exit 1; }
 	count=$(awk -v n="$name" '$3 == n' "$tmp/syms" | wc -l)
+	if [ "$kind" = name ]; then
+		# shellcheck disable=SC2086
+		set -- $rest
+		if [ $# -ne 2 ]; then
+			echo "$list: name $name: need SECTION OFFSET" >&2
+			exit 1
+		fi
+		if [ "$count" -ne 0 ]; then
+			echo "$list: name $name: already defined in $in" >&2
+			exit 1
+		fi
+		printf '%s\n' "--add-symbol" "$name=$1:$2,global,object" >> "$args"
+		n_name=$((n_name + 1))
+		continue
+	fi
 	if [ "$count" -ne 1 ]; then
 		echo "$list: $name: $count definitions in $in (need exactly 1)" >&2
 		exit 1
@@ -98,4 +119,4 @@ for name in $(sed -n 's/^--weaken-symbol=//p' "$weak"); do
 	fi
 done
 mv "$out.tmp2" "$out"
-echo "mkhybrid: $n_take functions taken over, $n_use symbols used by the open code"
+echo "mkhybrid: $n_take functions taken over, $n_use symbols used by the open code, $n_name data objects named"
