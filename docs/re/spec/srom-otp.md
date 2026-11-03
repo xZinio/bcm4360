@@ -1043,8 +1043,12 @@ bytes from `osl_malloc`:
 * `nvram_set`, `nvram_unset`, `nvram_reset`, `nvram_commit`: 8 byte stubs
   that do not touch the list (not taken over).
 
-Detail of `nvram_getall` (from the code): within a node the strings are
-copied one by one; the check comes before each copy, with the total of the
+Detail of `nvram_getall` (from the code): the walk of a node is bounded
+exactly like that of `nvram_get` (below): it ends at the first empty string
+or when the next string would start at or after the end of the data
+(`length` bytes from its start); a string that starts inside the data is
+copied whole, up to its NUL, even where that lies past the end. Within a
+node the strings are copied one by one; the check comes before each copy, with the total of the
 node so far including the string being added (its length plus its NUL)
 compared to the space left at the start of the node: if the total is
 greater, the result is -14 at once (the strings copied before it stay). After

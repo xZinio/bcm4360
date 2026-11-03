@@ -22,20 +22,19 @@ hybrid-objs := hybrid/card.o \
                hybrid/si.o open/chip/si.o \
                hybrid/dma.o open/mac/dma.o \
                hybrid/chan.o open/lib/channel.o \
-               hybrid/iovar.o open/lib/iovar.o
+               hybrid/iovar.o open/lib/iovar.o \
+               hybrid/mac_sem.o open/mac/offload.o \
+               hybrid/nvram.o open/chip/nvram.o \
+               hybrid/iovar_mod.o open/lib/module.o \
+               hybrid/si_perst.o open/chip/si_pcie.o
 
 # Being written, one variable hybrid-new*-objs per layer: each is linked by
 # tools/re/hybrid.py for the emulator once ALL its sources exist, not yet in
 # the module.
-# The offload semaphore (switch open_mac), the global NVRAM (open_nvram), the
-# module table (open_iovar): task docs/re/tasks/small.md.
-hybrid-new-olsem-objs := hybrid/mac_sem.o open/mac/offload.o
-hybrid-new-nvram-objs := hybrid/nvram.o open/chip/nvram.o
-hybrid-new-module-objs := hybrid/iovar_mod.o open/lib/module.o
-# The PCIe bridge, si_survive_perst_war (switch open_si): the same task.
-hybrid-new-perst-objs := hybrid/si_perst.o open/chip/si_pcie.o
 # The rate set helpers (switch open_rate): task docs/re/tasks/rate.md.
 hybrid-new-rate-objs := hybrid/rate.o open/lib/rate.o
+# The channel statistics module (switch open_cca): task docs/re/tasks/cca.md.
+hybrid-new-cca-objs := hybrid/cca.o open/lib/cca.o
 
 # The PHY layer (hybrid/phy.c, switch open_phy, default off): the adapter and
 # the open PHY (its register access, open/hw/access.o, is in the list above).

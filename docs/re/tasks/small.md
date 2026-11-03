@@ -58,7 +58,7 @@ From `tools/re`; the hybrid tools need Linux (Docker image `bcm4360-emu`):
 * `docker run --rm -v "D:\Programs\bcm4360:/repo" -w /repo/tools/re -e
   HYBRID_OUT=/repo/re-out/hybrid-small bcm4360-emu:latest python hybrid.py
   small` - the object alone and the hybrid core (with your code in place of
-  Broadcom's) get the same 795 calls: the semaphore with a stand-in offload
+  Broadcom's) get the same 897 calls: the semaphore with a stand-in offload
   state (spinning until the limit, the ARM letting go after some reads, the
   largest count kept), the NVRAM with blocks made by hand and with files
   `nvram.txt` of the emulated host, the module table up to full and back,

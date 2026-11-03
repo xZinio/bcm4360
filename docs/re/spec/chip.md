@@ -742,7 +742,9 @@ chip 0x4352 or 0x4360, chip revision < 4:
 2. If `mask` != 0 and the bus core is 0x83c/0x820: `pcie_survive_perst(
    sih+0x90, mask, val)`: `mod(PCIE(0x000), mask, val)` through `pi+0x00`
    (R and W only if mask|val != 0), then R `PCIE(0x000)` (32 bit; the fixed
-   window BAR0+0x2000).
+   window BAR0+0x2000). (Coordinator, 2026-11-03, from the code: unlike
+   access.md's `mod`, `val` is **not** masked: the value written is
+   `(old & ~mask) | val`.)
 
 `wlc_bmac_hw_up` calls (1, 0, 0) (the watchdog reset, 2007 accesses incl.
 delays), `wlc_bmac_hw_down` calls (0, 0x204, 0) (clears bits 2 and 9 of

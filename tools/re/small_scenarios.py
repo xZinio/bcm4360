@@ -150,9 +150,13 @@ def sem_walk(m, wlc, f):
 BLOCK_A = b'aa=1\0bb=22\0aab=3\0=x\0cc\0dd=\0e=5\0\0zz=9\0'
 BLOCK_B = b'aa=override\0b\0bb=\0longname_with_more=v\0'
 BLOCK_C = b'single=1'          # no NUL at the end: the walk stops at the length
+# appended with a length that ends inside its strings (only the first string,
+# or the start of it, belongs to the block)
+BLOCK_D = (b'a=1\0b=2\0c=3\0', 4)
+BLOCK_E = (b'xy=12345\0zz=1\0q=7\0', 5)
 NAMES = ('aa', 'a', 'aab', 'aa=', 'bb', 'b', 'c', 'cc', 'dd', 'e', 'zz', '', 'x', 'single',
          'single=1', 'longname_with_more', 'longname', 'boardtype', 'boardrev', 'sromrev',
-         'ccode', 'devid', 'after_empty', 'first', 'last', 'q', 'k', 'p')
+         'ccode', 'devid', 'after_empty', 'first', 'last', 'q', 'k', 'p', 'xy', 'zz')
 FILES = (
     b'a=1\nb=2\n',
     b'a=1\tb=2 c=3\n\nafter_empty=1\n',
@@ -199,17 +203,19 @@ def nvram_walk(m, wlc, f):
     gets('after attach')
     getall('after attach', (100, 1, 0, -5))
     blocks = []
-    for data in (BLOCK_A, BLOCK_B, BLOCK_C):
+    for data, length in ((BLOCK_A, len(BLOCK_A)), (BLOCK_B, len(BLOCK_B)), (BLOCK_C, len(BLOCK_C)),
+                         BLOCK_D, BLOCK_E):
         a = m.buf(data)
         blocks.append(a)
-        rec('append %d bytes' % len(data), s32(f.nvram_append(sih, a, len(data))))
+        rec('append %d of %d bytes' % (length, len(data)), s32(f.nvram_append(sih, a, length)))
         gets('%d blocks' % len(blocks))
         global_vars('%d blocks' % len(blocks))
     total = len(b''.join(s + b'\0' for s in
                          [b'single=1', b'aa=override', b'b', b'bb=', b'longname_with_more=v',
                           b'aa=1', b'bb=22', b'aab=3', b'=x', b'cc', b'dd=', b'e=5']))
-    getall('3 blocks', (0x2000, total + 1, total, total - 1, 9, 10, 8, 1, 0, -1,
-                        len(BLOCK_C) + 1, len(BLOCK_C) + len(BLOCK_B)))
+    total += len(b'xy=12345\0a=1\0')
+    getall('5 blocks', (0x2000, total + 1, total, total - 1, 9, 10, 8, 1, 0, -1,
+                        len(BLOCK_C) + 1, len(BLOCK_C) + len(BLOCK_B), 13, 14))
     rec('init with blocks', s32(f.nvram_init(sih)))
     f.nvram_exit(sih)
     rec('exit', None)
@@ -321,7 +327,8 @@ def perst_walk(m, wlc, f):
 
     for reset, mask, val in ((0, 0, 0), (0, 0x204, 0), (0, 0, 0x204), (0, 0x204, 0x204),
                              (0, 0xffffffff, 5), (0, 4, 4), (1, 0, 0), (1, 0x204, 0x200),
-                             (0x100, 0x10, 0x10), (0x101, 0, 0)):
+                             (0x100, 0x10, 0x10), (0x101, 0, 0), (0, 4, 0x200),
+                             (0, 0x200, 0xffffffff), (0, 1, 0x80000000), (0, 0x204, 0x6)):
         call('as attached', reset, mask, val)
     for field, values in ((SIH_BUSCORETYPE, (0x820, 0x83b)), (SIH_CHIPREV, (3, 4, 9)),
                           (SIH_CHIP, (0x4352, 0x43a0)), (SIH_BUSTYPE, (0, 2))):
