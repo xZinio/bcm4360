@@ -336,7 +336,7 @@ soak() {
 
 # swap PARAMS LABEL: swap-test.sh with KO and these parameters
 swap() {
-	local params=$1 l=$2 t0 r
+	local params=$1 l=$2 t0 r peekpid
 	pace
 	busy
 	touch "$DIRTY"
@@ -345,11 +345,13 @@ swap() {
 	# swap-test.sh unloads after 5 s: this reads the card 20 s after the load
 	(sleep 25; cd "$out" && timeout 60 python3 -I "$root/tools/re/peek-on-target.py" \
 		> "$out/peek-$l.txt" 2>/dev/null) &
+	peekpid=$!
 	BCM4360_DIAG="$out/diag-$l-swapfail.txt" \
 	bash "$here/swap-test.sh" "$tko" --fallback bcm4360 --settle 120 --log "$swaplog" \
 		${params:+--params "$params"}
 	r=$?
-	wait
+	# only the peek: a plain `wait` would also wait for the guard, forever
+	wait "$peekpid"
 	attempted
 	if [ "$r" -eq 0 ]; then
 		say "PASS $l: $(running_version) [$(switches)] connected, link, gateway, DNS, kernel log (swap-test)"
