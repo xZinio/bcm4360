@@ -50,6 +50,8 @@ was compared there.
 | board variables from SROM/OTP | `open_srom` | on | `srom_var_init` (PCI: SROM read and CRC, OTP and NVRAM fall-backs, the revision-11 conversion, the variable buffer), `srom_read`; the backplane, OTP and NVRAM functions they call stay Broadcom's | `srom.c` -> `open/chip/srom.c` | [srom-otp](../docs/re/spec/srom-otp.md) |
 | chanspecs, channel validity | `open_chan` | on | 13: the chanspec helpers of `bcmwifi_channels.c` (`wf_chspec_malformed`, `wf_chspec_ctlchan`, `wf_chspec_ctlchspec`, `wf_chspec_primary40_chspec`, `wf_chspec_80`, `wf_channel2mhz`) and the validity checks of `wlc_channel.c` (`wlc_valid_chanspec`, `wlc_valid_chanspec_db`, `wlc_valid_channel20*`, `wlc_valid_40/80chanspec_in_band`); the channel manager's state and the database stay Broadcom's/the CLM layer's | `chan.c` -> `open/lib/channel.c` | [channel](../docs/re/spec/channel.md) |
 | driver variables (iovars) | `open_iovar` | on | `wlc_iovar_op`: the lookup of a variable in the 64 modules' tables and the dispatch to the module (the request check, the BSS configurations and the modules' handlers stay Broadcom's) | `iovar.c` -> `open/lib/iovar.c` | [iovar](../docs/re/spec/iovar.md) |
+| rate sets | `open_rate` | on | 10 helpers of `wlc_rate.c`: `wlc_rateset_default`, `wlc_rateset_filter`, `wlc_rate_hwrs_filter_sort_validate`, `wlc_rateset_ofdm_fixup`, the MCS and VHT map updates, `wlc_rateset_copy`, `wlc_rate_rspec_reference_rate` | `rate.c` -> `open/lib/rate.c` | [rate](../docs/re/spec/rate.md) |
+| channel statistics | `open_cca` | on | the whole of `wlc_cca.c`: attach and detach, the module's watchdog, down function and iovar `cca_get_stats`, `cca_stats_upd`, `cca_stats_tsf_upd`, `cca_query_stats`, `wlc_cca_get_chanspec` (read when the module is attached) | `cca.c` -> `open/lib/cca.c` | [cca-stf](../docs/re/spec/cca-stf.md) part 1 |
 | PHY and radio | `open_phy` | **off** | all 79 entry points of the MAC into the PHY (takeover.txt) | `phy.c` -> `open/phy/*` (+ `open/hw/access.c`) | [acphy-api](../docs/re/spec/acphy-api.md) and the `acphy-*` specs |
 | regulatory database | `open_clm` | on | 16 `clm_*` entry points of `wlc_clm.c` (the database stays Broadcom's data) | `clm.c` -> `open/lib/clm.c` | [clm](../docs/re/spec/clm.md) |
 | utilities | `open_utils` | on | 8: `getvar`, `getintvar`, `getintvararray`, `getintvararraysize`, `bcm_strtoul`, `bcm_bitcount`, `hndcrc8`, and Broadcom's PHY's own lookup `phy_getvar` (the global NVRAM, `nvram_get`, stays Broadcom's) | `utils.c` -> `open/lib/utils.c` | [utils](../docs/re/spec/utils.md) |
@@ -143,6 +145,8 @@ is the real card.
 | the same + the open PHY (`open_phy=1`) | 88,970 bytes (44.4 %) | 127,190 bytes | **95.3 %** |
 | + chanspecs and channel validity, driver variables (default, 2026-11-03) | 158,509 bytes (79.1 %) | 77,249 bytes | **95.0 %** |
 | the same + the open PHY (`open_phy=1`) | 87,040 bytes (43.4 %) | 130,446 bytes | **97.8 %** |
+| + rate sets, channel statistics (and the small layers of 2026-11-03: offload semaphore, global NVRAM, module table, PCIe work-around) (default) | 155,080 bytes (77.4 %) | 82,612 bytes | **95.7 %** |
+| the same + the open PHY (`open_phy=1`) | 83,611 bytes (41.7 %) | 135,809 bytes | **98.7 %** |
 
 With the open PHY switched on, the whole session is identical to the object
 (41,416 accesses: attach, up, nine channel changes in both bands and all
