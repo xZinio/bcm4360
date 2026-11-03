@@ -10,6 +10,7 @@
 #                   [--extra PARAMS] [--no-off] [--confirm PARAMS]
 #                   [--captures "NAME:PARAMS;NAME:PARAMS"] [--def-repeat N]
 #                   [--quick "NAME:PARAMS;NAME:PARAMS"] [--cycles N] [--no-measure]
+#                   [--capture-radio "NAME:PARAMS;NAME:PARAMS"]
 #
 # --extra adds module parameters to the stages def and phy (e.g. "open_pmu=0"
 # to test the open PHY while the PMU layer is under suspicion); --no-off
@@ -23,6 +24,10 @@
 # failure there is recorded and the next configuration's load goes on.
 # --cycles sets the number of radio switches per configuration (default 2),
 # --no-measure leaves out the measurement after them.
+# --capture-radio replaces all stages too: for each configuration an
+# mmiotrace from before the load (mmiotrace only sees mappings made while it
+# runs) through the connection, one radio switch (off 5 s, on) and the
+# reconnection attempt, into capture-radio-NAME/ with marks at each step.
 # Every swap also reads the card's identity and PMU registers
 # (peek-on-target.py) 20 s after loading, into peek-LABEL.txt.
 #
@@ -79,6 +84,7 @@ gap=90
 extra=
 def_repeat=1
 quick=
+capture_radio=
 cycles=2
 measure_after=1
 skip_off=0
@@ -101,6 +107,7 @@ while [ $# -gt 0 ]; do
 	--captures) captures=$2; shift 2 ;;
 	--def-repeat) def_repeat=$2; shift 2 ;;
 	--quick) quick=$2; shift 2 ;;
+	--capture-radio) capture_radio=$2; shift 2 ;;
 	--cycles) cycles=$2; shift 2 ;;
 	--no-measure) measure_after=0; shift ;;
 	*) echo "unknown option: $1" >&2; exit 2 ;;
@@ -124,7 +131,7 @@ TR=/sys/kernel/tracing
 [ -d "$TR" ] || TR=/sys/kernel/debug/tracing
 DL_URLS="https://speed.cloudflare.com/__down?bytes=40000000 https://mirror.one.com/archlinux/iso/latest/archlinux-x86_64.iso"
 UL_URL=https://speed.cloudflare.com/__up
-LAYERS="pmu access mac utils clm ppr srom si dma chan iovar nvram rate cca stf phy"
+LAYERS="pmu access mac utils clm ppr srom si dma chan iovar nvram rate cca stf stf_policy phy"
 ALL_OFF=
 for l in $LAYERS; do ALL_OFF="$ALL_OFF open_$l=0"; done
 ALL_OFF=${ALL_OFF# }
@@ -588,6 +595,76 @@ t_start=$(date +%s)
 
 say "----- base: the installed driver -----"
 measure base
+
+# --capture-radio: the radio switch of each configuration under mmiotrace
+if [ -n "$capture_radio" ]; then
+	grep -qw mmiotrace "$TR/available_tracers" || { say "ABORT: no mmiotrace"; exit 1; }
+	IFS=';' read -r -a clist <<< "$capture_radio"
+	for c in "${clist[@]}"; do
+		cl=${c%%:*}
+		cp=${c#*:}
+		[ "$cp" = ALLOFF ] && cp=$ALL_OFF
+		say "----- capture-radio $cl: ${cp:-defaults} -----"
+		d=$out/capture-radio-$cl
+		mkdir -p "$d"
+		dev=$(lspci -Dn -d 14e4:43a0 | awk 'NR == 1 { print $1 }')
+		{ lspci -vvnn -s "$dev"; echo "--- configuration space"; lspci -xxxx -s "$dev";
+		  echo "--- resources"; cat "/sys/bus/pci/devices/$dev/resource"; } > "$d/pci.txt" 2>&1
+		pace
+		busy
+		touch "$DIRTY"
+		t0=$(date +%s)
+		timeout 60 rmmod bcm4360 || { say "FAIL capture-radio-$cl: cannot unload"; continue; }
+		echo "bcm4360-capture: start" > /dev/kmsg
+		echo 131072 > "$TR/buffer_size_kb"
+		echo mmiotrace > "$TR/current_tracer"
+		cat "$TR/trace_pipe" > "$d/mmiotrace.txt" &
+		catpid=$!
+		sleep 1
+		echo "MARK load bcm4360 $cp" > "$TR/trace_marker"
+		# shellcheck disable=SC2086
+		insmod "$tko" $cp || say "FAIL capture-radio-$cl: insmod failed"
+		for s in .text .rodata .data .bss; do
+			[ -r "/sys/module/bcm4360/sections/$s" ] &&
+				echo "$s $(cat "/sys/module/bcm4360/sections/$s")"
+		done > "$d/sections.txt"
+		if wait_connected 150 "$conn"; then
+			say "CAPTURE-RADIO $cl: connected under the trace after $(($(date +%s) - t0))s"
+			sleep 10
+			echo "MARK radio off" > "$TR/trace_marker"
+			nmcli radio wifi off
+			sleep 5
+			echo "MARK radio on" > "$TR/trace_marker"
+			nmcli radio wifi on
+			t1=$(date +%s)
+			if wait_connected 120 "$conn"; then
+				say "CAPTURE-RADIO $cl: connected again after the radio switch, $(($(date +%s) - t1))s"
+				echo "MARK reconnected" > "$TR/trace_marker"
+				sleep 10
+			else
+				say "CAPTURE-RADIO $cl: NOT connected again after the radio switch"
+				echo "MARK not reconnected" > "$TR/trace_marker"
+				diag "capture-radio-$cl-fail"
+			fi
+		else
+			say "CAPTURE-RADIO $cl: not connected under the trace"
+		fi
+		echo "MARK end" > "$TR/trace_marker"
+		sleep 1
+		kill "$catpid" 2>/dev/null
+		wait "$catpid" 2>/dev/null
+		echo nop > "$TR/current_tracer"
+		for s in /sys/devices/system/cpu/cpu[0-9]*/online; do echo 1 > "$s" 2>/dev/null; done
+		attempted
+		journalctl -k --since "@$t0" --no-pager > "$d/dmesg.txt" 2>&1
+		journalctl --since "@$t0" --no-pager -u wpa_supplicant -u NetworkManager > "$d/supplicant.txt" 2>&1
+		say "CAPTURE-RADIO $cl: $(grep -c '^[RW] ' "$d/mmiotrace.txt") accesses"
+		# the next configuration's load recovers the card
+		idle
+	done
+	say "RESULT: radio captures done ($(($(date +%s) - t_start)) s)"
+	exit 0
+fi
 
 # the matrix of --quick: the step that fails ends that configuration only;
 # the whole configuration counts as busy for the guard (6 minutes), and the
