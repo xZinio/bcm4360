@@ -37,8 +37,9 @@ OUT=$PWD/bcm4360-capture-$(date +%Y%m%d-%H%M%S)
 mkdir "$OUT"
 
 restore() {
+	# the reader first: the tracer cannot be changed while trace_pipe is open
+	[ -n "${CATPID:-}" ] && kill "$CATPID" 2>/dev/null && wait "$CATPID" 2>/dev/null || true
 	echo nop > "$TR/current_tracer" 2>/dev/null || true
-	[ -n "${CATPID:-}" ] && kill "$CATPID" 2>/dev/null || true
 	for c in /sys/devices/system/cpu/cpu[0-9]*/online; do
 		echo 1 > "$c" 2>/dev/null || true
 	done
@@ -82,10 +83,11 @@ done > "$OUT/sections.txt"
 sleep "$SECONDS_UP"
 echo "MARK end" > "$TR/trace_marker"
 
-echo nop > "$TR/current_tracer"
 sleep 1
 kill "$CATPID" 2>/dev/null || true
+wait "$CATPID" 2>/dev/null || true
 CATPID=
+echo nop > "$TR/current_tracer"
 dmesg | sed -n '/bcm4360-capture: start/,$p' > "$OUT/dmesg.txt"
 ip -br link > "$OUT/links.txt" 2>&1 || true
 

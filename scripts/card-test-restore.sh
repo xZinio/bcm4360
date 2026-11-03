@@ -108,10 +108,11 @@ if systemctl is-active -q bcm4360-card-test.service 2>/dev/null &&
 	touch /run/bcm4360-card-test.deadman
 	systemctl stop bcm4360-card-test.service
 fi
+# the tracer cannot be changed while trace_pipe is open (EBUSY): reader first
+pkill -f "cat $TR/trace_pipe" 2>/dev/null && sleep 1
 if [ "$(cat "$TR/current_tracer" 2>/dev/null)" = mmiotrace ]; then
 	echo nop > "$TR/current_tracer" && say "mmiotrace ended"
 fi
-pkill -f "cat $TR/trace_pipe" 2>/dev/null
 for c in /sys/devices/system/cpu/cpu[0-9]*/online; do
 	[ "$(cat "$c")" = 1 ] || { echo 1 > "$c" && say "${c%/online} back online"; }
 done

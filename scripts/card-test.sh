@@ -7,6 +7,16 @@
 #
 #   card-test.sh KO [--owner USER] [--soak MIN] [--base-soak MIN] [--deadline MIN]
 #                   [--no-capture] [--no-24] [--suspend] [--hotspot NAME] [--gap SEC]
+#                   [--extra PARAMS] [--no-off] [--confirm PARAMS]
+#                   [--captures "NAME:PARAMS;NAME:PARAMS"]
+#
+# --extra adds module parameters to the stages def and phy (e.g. "open_pmu=0"
+# to test the open PHY while the PMU layer is under suspicion); --no-off
+# skips the stage off; --confirm runs one more swap with PARAMS before def
+# (e.g. to confirm a failure the bisection found); --captures replaces the
+# default recordings ("broadcom:<every switch off>;openphy:open_phy=1").
+# Every swap also reads the card's identity and PMU registers
+# (peek-on-target.py) 20 s after loading, into peek-LABEL.txt.
 #
 # KO is a freshly built bcm4360.ko (the installed bcm4360 stays installed:
 # it is what every rollback and the final restore load). Stages:
@@ -55,6 +65,10 @@ band24=1
 suspend=0
 hotspot=
 gap=90
+extra=
+skip_off=0
+confirm=
+captures=
 while [ $# -gt 0 ]; do
 	case $1 in
 	--owner) owner=$2; shift 2 ;;
@@ -66,6 +80,10 @@ while [ $# -gt 0 ]; do
 	--suspend) suspend=1; shift ;;
 	--hotspot) hotspot=$2; shift 2 ;;
 	--gap) gap=$2; shift 2 ;;
+	--extra) extra=$2; shift 2 ;;
+	--no-off) skip_off=1; shift ;;
+	--confirm) confirm=$2; shift 2 ;;
+	--captures) captures=$2; shift 2 ;;
 	*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
 done
@@ -277,9 +295,13 @@ swap() {
 	touch "$DIRTY"
 	t0=$(date +%s)
 	note "swap $l: insmod $tko $params"
+	# swap-test.sh unloads after 5 s: this reads the card 20 s after the load
+	(sleep 25; cd "$out" && timeout 60 python3 -I "$root/tools/re/peek-on-target.py" \
+		> "$out/peek-$l.txt" 2>/dev/null) &
 	bash "$here/swap-test.sh" "$tko" --fallback bcm4360 --settle 120 --log "$swaplog" \
 		${params:+--params "$params"}
 	r=$?
+	wait
 	attempted
 	if [ "$r" -eq 0 ]; then
 		say "PASS $l: $(running_version) [$(switches)] connected, link, gateway, DNS, kernel log (swap-test)"
@@ -413,9 +435,11 @@ capture() {
 	done > "$d/sections.txt"
 	sleep 50
 	echo "MARK end" > "$TR/trace_marker"
-	echo nop > "$TR/current_tracer"
 	sleep 1
+	# the tracer cannot be changed while trace_pipe is open (EBUSY)
 	kill "$catpid" 2>/dev/null
+	wait "$catpid" 2>/dev/null
+	echo nop > "$TR/current_tracer"
 	for s in /sys/devices/system/cpu/cpu[0-9]*/online; do echo 1 > "$s" 2>/dev/null; done
 	attempted
 	journalctl -k --since "@$t0" --no-pager > "$d/dmesg.txt" 2>&1
@@ -457,10 +481,11 @@ conn=$(nmcli -g GENERAL.CONNECTION dev show "$iface")
 tko=$out/bcm4360-test.ko
 cp "$ko" "$tko"
 say "kernel $kver; running $(running_version); installed bcm4360 $(modinfo -F version bcm4360);" \
-    "wl $(modinfo -F version wl 2>/dev/null || echo missing); test build $(modinfo -F version "$tko")" \
+    "wl $(modinfo -F filename wl >/dev/null 2>&1 && echo present || echo missing); test build $(modinfo -F version "$tko")" \
     "$(modinfo -F srcversion "$tko"); connection '$conn' on $iface"
 say "plan: soak ${soak} min (open PHY) and ${base_soak} min (Broadcom's PHY), 2.4 GHz $band24," \
-    "capture $capture, suspend $suspend, gap ${gap}s, deadline ${deadline} min"
+    "capture $capture, suspend $suspend, gap ${gap}s, deadline ${deadline} min," \
+    "extra '${extra}', off $((1 - skip_off)), confirm '${confirm}', captures '${captures:-default}'"
 
 trap on_exit EXIT
 trap 'note "interrupted"; exit 1' TERM INT
@@ -489,13 +514,21 @@ say "----- peek: identity of the card -----"
 say "PEEK: rc $?, $(wc -l < "$out/peek.txt") lines"
 klog_check "$t_start" base
 
-say "----- off: every switch off -----"
-ok_off=0
-if swap "$ALL_OFF" off; then ok_off=1; measure off; fi
+ok_off=-1
+if [ "$skip_off" -eq 0 ]; then
+	say "----- off: every switch off -----"
+	ok_off=0
+	if swap "$ALL_OFF" off; then ok_off=1; measure off; fi
+fi
 
-say "----- def: the defaults (Broadcom's PHY) -----"
+if [ -n "$confirm" ]; then
+	say "----- confirm: $confirm -----"
+	if swap "$confirm" confirm; then measure confirm; fi
+fi
+
+say "----- def: the defaults (Broadcom's PHY)${extra:+ + $extra} -----"
 ok_def=0
-if swap "" def; then
+if swap "$extra" def; then
 	ok_def=1
 	t0=$(date +%s)
 	measure def
@@ -521,12 +554,12 @@ bisect() {
 	say "BISECT: suspect open_${cand[0]} (each halving kept the half whose switching off made the module pass)"
 }
 
-say "----- phy: the defaults and the open PHY -----"
+say "----- phy: the defaults and the open PHY${extra:+ + $extra} -----"
 ok_phy=0
 if [ "$ok_def" -eq 0 ] && [ "$ok_off" -eq 1 ]; then
 	say "skip phy: the defaults failed; bisecting the open layers"
 	bisect
-elif swap "open_phy=1" phy; then
+elif swap "open_phy=1${extra:+ $extra}" phy; then
 	ok_phy=1
 	t0=$(date +%s)
 	measure phy
@@ -545,8 +578,15 @@ elif swap "open_phy=1" phy; then
 fi
 
 say "----- capture -----"
-if [ "$ok_off" -eq 1 ]; then capture broadcom "$ALL_OFF"; fi
-if [ "$ok_phy" -eq 1 ]; then capture openphy "open_phy=1"; fi
+if [ -n "$captures" ]; then
+	IFS=';' read -r -a caplist <<< "$captures"
+	for c in "${caplist[@]}"; do
+		capture "${c%%:*}" "${c#*:}"
+	done
+else
+	if [ "$ok_off" -eq 1 ]; then capture broadcom "$ALL_OFF"; fi
+	if [ "$ok_phy" -eq 1 ]; then capture openphy "open_phy=1${extra:+ $extra}"; fi
+fi
 
 say "RESULT: off $ok_off, def $ok_def, phy $ok_phy ($(($(date +%s) - t_start)) s)"
 exit 0
