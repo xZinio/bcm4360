@@ -110,5 +110,6 @@ extern bool bcm4360_open_dma;
 extern bool bcm4360_open_chan;
 extern bool bcm4360_open_iovar;
 extern bool bcm4360_open_nvram;
+extern bool bcm4360_open_rate;
 
 #endif

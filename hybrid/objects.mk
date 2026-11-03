@@ -34,6 +34,8 @@ hybrid-new-nvram-objs := hybrid/nvram.o open/chip/nvram.o
 hybrid-new-module-objs := hybrid/iovar_mod.o open/lib/module.o
 # The PCIe bridge, si_survive_perst_war (switch open_si): the same task.
 hybrid-new-perst-objs := hybrid/si_perst.o open/chip/si_pcie.o
+# The rate set helpers (switch open_rate): task docs/re/tasks/rate.md.
+hybrid-new-rate-objs := hybrid/rate.o open/lib/rate.o
 
 # The PHY layer (hybrid/phy.c, switch open_phy, default off): the adapter and
 # the open PHY (its register access, open/hw/access.o, is in the list above).

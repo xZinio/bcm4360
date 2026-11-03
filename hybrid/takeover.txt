@@ -505,3 +505,15 @@ take wlc_module_unregister
 # --- the PCIe bridge (hybrid/si_perst.c -> open/chip/si_pcie.c, docs/re/spec/chip.md,
 # switch open_si)
 take si_survive_perst_war
+
+# --- rate sets (hybrid/rate.c -> open/lib/rate.c, docs/re/spec/rate.md, switch open_rate)
+take wlc_rate_hwrs_filter_sort_validate
+take wlc_rateset_filter
+take wlc_rateset_ofdm_fixup
+take wlc_rateset_default
+take wlc_rateset_vhtmcs_upd
+take wlc_rateset_mcs_upd
+take wlc_rateset_mcs_build
+take wlc_rateset_bw_mcs_filter
+take wlc_rateset_copy
+take wlc_rate_rspec_reference_rate
