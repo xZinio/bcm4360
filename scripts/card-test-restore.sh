@@ -76,6 +76,19 @@ activate() {
 	say "nmcli con up '$1' ifname $dev"
 	nmcli --wait 60 con up "$1" ifname "$dev" || true
 }
+# rmmod that cannot block this script: a driver stuck in the kernel leaves
+# rmmod unkillable, and then only a reboot helps
+try_rmmod() {
+	local p t=0
+	rmmod "$1" &
+	p=$!
+	while kill -0 "$p" 2>/dev/null; do
+		[ "$t" -ge 60 ] && { say "rmmod $1 hangs: reboot to recover"; return 1; }
+		sleep 1
+		t=$((t + 1))
+	done
+	wait "$p"
+}
 finish() {
 	systemctl start bcm4360-watchdog.timer 2>/dev/null && say "watchdog timer started"
 	[ -n "$owner" ] && chown -R "$owner": "$out" 2>/dev/null
@@ -102,6 +115,8 @@ pkill -f "cat $TR/trace_pipe" 2>/dev/null
 for c in /sys/devices/system/cpu/cpu[0-9]*/online; do
 	[ "$(cat "$c")" = 1 ] || { echo 1 > "$c" && say "${c%/online} back online"; }
 done
+# the test may have been stopped between radio off and on
+[ "$(nmcli radio wifi)" = enabled ] || { nmcli radio wifi on && say "Wi-Fi radio switched on again"; }
 nmcli -t -f NAME con show | grep -qx "$TEST_PROFILE" &&
 	nmcli con delete "$TEST_PROFILE" && say "removed the profile $TEST_PROFILE"
 
@@ -116,7 +131,7 @@ elif [ -z "$loaded" ] || [ "$loaded" != "$installed" ] || [ -e "$DIRTY" ]; then
 	    "installed: ${installed:-none} $(modinfo -F version bcm4360 2>/dev/null)"
 	if [ -n "$loaded" ]; then
 		say "rmmod bcm4360"
-		timeout 60 rmmod bcm4360 || say "rmmod failed or hung"
+		try_rmmod bcm4360 || say "rmmod bcm4360 failed"
 	fi
 	say "modprobe bcm4360"
 	if modprobe bcm4360; then rm -f "$DIRTY"; else say "modprobe bcm4360 failed"; fi
@@ -137,7 +152,7 @@ activate "$conn"
 if wait_connected 90; then finish; fi
 
 say "falling back to Broadcom's wl"
-timeout 60 rmmod bcm4360 2>/dev/null
+try_rmmod bcm4360 2>/dev/null
 modprobe wl || say "modprobe wl failed"
 systemctl restart wpa_supplicant
 sleep 10

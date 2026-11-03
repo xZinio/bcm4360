@@ -465,11 +465,18 @@ say "plan: soak ${soak} min (open PHY) and ${base_soak} min (Broadcom's PHY), 2.
 trap on_exit EXIT
 trap 'note "interrupted"; exit 1' TERM INT
 
-systemctl stop bcm4360-watchdog.timer && note "watchdog timer paused"
-systemd-run --unit=bcm4360-card-deadman --collect --on-active="${deadline}m" \
+# a deadman left over from an earlier run would make systemd-run fail
+systemctl stop bcm4360-card-deadman.timer bcm4360-card-deadman.service 2>/dev/null
+systemctl reset-failed bcm4360-card-deadman.timer bcm4360-card-deadman.service 2>/dev/null
+if ! systemd-run --unit=bcm4360-card-deadman --collect --on-active="${deadline}m" \
 	--timer-property=AccuracySec=10s \
-	/bin/bash "$here/card-test-restore.sh" "${restore_args[@]}" --conn "$conn" &&
-	note "deadman armed: ${deadline} min"
+	/bin/bash "$here/card-test-restore.sh" "${restore_args[@]}" --conn "$conn"; then
+	trap - EXIT
+	say "ABORT: cannot arm the deadman timer"
+	exit 1
+fi
+note "deadman armed: ${deadline} min"
+systemctl stop bcm4360-watchdog.timer && note "watchdog timer paused"
 t_start=$(date +%s)
 
 # ---- stages ----------------------------------------------------------------------
@@ -511,7 +518,7 @@ bisect() {
 			cand=("${cand[@]:${#half[@]}}")
 		fi
 	done
-	say "BISECT: with every layer but '${cand[0]}' open the module failed less; suspect open_${cand[0]}"
+	say "BISECT: suspect open_${cand[0]} (each halving kept the half whose switching off made the module pass)"
 }
 
 say "----- phy: the defaults and the open PHY -----"
