@@ -80,7 +80,7 @@ void name params							\
 	struct bcm4360_hw hw;						\
 	struct bcm4360_mac mac;						\
 									\
-	if (!bcm4360_open_mac) {					\
+	if (!hyb_mac_on(HYB_MAC_INIT)) {					\
 		bcm4360_blob_##name blob_args;				\
 		return;							\
 	}								\
@@ -107,7 +107,7 @@ s32 wlc_bmac_wowlucode_start(void *wlc_hw)
 	struct bcm4360_mac mac;
 	s32 r;
 
-	if (!bcm4360_open_mac)
+	if (!hyb_mac_on(HYB_MAC_INIT))
 		return bcm4360_blob_wlc_bmac_wowlucode_start(wlc_hw);
 	hyb_mac_in(wlc_hw, &hw, &mac);
 	r = bcm4360_bmac_wowlucode_start(&mac);

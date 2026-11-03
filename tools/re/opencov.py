@@ -84,10 +84,16 @@ def line_table(obj):
     return rows
 
 
-def run(on, off, session, soak):
+def run(on, off, session, soak, steps=None):
     ab.CFLAGS.append('-g')
     core = hybrid.build(quiet=True)
     executed = collections.defaultdict(int)     # block address -> size
+    if steps:
+        import phy_soak
+        r = phy_soak.SoakRun(core, off=off, on=on, coverage=True).session(
+            steps, stop_on_error=False)
+        for a, size in r.m.blocks.items():
+            executed[a] = max(executed[a], size)
     if session:
         r = hybrid.Run(core, on=on, off=off, coverage=True).session()
         for a, size in r.m.blocks.items():
@@ -137,12 +143,15 @@ def main():
     ap.add_argument('--soak', action='store_true')
     ap.add_argument('--files', default='')
     ap.add_argument('--list', default='')
+    ap.add_argument('--steps', default='',
+                    help='comma-separated steps of phy_soak.SoakRun (or "real": hybrid.REAL)')
     ns = ap.parse_args()
-    if not ns.session and not ns.soak:
+    steps = (list(hybrid.REAL) if ns.steps == 'real' else ns.steps.split(',')) if ns.steps else None
+    if not ns.session and not ns.soak and not steps:
         ns.session = True
     on = [x for x in ns.on.split(',') if x]
     off = [x for x in ns.off.split(',') if x]
-    core, executed = run(on, off, ns.session, ns.soak)
+    core, executed = run(on, off, ns.session, ns.soak, steps)
     cov = coverage(core, executed)
     total_run = total_all = 0
     print('%-40s %6s %6s %6s' % ('file', 'lines', 'run', '%'))

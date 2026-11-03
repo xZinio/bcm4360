@@ -45,7 +45,7 @@ void wlc_bmac_##name params						\
 	struct bcm4360_hw hw;						\
 	struct bcm4360_mac mac;						\
 									\
-	if (!bcm4360_open_mac) {					\
+	if (!hyb_mac_on(HYB_MAC_MEM)) {					\
 		bcm4360_blob_wlc_bmac_##name blob_args;			\
 		return;							\
 	}								\

@@ -95,7 +95,7 @@ void name(void *wlc_hw)							\
 	struct bcm4360_hw hw;						\
 	struct bcm4360_mac mac;						\
 									\
-	if (!bcm4360_open_mac) {					\
+	if (!hyb_mac_on(HYB_MAC_UPDOWN)) {					\
 		bcm4360_blob_##name(wlc_hw);				\
 		return;							\
 	}								\
@@ -111,7 +111,7 @@ type name(void *wlc_hw)							\
 	struct bcm4360_mac mac;						\
 	type r;								\
 									\
-	if (!bcm4360_open_mac)						\
+	if (!hyb_mac_on(HYB_MAC_UPDOWN))						\
 		return bcm4360_blob_##name(wlc_hw);			\
 	hyb_mac_in(wlc_hw, &hw, &mac);					\
 	r = (type)open_name(&mac);					\

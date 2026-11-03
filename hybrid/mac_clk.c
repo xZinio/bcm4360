@@ -72,7 +72,7 @@ void name params							\
 	struct bcm4360_hw hw;						\
 	struct bcm4360_mac mac;						\
 									\
-	if (!bcm4360_open_mac) {					\
+	if (!hyb_mac_on(HYB_MAC_CLK)) {					\
 		bcm4360_blob_##name blob_args;				\
 		return;							\
 	}								\
@@ -88,7 +88,7 @@ type name params							\
 	struct bcm4360_mac mac;						\
 	type r;								\
 									\
-	if (!bcm4360_open_mac)						\
+	if (!hyb_mac_on(HYB_MAC_CLK))						\
 		return bcm4360_blob_##name blob_args;			\
 	hyb_mac_in(wlc_hw, &hw, &mac);					\
 	r = open_name open_args;					\

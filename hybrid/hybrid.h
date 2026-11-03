@@ -101,6 +101,25 @@ extern bool bcm4360_open_pmu;
 extern bool bcm4360_open_phy;
 extern bool bcm4360_open_access;
 extern bool bcm4360_open_mac;
+/*
+ * The groups of the MAC layer, switched one by one (module parameter
+ * open_mac_mask, all on by default) to find the group at fault on a card;
+ * open_mac switches them all.
+ */
+extern unsigned int bcm4360_open_mac_mask;
+#define HYB_MAC_CTRL		0x001	/* mac.c: control, wake override, suspend/enable, host flags */
+#define HYB_MAC_MEM		0x002	/* mac_mem.c: object memories, templates, addresses */
+#define HYB_MAC_CLK		0x004	/* mac_clk.c: clocks, core reset, crystal, PLL requests */
+#define HYB_MAC_INIT		0x008	/* mac_init.c: initialisation, microcode, band init */
+#define HYB_MAC_UPDOWN		0x010	/* mac_updown.c: up and down, reset */
+#define HYB_MAC_CHAN		0x020	/* mac_chan.c: channel and band */
+#define HYB_MAC_RUNTIME		0x040	/* mac_runtime.c: energy detect, FIFO suspend, CCA, rates, TSF */
+#define HYB_MAC_BTC		0x080	/* mac_btc.c: Bluetooth coexistence */
+#define HYB_MAC_SEM		0x100	/* mac_sem.c: the offload semaphore */
+static inline bool hyb_mac_on(unsigned int group)
+{
+	return bcm4360_open_mac && (bcm4360_open_mac_mask & group);
+}
 extern bool bcm4360_open_utils;
 extern bool bcm4360_open_clm;
 extern bool bcm4360_open_ppr;

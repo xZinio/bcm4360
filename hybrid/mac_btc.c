@@ -42,7 +42,7 @@ void wlc_phy_set_femctrl_bt_wlan_ovrd(void *pi, s8 sw);
 	struct bcm4360_hw hw;						\
 	struct bcm4360_mac mac;						\
 									\
-	if (!bcm4360_open_mac) {					\
+	if (!hyb_mac_on(HYB_MAC_BTC)) {					\
 		blob_call;						\
 	}								\
 	hyb_mac_in(wlc_hw, &hw, &mac)

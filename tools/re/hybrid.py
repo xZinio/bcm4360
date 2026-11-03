@@ -46,6 +46,10 @@ ROOT = ab.ROOT
 OUT = os.environ.get('HYBRID_OUT') or os.path.join(ROOT, 're-out', 'hybrid')
 BLOB = os.path.join(ROOT, 'lib', 'wlc_hybrid.o_shipped')
 CORE = os.path.join(OUT, 'core.o')
+# the groups of the MAC layer (hybrid/hybrid.h, HYB_MAC_*): --off mac_clk etc.
+MAC_GROUPS = {'mac_ctrl': 0x001, 'mac_mem': 0x002, 'mac_clk': 0x004, 'mac_init': 0x008,
+              'mac_updown': 0x010, 'mac_chan': 0x020, 'mac_runtime': 0x040, 'mac_btc': 0x080,
+              'mac_sem': 0x100}
 LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils', 'clm', 'ppr', 'srom', 'si', 'dma',
           'chan', 'iovar', 'nvram', 'rate', 'cca', 'stf')   # the switches bcm4360_open_<layer>
 
@@ -174,6 +178,16 @@ class Run:
             self.m.on_call(name, zero, 1)
         for layers, value in ((off, 0), (on, 1)):
             for layer in layers:
+                if layer in MAC_GROUPS:
+                    # one group of the MAC layer: a bit of bcm4360_open_mac_mask
+                    hits = [x for x in self.m.blob.byname.get('bcm4360_open_mac_mask', [])
+                            if x.kind == 'O']
+                    if not hits:
+                        raise SystemExit('bcm4360_open_mac_mask: not in this core')
+                    mask = self.m.r32(hits[0].addr)
+                    bit = MAC_GROUPS[layer]
+                    self.m.w32(hits[0].addr, mask | bit if value else mask & ~bit)
+                    continue
                 sym = 'bcm4360_open_' + layer
                 hits = [x for x in self.m.blob.byname.get(sym, []) if x.kind == 'O']
                 if not hits:

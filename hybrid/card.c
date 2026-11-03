@@ -16,6 +16,7 @@
 bool bcm4360_open_pmu = true;
 bool bcm4360_open_access = true;
 bool bcm4360_open_mac = true;
+unsigned int bcm4360_open_mac_mask = 0x1ff;
 bool bcm4360_open_utils = true;
 bool bcm4360_open_clm = true;
 
@@ -26,6 +27,8 @@ module_param_named(open_access, bcm4360_open_access, bool, 0444);
 MODULE_PARM_DESC(open_access, "PHY/radio/table/shared-memory register access: open code (1, default) or Broadcom's (0)");
 module_param_named(open_mac, bcm4360_open_mac, bool, 0444);
 MODULE_PARM_DESC(open_mac, "MAC control, host flags, object memories, clocks, core reset, initialisation: open code (1, default) or Broadcom's (0)");
+module_param_named(open_mac_mask, bcm4360_open_mac_mask, uint, 0444);
+MODULE_PARM_DESC(open_mac_mask, "groups of the MAC layer that run open code (bits: 1 control, 2 object memories, 4 clocks, 8 init, 0x10 up/down, 0x20 channel, 0x40 run time, 0x80 coexistence, 0x100 offload semaphore; default 0x1ff)");
 module_param_named(open_utils, bcm4360_open_utils, bool, 0444);
 MODULE_PARM_DESC(open_utils, "board variables, number parsing, CRC-8: open code (1, default) or Broadcom's (0)");
 module_param_named(open_clm, bcm4360_open_clm, bool, 0444);

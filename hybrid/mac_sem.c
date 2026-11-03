@@ -39,7 +39,7 @@ void tcm_sem_enter(void *wlc)
 {
 	struct bcm4360_ol_sem s;
 
-	if (!bcm4360_open_mac) {
+	if (!hyb_mac_on(HYB_MAC_SEM)) {
 		bcm4360_blob_tcm_sem_enter(wlc);
 		return;
 	}
@@ -51,7 +51,7 @@ void tcm_sem_exit(void *wlc)
 {
 	struct bcm4360_ol_sem s;
 
-	if (!bcm4360_open_mac) {
+	if (!hyb_mac_on(HYB_MAC_SEM)) {
 		bcm4360_blob_tcm_sem_exit(wlc);
 		return;
 	}

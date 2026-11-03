@@ -251,7 +251,7 @@ void wlc_bmac_mctrl(void *wlc_hw, u32 mask, u32 val)
 	struct bcm4360_hw hw;
 	struct bcm4360_mac mac;
 
-	if (!bcm4360_open_mac) {
+	if (!hyb_mac_on(HYB_MAC_CTRL)) {
 		bcm4360_blob_wlc_bmac_mctrl(wlc_hw, mask, val);
 		return;
 	}
@@ -266,7 +266,7 @@ void wlc_ucode_wake_override_set(void *wlc_hw, u32 bit)
 	struct bcm4360_hw hw;
 	struct bcm4360_mac mac;
 
-	if (!bcm4360_open_mac) {
+	if (!hyb_mac_on(HYB_MAC_CTRL)) {
 		bcm4360_blob_wlc_ucode_wake_override_set(wlc_hw, bit);
 		return;
 	}
@@ -281,7 +281,7 @@ void wlc_ucode_wake_override_clear(void *wlc_hw, u32 bit)
 	struct bcm4360_hw hw;
 	struct bcm4360_mac mac;
 
-	if (!bcm4360_open_mac) {
+	if (!hyb_mac_on(HYB_MAC_CTRL)) {
 		bcm4360_blob_wlc_ucode_wake_override_clear(wlc_hw, bit);
 		return;
 	}
@@ -296,7 +296,7 @@ void wlc_bmac_suspend_mac_and_wait(void *wlc_hw)
 	struct bcm4360_hw hw;
 	struct bcm4360_mac mac;
 
-	if (!bcm4360_open_mac) {
+	if (!hyb_mac_on(HYB_MAC_CTRL)) {
 		bcm4360_blob_wlc_bmac_suspend_mac_and_wait(wlc_hw);
 		return;
 	}
@@ -311,7 +311,7 @@ void wlc_bmac_enable_mac(void *wlc_hw)
 	struct bcm4360_hw hw;
 	struct bcm4360_mac mac;
 
-	if (!bcm4360_open_mac) {
+	if (!hyb_mac_on(HYB_MAC_CTRL)) {
 		bcm4360_blob_wlc_bmac_enable_mac(wlc_hw);
 		return;
 	}
@@ -326,7 +326,7 @@ void wlc_bmac_mhf(void *wlc_hw, u32 idx, u32 mask, u32 val, u32 bands)
 	struct bcm4360_hw hw;
 	struct bcm4360_mac mac;
 
-	if (!bcm4360_open_mac) {
+	if (!hyb_mac_on(HYB_MAC_CTRL)) {
 		bcm4360_blob_wlc_bmac_mhf(wlc_hw, idx, mask, val, bands);
 		return;
 	}

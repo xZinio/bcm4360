@@ -54,7 +54,7 @@ void wlc_acphy_set_scramb_dyn_bw_en(void *pi, u8 on);
 	struct bcm4360_hw hw;						\
 	struct bcm4360_mac mac;						\
 									\
-	if (!bcm4360_open_mac) {					\
+	if (!hyb_mac_on(HYB_MAC_RUNTIME)) {					\
 		blob_call;						\
 	}								\
 	hyb_mac_in(wlc_hw, &hw, &mac)

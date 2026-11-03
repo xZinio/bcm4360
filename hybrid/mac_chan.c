@@ -57,7 +57,7 @@ void wlc_bmac_set_chanspec(void *wlc_hw, u32 chanspec, u32 mute, void *limits)
 	struct bcm4360_hw hw;
 	struct bcm4360_mac mac;
 
-	if (!bcm4360_open_mac) {
+	if (!hyb_mac_on(HYB_MAC_CHAN)) {
 		bcm4360_blob_wlc_bmac_set_chanspec(wlc_hw, chanspec, mute, limits);
 		return;
 	}
@@ -71,7 +71,7 @@ void wlc_setxband(void *wlc_hw, u32 unit)
 	struct bcm4360_hw hw;
 	struct bcm4360_mac mac;
 
-	if (!bcm4360_open_mac) {
+	if (!hyb_mac_on(HYB_MAC_CHAN)) {
 		bcm4360_blob_wlc_setxband(wlc_hw, unit);
 		return;
 	}
@@ -85,7 +85,7 @@ void wlc_bmac_bw_set(void *wlc_hw, u32 bw)
 	struct bcm4360_hw hw;
 	struct bcm4360_mac mac;
 
-	if (!bcm4360_open_mac) {
+	if (!hyb_mac_on(HYB_MAC_CHAN)) {
 		bcm4360_blob_wlc_bmac_bw_set(wlc_hw, bw);
 		return;
 	}
@@ -99,7 +99,7 @@ void wlc_bmac_bw_reset(void *wlc_hw)
 	struct bcm4360_hw hw;
 	struct bcm4360_mac mac;
 
-	if (!bcm4360_open_mac) {
+	if (!hyb_mac_on(HYB_MAC_CHAN)) {
 		bcm4360_blob_wlc_bmac_bw_reset(wlc_hw);
 		return;
 	}
@@ -113,7 +113,7 @@ void wlc_bmac_mute(void *wlc_hw, u32 on, u32 reason)
 	struct bcm4360_hw hw;
 	struct bcm4360_mac mac;
 
-	if (!bcm4360_open_mac) {
+	if (!hyb_mac_on(HYB_MAC_CHAN)) {
 		bcm4360_blob_wlc_bmac_mute(wlc_hw, on, reason);
 		return;
 	}
