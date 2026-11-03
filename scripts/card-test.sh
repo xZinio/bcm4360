@@ -38,8 +38,11 @@
 #
 # Each connection attempt waits until --gap seconds (default 90) have passed
 # since the previous one: eduroam refuses EAP after rapid re-activations.
-# A deadman timer (--deadline, default 150 min) runs card-test-restore.sh if
-# this script hangs. Needs root; start it detached so that it survives the
+# A guard checks the connection every 10 s: without one for 2 minutes (6
+# minutes inside a step that disconnects on purpose: a swap, a reconnect, a
+# capture), it runs card-test-restore.sh in a unit of its own, which stops
+# this test and brings back the installed driver. A deadman timer
+# (--deadline, default 110 min) does the same if this script hangs. Needs root; start it detached so that it survives the
 # Wi-Fi link going down:
 #
 #   systemd-run --unit=bcm4360-card-test --collect \
@@ -59,7 +62,7 @@ shift
 owner=
 soak=20
 base_soak=8
-deadline=150
+deadline=110
 capture=1
 band24=1
 suspend=0
@@ -99,6 +102,8 @@ note() { printf '[%s] %s\n' "$(date +%T)" "$*"; }
 
 TEST_PROFILE=bcm4360-test-24
 DIRTY=/run/bcm4360-card-test.dirty
+# set while a step disconnects on purpose (swap, reconnect, capture, 2.4 GHz)
+BUSY=/run/bcm4360-card-test.busy
 TR=/sys/kernel/tracing
 [ -d "$TR" ] || TR=/sys/kernel/debug/tracing
 DL_URLS="https://speed.cloudflare.com/__down?bytes=40000000 https://mirror.one.com/archlinux/iso/latest/archlinux-x86_64.iso"
@@ -155,6 +160,26 @@ pace() {
 	last_attempt=$(date +%s)
 }
 attempted() { last_attempt=$(date +%s); }
+busy() { touch "$BUSY"; }
+idle() { rm -f "$BUSY"; }
+
+# The guard (background): restore after 120 s without a connection (360 s
+# while a step is busy). The restore runs as a unit of its own because it
+# stops this test's unit, the guard's own included.
+guard() {
+	local down=0 limit
+	while sleep 10; do
+		if connected; then down=0; continue; fi
+		down=$((down + 10))
+		limit=120
+		[ -e "$BUSY" ] && limit=360
+		[ "$down" -lt "$limit" ] && continue
+		say "GUARD: no connection for ${down}s: restoring the installed driver"
+		systemd-run --unit=bcm4360-card-guard --collect \
+			/bin/bash "$here/card-test-restore.sh" "${restore_args[@]}" ${conn:+--conn "$conn"}
+		return
+	done
+}
 
 running_version() {
 	printf '%s %s' "$(lsmod | awk '$1 == "wl" || $1 == "bcm4360" { print $1; exit }')" \
@@ -259,14 +284,16 @@ watch_link() {
 	say "WATCH $l: ${secs}s, $lost pings lost, longest outage ${longest}s, frequencies:$freqs"
 }
 
-# soak MINUTES LABEL: every 30 s link + 3 pings; every 5 min throughput
+# soak MINUTES LABEL: every 30 s link + 3 pings; every 5 min throughput.
+# Stops after 2 minutes without a connection.
 soak() {
-	local mins=$1 l=$2 end i=0 samples=0 down=0 lost=0 sent=0 tps= p r f sig txr
+	local mins=$1 l=$2 end i=0 samples=0 down=0 run_down=0 lost=0 sent=0 tps= p r f sig txr
 	end=$(($(date +%s) + mins * 60))
 	note "soak $l: $mins min"
 	while [ "$(date +%s)" -lt "$end" ]; do
 		samples=$((samples + 1))
 		if connected; then
+			run_down=0
 			p=$(ping -I "$iface" -c 3 -W 2 -q 1.1.1.1 2>&1)
 			r=$(printf '%s\n' "$p" | sed -n 's/.* \([0-9]*\) received.*/\1/p')
 			sent=$((sent + 3)); lost=$((lost + 3 - ${r:-0}))
@@ -274,12 +301,17 @@ soak() {
 			sig=$(iw dev "$iface" link | awk '/signal:/ { print $2 }')
 			txr=$(iw dev "$iface" link | sed -n 's/.*tx bitrate: \([0-9.]*\) MBit.*/\1/p')
 			note "soak $l: freq=$f signal=$sig tx=$txr received ${r:-0}/3"
+			if [ $((i % 10)) -eq 9 ]; then
+				tps="$tps $(throughput | tr ' ' '/')"
+			fi
 		else
 			down=$((down + 1))
+			run_down=$((run_down + 1))
 			note "soak $l: NOT connected"
-		fi
-		if [ $((i % 10)) -eq 9 ] && connected; then
-			tps="$tps $(throughput | tr ' ' '/')"
+			if [ "$run_down" -ge 4 ]; then
+				say "SOAK $l: stopped after $samples samples: no connection for 2 minutes"
+				return 1
+			fi
 		fi
 		i=$((i + 1))
 		sleep 30
@@ -292,6 +324,7 @@ soak() {
 swap() {
 	local params=$1 l=$2 t0 r
 	pace
+	busy
 	touch "$DIRTY"
 	t0=$(date +%s)
 	note "swap $l: insmod $tko $params"
@@ -309,6 +342,7 @@ swap() {
 		say "FAIL $l: swap-test failed and rolled back to $(running_version) (see swap-test.log)"
 		klog_check "$t0" "$l-swap"
 	fi
+	idle
 	return $r
 }
 
@@ -318,7 +352,8 @@ band24() {
 	local l=$1 ssid src bssid sig t0 tmp
 	[ "$band24" -eq 1 ] || return 0
 	ssid=$(iw dev "$iface" link | sed -n 's/^\s*SSID: //p')
-	src=$(nmcli -g GENERAL.FILENAME con show "$conn" 2>/dev/null)
+	src=$(grep -l "^uuid=$(nmcli -g connection.uuid con show "$conn" 2>/dev/null)\$" \
+		/etc/NetworkManager/system-connections/*.nmconnection 2>/dev/null | head -n 1)
 	[ -n "$ssid" ] && [ -r "$src" ] || { say "skip $l-2g: no profile file for '$conn'"; return 0; }
 	read -r bssid sig < <(awk -v want="$ssid" '
 		BEGIN { best = -999 }
@@ -345,6 +380,7 @@ band24() {
 	chmod 600 "$tmp"
 	nmcli con load "$tmp"
 	pace
+	busy
 	t0=$(date +%s)
 	note "$l-2g: joining $bssid ($sig dBm)"
 	nmcli --wait 60 con up "$TEST_PROFILE" ifname "$iface" >/dev/null 2>&1
@@ -361,6 +397,7 @@ band24() {
 	attempted
 	wait_connected 90 "$conn" || say "FAIL $l-2g: not back on '$conn'"
 	nmcli con delete "$TEST_PROFILE" >/dev/null 2>&1
+	idle
 	klog_check "$t0" "$l-2g"
 }
 
@@ -369,14 +406,20 @@ cycle() {
 	local l=$1 t0
 	shift
 	pace
+	busy
 	t0=$(date +%s)
 	note "$l: $*"
 	"$@"
 	attempted
 	if wait_connected 90 "$conn"; then
 		say "PASS $l: connected again after $(($(date +%s) - t0))s"
+		idle
 	else
 		say "FAIL $l: not connected again"
+		idle
+		# a link that does not come back by itself is a failure of the stage:
+		# do not test on top of it
+		return 1
 	fi
 }
 disconnect_connect() { nmcli dev disconnect "$iface"; sleep 3; nmcli --wait 60 dev connect "$iface"; }
@@ -416,6 +459,7 @@ capture() {
 		cat "/sys/bus/pci/devices/$dev/resource"
 	} > "$d/pci.txt" 2>&1
 	pace
+	busy
 	touch "$DIRTY"
 	t0=$(date +%s)
 	note "capture $l: rmmod, mmiotrace on, insmod $tko $params"
@@ -445,6 +489,7 @@ capture() {
 	journalctl -k --since "@$t0" --no-pager > "$d/dmesg.txt" 2>&1
 	say "CAPTURE $l: $(wc -l < "$d/mmiotrace.txt") lines, $(grep -c '^[RW] ' "$d/mmiotrace.txt") accesses"
 	wait_connected 120 "$conn" || say "FAIL capture-$l: not connected after the capture"
+	idle
 	klog_check "$t0" "capture-$l"
 }
 
@@ -501,6 +546,9 @@ if ! systemd-run --unit=bcm4360-card-deadman --collect --on-active="${deadline}m
 	exit 1
 fi
 note "deadman armed: ${deadline} min"
+rm -f "$BUSY"
+guard &
+note "guard started"
 systemctl stop bcm4360-watchdog.timer && note "watchdog timer paused"
 t_start=$(date +%s)
 
@@ -564,16 +612,17 @@ elif swap "open_phy=1${extra:+ $extra}" phy; then
 	t0=$(date +%s)
 	measure phy
 	band24 phy
-	cycle phy-reconnect-1 disconnect_connect
-	cycle phy-reconnect-2 disconnect_connect
-	cycle phy-linkdown link_down_up
-	cycle phy-radio radio_off_on
-	if [ "$suspend" -eq 1 ]; then
-		cycle phy-suspend suspend_resume
-		measure phy-resumed
+	if cycle phy-reconnect-1 disconnect_connect &&
+		cycle phy-reconnect-2 disconnect_connect &&
+		cycle phy-linkdown link_down_up &&
+		cycle phy-radio radio_off_on &&
+		{ [ "$suspend" -eq 0 ] || { cycle phy-suspend suspend_resume && measure phy-resumed; }; }; then
+		soak "$soak" phy || { ok_phy=0; say "FAIL phy-soak: too long without connection"; }
+		measure phy-end
+	else
+		ok_phy=0
+		say "FAIL phy: a reconnect step failed; no soak on top of it"
 	fi
-	soak "$soak" phy || { ok_phy=0; say "FAIL phy-soak: too long without connection"; }
-	measure phy-end
 	klog_check "$t0" phy || ok_phy=0
 fi
 
