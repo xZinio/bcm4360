@@ -241,6 +241,20 @@ compares that word as undefined.
   Other integer parameters narrower than 32 bit: take them as `u32` and
   truncate. GCC, which built the object, does not extend them; a compiler
   that relies on the extension (clang) would read garbage bits.
+* An adapter that works on a copy of Broadcom's state (the MAC layer's view of
+  `wlc_hw`, `hyb_mac_in`/`hyb_mac_out`) writes back **only what the open code
+  changed**, and writes it back **before interrupts are enabled**
+  (`hyb_mac_sync` in the services `intrson`/`intrsrestore`). Broadcom's
+  interrupt handler runs without the driver's lock and calls adapters
+  (`wlc_isr` -> `wlc_hw_deviceremoved`): when every adapter wrote its whole
+  copy back, the handler's copy, taken while the open `up_finish` had just
+  enabled interrupts but not yet written `up`, overwrote it after the fact;
+  the DPC then took the driver for down and left the interrupts masked. On the
+  card (2026-11-03) about every second radio switch lost the interrupts for
+  good - joins failing, the transmit status FIFO overflowing - with both the
+  MAC clock and up/down groups open; with either of them on Broadcom's code it
+  never happened. The emulator, which has no interrupts and runs one thing at a
+  time, cannot see this class of fault.
 * A layer whose state Broadcom's other code reads cannot be taken over in
   part. The PMU keeps no state of its own (one cached clock measurement), so
   its functions can be taken over one by one. The PHY keeps a large state that

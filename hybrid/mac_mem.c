@@ -43,15 +43,15 @@ HYB_TAKE(void, wlc_bmac_write_template_ram, (void *wlc_hw, s32 offset, s32 len,
 void wlc_bmac_##name params						\
 {									\
 	struct bcm4360_hw hw;						\
-	struct bcm4360_mac mac;						\
+	struct bcm4360_mac mac, mac0;						\
 									\
 	if (!hyb_mac_on(HYB_MAC_MEM)) {					\
 		bcm4360_blob_wlc_bmac_##name blob_args;			\
 		return;							\
 	}								\
-	hyb_mac_in(wlc_hw, &hw, &mac);					\
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);					\
 	bcm4360_bmac_##name open_args;					\
-	hyb_mac_out(wlc_hw, &mac);					\
+	hyb_mac_out(wlc_hw, &mac, &mac0);					\
 }
 
 /* A8 */

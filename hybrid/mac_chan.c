@@ -55,71 +55,71 @@ void wlc_bmac_tx_fifo_resume(void *wlc_hw, u32 fifo);
 void wlc_bmac_set_chanspec(void *wlc_hw, u32 chanspec, u32 mute, void *limits)
 {
 	struct bcm4360_hw hw;
-	struct bcm4360_mac mac;
+	struct bcm4360_mac mac, mac0;
 
 	if (!hyb_mac_on(HYB_MAC_CHAN)) {
 		bcm4360_blob_wlc_bmac_set_chanspec(wlc_hw, chanspec, mute, limits);
 		return;
 	}
-	hyb_mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);
 	bcm4360_bmac_set_chanspec(&mac, (u16)chanspec, (u8)mute != 0, limits);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 void wlc_setxband(void *wlc_hw, u32 unit)
 {
 	struct bcm4360_hw hw;
-	struct bcm4360_mac mac;
+	struct bcm4360_mac mac, mac0;
 
 	if (!hyb_mac_on(HYB_MAC_CHAN)) {
 		bcm4360_blob_wlc_setxband(wlc_hw, unit);
 		return;
 	}
-	hyb_mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);
 	bcm4360_bmac_setxband(&mac, unit);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 void wlc_bmac_bw_set(void *wlc_hw, u32 bw)
 {
 	struct bcm4360_hw hw;
-	struct bcm4360_mac mac;
+	struct bcm4360_mac mac, mac0;
 
 	if (!hyb_mac_on(HYB_MAC_CHAN)) {
 		bcm4360_blob_wlc_bmac_bw_set(wlc_hw, bw);
 		return;
 	}
-	hyb_mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);
 	bcm4360_bmac_bw_set(&mac, (u16)bw);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 void wlc_bmac_bw_reset(void *wlc_hw)
 {
 	struct bcm4360_hw hw;
-	struct bcm4360_mac mac;
+	struct bcm4360_mac mac, mac0;
 
 	if (!hyb_mac_on(HYB_MAC_CHAN)) {
 		bcm4360_blob_wlc_bmac_bw_reset(wlc_hw);
 		return;
 	}
-	hyb_mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);
 	bcm4360_bmac_bw_reset(&mac);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 void wlc_bmac_mute(void *wlc_hw, u32 on, u32 reason)
 {
 	struct bcm4360_hw hw;
-	struct bcm4360_mac mac;
+	struct bcm4360_mac mac, mac0;
 
 	if (!hyb_mac_on(HYB_MAC_CHAN)) {
 		bcm4360_blob_wlc_bmac_mute(wlc_hw, on, reason);
 		return;
 	}
-	hyb_mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);
 	bcm4360_bmac_mute(&mac, (u8)on != 0, reason);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 /* --- the services of open/include/bcm4360/mac_env.h for the channel and band --- */
@@ -138,12 +138,12 @@ static void *wlc_of(struct bcm4360_mac *mac)
 
 static void flush(struct bcm4360_mac *mac)
 {
-	hyb_mac_out(mac->env, mac);
+	hyb_mac_sync(mac);
 }
 
 static void reload(struct bcm4360_mac *mac)
 {
-	hyb_mac_in(mac->env, mac->hw, mac);
+	hyb_mac_in(mac->env, mac->hw, mac, mac->env_shadow);
 }
 
 void bcm4360_bmac_env_band_select(struct bcm4360_mac *mac, u32 unit)

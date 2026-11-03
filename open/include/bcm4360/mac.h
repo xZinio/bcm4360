@@ -121,6 +121,11 @@ struct bcm4360_mac {
 	u8  btc_aa2g;		/* btc+0x18: the SROM variable aa2g */
 	u32 machwcap_backup;	/* wlc_hw+0xa8: the copy of machwcap made at attach */
 	s8  btswitch;		/* wlc_hw+0x1bc: the Bluetooth switch (-1 = 0xff: none) */
+
+	/* The platform's bookkeeping (hybrid/: the state as it was when the call
+	 * began, so that only what changed is written back); the open code
+	 * leaves it alone. */
+	void *env_shadow;
 };
 
 void bcm4360_bmac_mctrl(struct bcm4360_mac *mac, u32 mask, u32 val);	/* A2 (+A1) */

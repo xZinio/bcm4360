@@ -93,29 +93,29 @@ void wl_intrson(void *wl);
 void name(void *wlc_hw)							\
 {									\
 	struct bcm4360_hw hw;						\
-	struct bcm4360_mac mac;						\
+	struct bcm4360_mac mac, mac0;						\
 									\
 	if (!hyb_mac_on(HYB_MAC_UPDOWN)) {					\
 		bcm4360_blob_##name(wlc_hw);				\
 		return;							\
 	}								\
-	hyb_mac_in(wlc_hw, &hw, &mac);					\
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);					\
 	open_name(&mac);						\
-	hyb_mac_out(wlc_hw, &mac);					\
+	hyb_mac_out(wlc_hw, &mac, &mac0);					\
 }
 
 #define RET_ADAPT(type, name, open_name)				\
 type name(void *wlc_hw)							\
 {									\
 	struct bcm4360_hw hw;						\
-	struct bcm4360_mac mac;						\
+	struct bcm4360_mac mac, mac0;						\
 	type r;								\
 									\
 	if (!hyb_mac_on(HYB_MAC_UPDOWN))						\
 		return bcm4360_blob_##name(wlc_hw);			\
-	hyb_mac_in(wlc_hw, &hw, &mac);					\
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);					\
 	r = (type)open_name(&mac);					\
-	hyb_mac_out(wlc_hw, &mac);					\
+	hyb_mac_out(wlc_hw, &mac, &mac0);					\
 	return r;							\
 }
 
@@ -159,12 +159,12 @@ static void *led_of(struct bcm4360_mac *mac)
 
 static void flush(struct bcm4360_mac *mac)
 {
-	hyb_mac_out(mac->env, mac);
+	hyb_mac_sync(mac);
 }
 
 static void reload(struct bcm4360_mac *mac)
 {
-	hyb_mac_in(mac->env, mac->hw, mac);
+	hyb_mac_in(mac->env, mac->hw, mac, mac->env_shadow);
 }
 
 void bcm4360_bmac_env_survive_perst_war(struct bcm4360_mac *mac, bool reset, u32 sperst_mask,
@@ -307,6 +307,8 @@ void bcm4360_bmac_env_ifsctl_edcrs_set(struct bcm4360_mac *mac, bool on)
 
 void bcm4360_bmac_env_intrson(struct bcm4360_mac *mac)
 {
+	/* the interrupt handler reads wlc_hw (up, clk, ...) as soon as it runs */
+	hyb_mac_sync(mac);
 	wl_intrson(FIELD(wlc_of(mac), WLC_WL, void *));
 }
 

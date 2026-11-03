@@ -52,32 +52,32 @@ void wlc_acphy_set_scramb_dyn_bw_en(void *pi, u8 on);
 
 #define PROLOGUE(blob_call)						\
 	struct bcm4360_hw hw;						\
-	struct bcm4360_mac mac;						\
+	struct bcm4360_mac mac, mac0;						\
 									\
 	if (!hyb_mac_on(HYB_MAC_RUNTIME)) {					\
 		blob_call;						\
 	}								\
-	hyb_mac_in(wlc_hw, &hw, &mac)
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0)
 
 void wlc_bmac_ifsctl_edcrs_set(void *wlc_hw, u32 on)
 {
 	PROLOGUE(bcm4360_blob_wlc_bmac_ifsctl_edcrs_set(wlc_hw, on); return);
 	bcm4360_bmac_ifsctl_edcrs_set(&mac, (u8)on != 0);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 void wlc_bmac_tx_fifo_suspend(void *wlc_hw, u32 fifo)
 {
 	PROLOGUE(bcm4360_blob_wlc_bmac_tx_fifo_suspend(wlc_hw, fifo); return);
 	bcm4360_bmac_tx_fifo_suspend(&mac, fifo);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 void wlc_bmac_tx_fifo_resume(void *wlc_hw, u32 fifo)
 {
 	PROLOGUE(bcm4360_blob_wlc_bmac_tx_fifo_resume(wlc_hw, fifo); return);
 	bcm4360_bmac_tx_fifo_resume(&mac, fifo);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 u8 wlc_bmac_tx_fifo_suspended(void *wlc_hw, u32 fifo)
@@ -86,7 +86,7 @@ u8 wlc_bmac_tx_fifo_suspended(void *wlc_hw, u32 fifo)
 
 	PROLOGUE(return bcm4360_blob_wlc_bmac_tx_fifo_suspended(wlc_hw, fifo));
 	r = bcm4360_bmac_tx_fifo_suspended(&mac, fifo);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 	return r ? 1 : 0;
 }
 
@@ -94,7 +94,7 @@ void cca_stats_read(void *wlc_hw, u32 *out)
 {
 	PROLOGUE(bcm4360_blob_cca_stats_read(wlc_hw, out); return);
 	bcm4360_bmac_cca_stats_read(&mac, out);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 s32 wlc_bmac_cca_stats_read(void *wlc_hw, u32 *out)
@@ -103,7 +103,7 @@ s32 wlc_bmac_cca_stats_read(void *wlc_hw, u32 *out)
 
 	PROLOGUE(return bcm4360_blob_wlc_bmac_cca_stats_read(wlc_hw, out));
 	r = bcm4360_bmac_cca_stats_get(&mac, out);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 	return r;
 }
 
@@ -113,7 +113,7 @@ u32 wlc_bmac_rate_shm_offset(void *wlc_hw, u32 rate)
 
 	PROLOGUE(return bcm4360_blob_wlc_bmac_rate_shm_offset(wlc_hw, rate));
 	r = bcm4360_bmac_rate_shm_offset(&mac, (u8)rate);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 	return r;
 }
 
@@ -123,7 +123,7 @@ void wlc_bmac_stf_get_rateset_shm_offset(void *wlc_hw, void *rs, u32 off, void *
 		 return);
 	bcm4360_bmac_stf_get_rateset_shm_offset(&mac, (const u8 *)rs + RATESET_RATES,
 						FIELD(rs, RATESET_COUNT, u32), (u16)off, out);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 void wlc_bmac_stf_set_rateset_shm_offset(void *wlc_hw, void *rs, u32 off, void *in)
@@ -132,14 +132,14 @@ void wlc_bmac_stf_set_rateset_shm_offset(void *wlc_hw, void *rs, u32 off, void *
 		 return);
 	bcm4360_bmac_stf_set_rateset_shm_offset(&mac, FIELD(rs, RATESET_COUNT, u32), (u16)off,
 						in);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 void wlc_bmac_read_tsf(void *wlc_hw, u32 *lo, u32 *hi)
 {
 	PROLOGUE(bcm4360_blob_wlc_bmac_read_tsf(wlc_hw, lo, hi); return);
 	bcm4360_bmac_read_tsf(&mac, lo, hi);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 /* --- the services of open/include/bcm4360/mac_env.h at run time --- */
@@ -153,9 +153,9 @@ static void *pi_of(struct bcm4360_mac *mac)
 
 void bcm4360_bmac_env_phy_scramb_dyn_bw_en(struct bcm4360_mac *mac, bool on)
 {
-	hyb_mac_out(mac->env, mac);
+	hyb_mac_sync(mac);
 	wlc_acphy_set_scramb_dyn_bw_en(pi_of(mac), on ? 1 : 0);
-	hyb_mac_in(mac->env, mac->hw, mac);
+	hyb_mac_in(mac->env, mac->hw, mac, mac->env_shadow);
 }
 
 typedef void (*dma_fn)(void *di);

@@ -96,7 +96,8 @@ HYB_TAKE(void, wlc_bmac_suspend_mac_and_wait, (void *wlc_hw));
 HYB_TAKE(void, wlc_bmac_enable_mac, (void *wlc_hw));
 HYB_TAKE(void, wlc_bmac_mhf, (void *wlc_hw, u32 idx, u32 mask, u32 val, u32 bands));
 
-void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac)
+void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac,
+		struct bcm4360_mac *mac0)
 {
 	void *cur = FIELD(wlc_hw, WLC_HW_BAND, void *);
 	void *b2g = FIELD(wlc_hw, WLC_HW_BAND_2G, void *);
@@ -193,9 +194,17 @@ void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac)
 	}
 	mac->machwcap_backup = FIELD(wlc_hw, WLC_HW_MACHWCAP_BACKUP, u32);
 	mac->btswitch = FIELD(wlc_hw, WLC_HW_BTSWITCH, s8);
+	/* the state at the beginning of the call: hyb_mac_out writes back only
+	 * what differs from it */
+	mac->env_shadow = mac0;
+	if (mac0)
+		hw_memcpy(mac0, mac, sizeof(*mac));
 }
 
-void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac)
+/* a field of the view differs from the state at the beginning of the call */
+#define CHANGED(f)	(!mac0 || mac->f != mac0->f)
+
+void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac, struct bcm4360_mac *mac0)
 {
 	void *cur = FIELD(wlc_hw, WLC_HW_BAND, void *);
 	void *b2g = FIELD(wlc_hw, WLC_HW_BAND_2G, void *);
@@ -203,134 +212,172 @@ void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac)
 	int i;
 
 	for (i = 0; i < 6; i++)
-		FIELD(wlc_hw, WLC_HW_ETHERADDR + i, u8) = mac->hw_etheraddr[i];
-	FIELD(wlc_hw, WLC_HW_SRL, u16) = mac->srl;
-	FIELD(wlc_hw, WLC_HW_LRL, u16) = mac->lrl;
-	FIELD(wlc_hw, WLC_HW_UP, u8) = mac->up;
-	FIELD(wlc_hw, WLC_HW_CHANSPEC, u16) = mac->chanspec;
+		if (CHANGED(hw_etheraddr[i]))
+			FIELD(wlc_hw, WLC_HW_ETHERADDR + i, u8) = mac->hw_etheraddr[i];
+	if (CHANGED(srl))
+		FIELD(wlc_hw, WLC_HW_SRL, u16) = mac->srl;
+	if (CHANGED(lrl))
+		FIELD(wlc_hw, WLC_HW_LRL, u16) = mac->lrl;
+	if (CHANGED(up))
+		FIELD(wlc_hw, WLC_HW_UP, u8) = mac->up;
+	if (CHANGED(chanspec))
+		FIELD(wlc_hw, WLC_HW_CHANSPEC, u16) = mac->chanspec;
 	if (cur) {
-		FIELD(cur, BAND_CWMIN, u16) = mac->cwmin;
-		FIELD(cur, BAND_CWMAX, u16) = mac->cwmax;
+		if (CHANGED(cwmin))
+			FIELD(cur, BAND_CWMIN, u16) = mac->cwmin;
+		if (CHANGED(cwmax))
+			FIELD(cur, BAND_CWMAX, u16) = mac->cwmax;
 	}
-	FIELD(wlc_hw, WLC_HW_UCODE_LOADED, u8) = mac->ucode_loaded;
-	FIELD(wlc_hw, WLC_HW_SHORTSLOT, u8) = mac->shortslot;
-	FIELD(wlc_hw, WLC_HW_STF_SS_MODE, u8) = mac->stf_ss_mode;
-	FIELD(wlc_hw, WLC_HW_FASTPWRUP_DLY, u16) = mac->fastpwrup_dly;
+	if (CHANGED(ucode_loaded))
+		FIELD(wlc_hw, WLC_HW_UCODE_LOADED, u8) = mac->ucode_loaded;
+	if (CHANGED(shortslot))
+		FIELD(wlc_hw, WLC_HW_SHORTSLOT, u8) = mac->shortslot;
+	if (CHANGED(stf_ss_mode))
+		FIELD(wlc_hw, WLC_HW_STF_SS_MODE, u8) = mac->stf_ss_mode;
+	if (CHANGED(fastpwrup_dly))
+		FIELD(wlc_hw, WLC_HW_FASTPWRUP_DLY, u16) = mac->fastpwrup_dly;
 	if (FIELD(wlc_hw, WLC_HW_BTC, void *)) {
 		void *btc = FIELD(wlc_hw, WLC_HW_BTC, void *);
 
-		FIELD(btc, BTC_FLAGS, u16) = mac->btc_flags;
-		FIELD(btc, BTC_SHM_BASE, u16) = mac->btc_shm_base;
-		FIELD(btc, BTC_MODE, u32) = mac->btc_mode;
-		FIELD(btc, BTC_WIRE, s32) = mac->btc_wire;
-		FIELD(btc, BTC_GPIO_MASK, u32) = mac->btc_gpio_mask;
-		FIELD(btc, BTC_GPIO_OUT, u32) = mac->btc_gpio_out;
+		if (CHANGED(btc_flags))
+			FIELD(btc, BTC_FLAGS, u16) = mac->btc_flags;
+		if (CHANGED(btc_shm_base))
+			FIELD(btc, BTC_SHM_BASE, u16) = mac->btc_shm_base;
+		if (CHANGED(btc_mode))
+			FIELD(btc, BTC_MODE, u32) = mac->btc_mode;
+		if (CHANGED(btc_wire))
+			FIELD(btc, BTC_WIRE, s32) = mac->btc_wire;
+		if (CHANGED(btc_gpio_mask))
+			FIELD(btc, BTC_GPIO_MASK, u32) = mac->btc_gpio_mask;
+		if (CHANGED(btc_gpio_out))
+			FIELD(btc, BTC_GPIO_OUT, u32) = mac->btc_gpio_out;
 	}
-	FIELD(wlc_hw, WLC_HW_BTSWITCH, s8) = mac->btswitch;
-	FIELD(wlc_hw, WLC_HW_CLK, u8) = mac->clk;
-	FIELD(wlc_hw, WLC_HW_FORCEFASTCLK, u8) = mac->forcefastclk;
-	FIELD(wlc_hw, WLC_HW_SBCLK, u8) = mac->sbclk;
-	FIELD(wlc_hw, WLC_HW_PHYCLK, u8) = mac->phyclk;
-	FIELD(wlc_hw, WLC_HW_SUSPENDED_FIFOS, u8) = mac->suspended_fifos;
-	FIELD(wlc_hw, WLC_HW_PLLREQ, u32) = mac->pllreq;
-	FIELD(wlc_hw, WLC_HW_MACCONTROL, u32) = mac->maccontrol;
-	FIELD(wlc_hw, WLC_HW_SUSPEND_DEPTH, u32) = mac->mac_suspend_depth;
-	FIELD(wlc_hw, WLC_HW_WAKE_OVERRIDE, u32) = mac->wake_override;
-	FIELD(wlc_hw, WLC_HW_MUTE_OVERRIDE, u32) = mac->mute_override;
+	if (CHANGED(btswitch))
+		FIELD(wlc_hw, WLC_HW_BTSWITCH, s8) = mac->btswitch;
+	if (CHANGED(clk))
+		FIELD(wlc_hw, WLC_HW_CLK, u8) = mac->clk;
+	if (CHANGED(forcefastclk))
+		FIELD(wlc_hw, WLC_HW_FORCEFASTCLK, u8) = mac->forcefastclk;
+	if (CHANGED(sbclk))
+		FIELD(wlc_hw, WLC_HW_SBCLK, u8) = mac->sbclk;
+	if (CHANGED(phyclk))
+		FIELD(wlc_hw, WLC_HW_PHYCLK, u8) = mac->phyclk;
+	if (CHANGED(suspended_fifos))
+		FIELD(wlc_hw, WLC_HW_SUSPENDED_FIFOS, u8) = mac->suspended_fifos;
+	if (CHANGED(pllreq))
+		FIELD(wlc_hw, WLC_HW_PLLREQ, u32) = mac->pllreq;
+	if (CHANGED(maccontrol))
+		FIELD(wlc_hw, WLC_HW_MACCONTROL, u32) = mac->maccontrol;
+	if (CHANGED(mac_suspend_depth))
+		FIELD(wlc_hw, WLC_HW_SUSPEND_DEPTH, u32) = mac->mac_suspend_depth;
+	if (CHANGED(wake_override))
+		FIELD(wlc_hw, WLC_HW_WAKE_OVERRIDE, u32) = mac->wake_override;
+	if (CHANGED(mute_override))
+		FIELD(wlc_hw, WLC_HW_MUTE_OVERRIDE, u32) = mac->mute_override;
 	for (i = 0; i < BAND_MHFS_N; i++) {
-		if (b2g)
+		if (b2g && CHANGED(mhf[0][i]))
 			FIELD(b2g, BAND_MHFS + 2 * i, u16) = mac->mhf[0][i];
-		if (b5g)
+		if (b5g && CHANGED(mhf[1][i]))
 			FIELD(b5g, BAND_MHFS + 2 * i, u16) = mac->mhf[1][i];
 	}
+	if (mac0)
+		hw_memcpy(mac0, mac, sizeof(*mac));
+}
+
+#undef CHANGED
+
+/* in the middle of a call: write back what the open code changed so far */
+void hyb_mac_sync(struct bcm4360_mac *mac)
+{
+	hyb_mac_out(mac->env, mac, mac->env_shadow);
 }
 
 /* bmac-init.md A2 */
 void wlc_bmac_mctrl(void *wlc_hw, u32 mask, u32 val)
 {
 	struct bcm4360_hw hw;
-	struct bcm4360_mac mac;
+	struct bcm4360_mac mac, mac0;
 
 	if (!hyb_mac_on(HYB_MAC_CTRL)) {
 		bcm4360_blob_wlc_bmac_mctrl(wlc_hw, mask, val);
 		return;
 	}
-	hyb_mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);
 	bcm4360_bmac_mctrl(&mac, mask, val);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 /* bmac-init.md A3 */
 void wlc_ucode_wake_override_set(void *wlc_hw, u32 bit)
 {
 	struct bcm4360_hw hw;
-	struct bcm4360_mac mac;
+	struct bcm4360_mac mac, mac0;
 
 	if (!hyb_mac_on(HYB_MAC_CTRL)) {
 		bcm4360_blob_wlc_ucode_wake_override_set(wlc_hw, bit);
 		return;
 	}
-	hyb_mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);
 	bcm4360_bmac_wake_override_set(&mac, bit);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 /* bmac-init.md A4 */
 void wlc_ucode_wake_override_clear(void *wlc_hw, u32 bit)
 {
 	struct bcm4360_hw hw;
-	struct bcm4360_mac mac;
+	struct bcm4360_mac mac, mac0;
 
 	if (!hyb_mac_on(HYB_MAC_CTRL)) {
 		bcm4360_blob_wlc_ucode_wake_override_clear(wlc_hw, bit);
 		return;
 	}
-	hyb_mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);
 	bcm4360_bmac_wake_override_clear(&mac, bit);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 /* bmac-init.md A6 */
 void wlc_bmac_suspend_mac_and_wait(void *wlc_hw)
 {
 	struct bcm4360_hw hw;
-	struct bcm4360_mac mac;
+	struct bcm4360_mac mac, mac0;
 
 	if (!hyb_mac_on(HYB_MAC_CTRL)) {
 		bcm4360_blob_wlc_bmac_suspend_mac_and_wait(wlc_hw);
 		return;
 	}
-	hyb_mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);
 	bcm4360_bmac_suspend(&mac);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 /* bmac-init.md A7 */
 void wlc_bmac_enable_mac(void *wlc_hw)
 {
 	struct bcm4360_hw hw;
-	struct bcm4360_mac mac;
+	struct bcm4360_mac mac, mac0;
 
 	if (!hyb_mac_on(HYB_MAC_CTRL)) {
 		bcm4360_blob_wlc_bmac_enable_mac(wlc_hw);
 		return;
 	}
-	hyb_mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);
 	bcm4360_bmac_enable(&mac);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 /* bmac-init.md A9 */
 void wlc_bmac_mhf(void *wlc_hw, u32 idx, u32 mask, u32 val, u32 bands)
 {
 	struct bcm4360_hw hw;
-	struct bcm4360_mac mac;
+	struct bcm4360_mac mac, mac0;
 
 	if (!hyb_mac_on(HYB_MAC_CTRL)) {
 		bcm4360_blob_wlc_bmac_mhf(wlc_hw, idx, mask, val, bands);
 		return;
 	}
-	hyb_mac_in(wlc_hw, &hw, &mac);
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);
 	bcm4360_bmac_mhf(&mac, (u8)idx, (u16)mask, (u16)val, bands);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }

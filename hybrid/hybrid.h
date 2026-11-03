@@ -81,8 +81,21 @@ struct bcm4360_pmu *hyb_pmu_of(const void *sih);
  * object's `wlc_hw` before a call of the open MAC, and written back after it.
  */
 struct bcm4360_mac;
-void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac);
-void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac);
+/*
+ * The MAC layer's view of wlc_hw: hyb_mac_in fills `mac` and keeps a copy of
+ * it in `mac0`; hyb_mac_out writes back only the fields the open code
+ * changed (and updates `mac0`). Writing everything back clobbered what other
+ * code changed meanwhile - above all the interrupt handler, which runs
+ * without the driver's lock (wlc_isr -> wlc_hw_deviceremoved, an adapter),
+ * and which took its copy while an open function had not yet written its
+ * own (2026-11-03: the card lost its interrupts after a radio switch).
+ * hyb_mac_sync does the same in the middle of a call, before interrupts are
+ * enabled.
+ */
+void hyb_mac_in(void *wlc_hw, struct bcm4360_hw *hw, struct bcm4360_mac *mac,
+		struct bcm4360_mac *mac0);
+void hyb_mac_out(void *wlc_hw, const struct bcm4360_mac *mac, struct bcm4360_mac *mac0);
+void hyb_mac_sync(struct bcm4360_mac *mac);
 
 /*
  * hybrid/si.c: the open view of a backplane handle of the object (struct
@@ -132,5 +145,6 @@ extern bool bcm4360_open_nvram;
 extern bool bcm4360_open_rate;
 extern bool bcm4360_open_cca;
 extern bool bcm4360_open_stf;
+extern bool bcm4360_open_stf_policy;
 
 #endif

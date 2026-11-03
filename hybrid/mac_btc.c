@@ -40,12 +40,12 @@ void wlc_phy_set_femctrl_bt_wlan_ovrd(void *pi, s8 sw);
 
 #define PROLOGUE(blob_call)						\
 	struct bcm4360_hw hw;						\
-	struct bcm4360_mac mac;						\
+	struct bcm4360_mac mac, mac0;						\
 									\
 	if (!hyb_mac_on(HYB_MAC_BTC)) {					\
 		blob_call;						\
 	}								\
-	hyb_mac_in(wlc_hw, &hw, &mac)
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0)
 
 s32 wlc_bmac_btc_mode_set(void *wlc_hw, s32 mode)
 {
@@ -53,7 +53,7 @@ s32 wlc_bmac_btc_mode_set(void *wlc_hw, s32 mode)
 
 	PROLOGUE(return bcm4360_blob_wlc_bmac_btc_mode_set(wlc_hw, mode));
 	r = bcm4360_bmac_btc_mode_set(&mac, mode);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 	return r;
 }
 
@@ -63,7 +63,7 @@ s32 wlc_bmac_btc_wire_set(void *wlc_hw, s32 wire)
 
 	PROLOGUE(return bcm4360_blob_wlc_bmac_btc_wire_set(wlc_hw, wire));
 	r = bcm4360_bmac_btc_wire_set(&mac, wire);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 	return r;
 }
 
@@ -73,7 +73,7 @@ s32 wlc_bmac_btc_wire_get(void *wlc_hw)
 
 	PROLOGUE(return bcm4360_blob_wlc_bmac_btc_wire_get(wlc_hw));
 	r = bcm4360_bmac_btc_wire_get(&mac);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 	return r;
 }
 
@@ -83,7 +83,7 @@ s32 wlc_bmac_set_btswitch(void *wlc_hw, u32 sw)
 
 	PROLOGUE(return bcm4360_blob_wlc_bmac_set_btswitch(wlc_hw, sw));
 	r = bcm4360_bmac_set_btswitch(&mac, (s8)sw);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 	return r;
 }
 
@@ -92,14 +92,14 @@ void wlc_bmac_update_bt_chanspec(void *wlc_hw, u32 chanspec, u32 scanning, u32 p
 	PROLOGUE(bcm4360_blob_wlc_bmac_update_bt_chanspec(wlc_hw, chanspec, scanning, p4);
 		 return);
 	bcm4360_bmac_update_bt_chanspec(&mac, (u16)chanspec, (u8)scanning != 0, (u8)p4 != 0);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 void wlc_bmac_seci_upd(void *wlc_hw)
 {
 	PROLOGUE(bcm4360_blob_wlc_bmac_seci_upd(wlc_hw); return);
 	bcm4360_bmac_seci_upd(&mac);
-	hyb_mac_out(wlc_hw, &mac);
+	hyb_mac_out(wlc_hw, &mac, &mac0);
 }
 
 /* --- the services of open/include/bcm4360/mac_env.h for the coexistence --- */
@@ -133,7 +133,7 @@ s32 bcm4360_bmac_env_wlc_btc_mode(struct bcm4360_mac *mac)
 
 void bcm4360_bmac_env_phy_set_femctrl_bt_wlan_ovrd(struct bcm4360_mac *mac, s8 sw)
 {
-	hyb_mac_out(mac->env, mac);
+	hyb_mac_sync(mac);
 	wlc_phy_set_femctrl_bt_wlan_ovrd(pi_of(mac), sw);
-	hyb_mac_in(mac->env, mac->hw, mac);
+	hyb_mac_in(mac->env, mac->hw, mac, mac->env_shadow);
 }

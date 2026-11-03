@@ -70,29 +70,29 @@ void wlc_phy_switch_radio(void *pi, u32 on);
 void name params							\
 {									\
 	struct bcm4360_hw hw;						\
-	struct bcm4360_mac mac;						\
+	struct bcm4360_mac mac, mac0;						\
 									\
 	if (!hyb_mac_on(HYB_MAC_CLK)) {					\
 		bcm4360_blob_##name blob_args;				\
 		return;							\
 	}								\
-	hyb_mac_in(wlc_hw, &hw, &mac);					\
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);					\
 	open_name open_args;						\
-	hyb_mac_out(wlc_hw, &mac);					\
+	hyb_mac_out(wlc_hw, &mac, &mac0);					\
 }
 
 #define RET_ADAPT(type, name, open_name, params, open_args, blob_args)	\
 type name params							\
 {									\
 	struct bcm4360_hw hw;						\
-	struct bcm4360_mac mac;						\
+	struct bcm4360_mac mac, mac0;						\
 	type r;								\
 									\
 	if (!hyb_mac_on(HYB_MAC_CLK))						\
 		return bcm4360_blob_##name blob_args;			\
-	hyb_mac_in(wlc_hw, &hw, &mac);					\
+	hyb_mac_in(wlc_hw, &hw, &mac, &mac0);					\
 	r = open_name open_args;					\
-	hyb_mac_out(wlc_hw, &mac);					\
+	hyb_mac_out(wlc_hw, &mac, &mac0);					\
 	return r;							\
 }
 
@@ -144,12 +144,12 @@ static void *pi_of(struct bcm4360_mac *mac)
 /* around code that may run the MAC layer again: write the state back, read it after */
 static void flush(struct bcm4360_mac *mac)
 {
-	hyb_mac_out(mac->env, mac);
+	hyb_mac_sync(mac);
 }
 
 static void reload(struct bcm4360_mac *mac)
 {
-	hyb_mac_in(mac->env, mac->hw, mac);
+	hyb_mac_in(mac->env, mac->hw, mac, mac->env_shadow);
 }
 
 u32 bcm4360_bmac_env_core_cflags(struct bcm4360_mac *mac, u32 mask, u32 val)
