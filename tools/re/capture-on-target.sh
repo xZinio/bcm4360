@@ -11,7 +11,7 @@
 #                   program counters in the trace to functions
 #   dmesg.txt       kernel log of the session
 #
-#   capture-on-target.sh [MODULE] [SECONDS]      default: bcm4360 45
+#   capture-on-target.sh [MODULE|FILE.ko] [SECONDS]      default: bcm4360 45
 #
 # Wi-Fi is down while this runs. mmiotrace takes all CPUs but one offline for
 # the duration of the trace and slows the machine down; both end with the
@@ -55,8 +55,11 @@ trap restore EXIT INT TERM
 } > "$OUT/pci.txt" 2>&1
 
 echo "unloading drivers of $DEV"
+# rmmod, not modprobe -r: that would also unload cfg80211, and the running
+# wpa_supplicant keeps nl80211's old netlink id and cannot use any Wi-Fi
+# interface again until it is restarted
 for m in "$MODULE" wl b43 brcmsmac brcmfmac bcma ssb; do
-	modprobe -r "$m" 2>/dev/null || true
+	rmmod "$m" 2>/dev/null || true
 done
 
 echo "bcm4360-capture: start" > /dev/kmsg
@@ -68,7 +71,10 @@ sleep 1
 
 echo "loading $MODULE and waiting $SECONDS_UP s (connect to a network now if it does not happen by itself)"
 echo "MARK load $MODULE" > "$TR/trace_marker"
-modprobe "$MODULE"
+case $MODULE in
+*.ko) insmod "$MODULE"; MODULE=$(modinfo -F name "$MODULE") ;;
+*) modprobe "$MODULE" ;;
+esac
 for s in /sys/module/$MODULE/sections/.text /sys/module/$MODULE/sections/.rodata \
 	/sys/module/$MODULE/sections/.data /sys/module/$MODULE/sections/.bss; do
 	[ -r "$s" ] && echo "$(basename "$s") $(cat "$s")"
