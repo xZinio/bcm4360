@@ -553,3 +553,48 @@ use wlc_beacon_phytxctl
 use wlc_txc_upd
 use wlc_write_shm
 use wlc_mhf
+
+# The attach and detach of the MAC layer (hybrid/mac_attach.c, open/mac/bmac_attach.c;
+# docs/re/spec/bmac-attach.md, bmac-data.md P54, bmac-run.md R8, R9; switch open_mac,
+# group 0x200 of open_mac_mask). sub_064887 (A13), sub_069659 (P54) and the
+# callbacks sub_061268/sub_061285 (R9) are Broadcom's static functions that only
+# the attach reaches: the open attach calls the open ones.
+take wlc_hw_attach
+take wlc_hw_detach
+take wlc_bmac_attach
+take wlc_bmac_detach
+take wlc_hw_set_di
+take wlc_hw_get_txavail
+take wlc_hw_get_bandunit
+take wlc_template_cfg_init
+take wlc_bmac_si_attach
+take wlc_bmac_si_detach
+take wlc_phy_shim_attach
+take wlc_phy_shim_detach
+take wlc_chipmatch
+take wlc_is_singleband_5g
+take wlc_tunables_override
+take wlc_calloc
+take bcm_ether_atoe
+take wlc_bmac_ampdu_set
+take wlc_bmac_xmtfifo_sz_get
+use si_pcieltrenable
+use si_pcieobffenable
+use si_pcie_get_request_size
+use si_pci_sleep
+use si_register_intr_callback
+use si_deregister_intr_callback
+use wl_msg_level
+
+# The LEDs of the MAC layer (hybrid/mac_led.c, open/mac/bmac_led.c; bmac-run.md R4;
+# switch open_mac, group 0x400). The timer function sub_061660 is static: the
+# open wlc_bmac_led_attach registers the open one.
+take wlc_bmac_led_attach
+take wlc_bmac_led_detach
+take wlc_bmac_led_hw_mask_init
+take wlc_bmac_led
+take wlc_bmac_led_hw_deinit
+take wlc_bmac_led_set
+take wlc_bmac_blink_sync
+take wlc_bmac_led_blink_event
+take wlc_bmac_led_blink

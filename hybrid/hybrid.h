@@ -129,6 +129,8 @@ extern unsigned int bcm4360_open_mac_mask;
 #define HYB_MAC_RUNTIME		0x040	/* mac_runtime.c: energy detect, FIFO suspend, CCA, rates, TSF */
 #define HYB_MAC_BTC		0x080	/* mac_btc.c: Bluetooth coexistence */
 #define HYB_MAC_SEM		0x100	/* mac_sem.c: the offload semaphore */
+#define HYB_MAC_ATTACH		0x200	/* mac_attach.c: attach and detach */
+#define HYB_MAC_LED		0x400	/* mac_led.c: the LEDs and their blink timer */
 static inline bool hyb_mac_on(unsigned int group)
 {
 	return bcm4360_open_mac && (bcm4360_open_mac_mask & group);

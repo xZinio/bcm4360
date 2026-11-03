@@ -15,6 +15,8 @@ hybrid-objs := hybrid/card.o \
                hybrid/mac_chan.o open/mac/bmac_chan.o \
                hybrid/mac_runtime.o open/mac/bmac_runtime.o \
                hybrid/mac_btc.o open/mac/bmac_btc.o \
+               hybrid/mac_attach.o open/mac/bmac_attach.o \
+               hybrid/mac_led.o open/mac/bmac_led.o \
                hybrid/utils.o open/lib/utils.o \
                hybrid/clm.o open/lib/clm.o \
                hybrid/ppr.o open/lib/ratepwr.o \

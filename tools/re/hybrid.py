@@ -49,7 +49,8 @@ CORE = os.path.join(OUT, 'core.o')
 # the groups of the MAC layer (hybrid/hybrid.h, HYB_MAC_*): --off mac_clk etc.
 MAC_GROUPS = {'mac_ctrl': 0x001, 'mac_mem': 0x002, 'mac_clk': 0x004, 'mac_init': 0x008,
               'mac_updown': 0x010, 'mac_chan': 0x020, 'mac_runtime': 0x040, 'mac_btc': 0x080,
-              'mac_sem': 0x100}
+              'mac_sem': 0x100, 'mac_attach': 0x200,
+              'mac_led': 0x400}
 LAYERS = ('pmu', 'phy', 'access', 'mac', 'utils', 'clm', 'ppr', 'srom', 'si', 'dma',
           'chan', 'iovar', 'nvram', 'rate', 'cca', 'stf', 'stf_policy')   # bcm4360_open_<layer>
 
@@ -486,7 +487,7 @@ def selftest():
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('cmd', choices=('build', 'check', 'share', 'selftest', 'srom', 'chan',
+    ap.add_argument('cmd', choices=('build', 'check', 'share', 'selftest', 'srom', 'attach', 'led', 'chan',
                                     'iovar', 'small', 'rate', 'cca', 'dma', 'stf'))
     ap.add_argument('--model', action='store_true',
                     help='chan, iovar: compare the object with the Python model of the '
@@ -509,6 +510,12 @@ def main():
         return selftest()
     off = [x for x in ns.off.split(',') if x]
     on = [x for x in ns.on.split(',') if x]
+    if ns.cmd == 'led':
+        import led_scenarios
+        return 1 if led_scenarios.led_check(show=ns.show) else 0
+    if ns.cmd == 'attach':
+        import attach_scenarios
+        return 1 if attach_scenarios.attach_check(show=ns.show) else 0
     if ns.cmd == 'srom':
         return 1 if srom_check(off, ns.show, on=on) else 0
     if ns.cmd == 'chan':
