@@ -151,7 +151,12 @@ Steps 11-13 run only when the radio is on and associated (`pi+0x19c & 0x20f`
 The whole-session comparison runs two watchdog ticks; with the model's zero
 SHM counters the statistics and the mode changes they drive are not exercised,
 so the values of a live glitch response still need a real card (as for every
-measured quantity, see [05-status.md](05-status.md)).
+measured quantity, see [05-status.md](05-status.md)). Since 2026-11-03,
+`tools/re/phy_soak.py --interference` makes the three counters count (rates of
+0 to 4000 glitches a second, changing every 16 s) and runs the engines for
+about 20 minutes of watchdog ticks: the open code matches the object there
+(after the corrections in acphy-desense.md, "Corrections (interference
+session)").
 
 ## Open questions
 

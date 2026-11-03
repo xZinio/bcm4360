@@ -212,6 +212,19 @@ temperatures, RSSI and noise. The soak runs 73 % of the open PHY's code
 (the rest: front-end overrides of other boards, the debug ioctls and
 iovars, entry points of modes the emulator does not use).
 
+`python phy_soak.py --interference` gives the interference engines of the
+watchdog the input the model otherwise leaves at 0: the MAC's glitch and
+bad-PLCP counters count (0 to 4000 glitches a second, a card counted 300 to
+2600 on a busy 2.4 GHz channel), the hwaci detector registers read varying
+values, the upper layer passes beacon RSSIs, and the session stays associated
+on channel 11 for minutes with a scan, a radio switch and a down/up, then on
+36/80. Before 2026-11-03 the open PHY differed from the object in 10 of its
+53 steps there (the desense hysteresis, the restore of `PHY(0x19e)`, the
+desense not applied again after a channel set, the temperature constant);
+since then it is identical (`--board 3` and `--board 7` as well).
+`tools/re/blackbox.py` holds the black-box checks that settled what the
+object does in those places.
+
 Layers that make no access to the card are compared by their results:
 `python hybrid.py chan` calls the chanspec helpers for all 65,536 chanspecs
 and the validity checks for every channel and bandwidth in 261 states (nine
@@ -257,6 +270,21 @@ compares that word as undefined.
   MAC clock and up/down groups open; with either of them on Broadcom's code it
   never happened. The emulator, which has no interrupts and runs one thing at a
   time, cannot see this class of fault.
+* A measured input the model answers with 0 hides the code that depends on
+  it, however long the session: the comparison passes because both sides
+  take the same "nothing measured" branch. The interference engines never
+  left their early return until the glitch counters counted
+  (`phy_soak.py --interference`). On the card (2026-11-03, a busy 2.4 GHz
+  channel) the open PHY counted about three times Broadcom's carrier-sense
+  glitches on the same AP and its link died during the 20-minute soak; the
+  bugs this session then found take the desense out of the hardware after
+  every channel set. Confirmed by the next card run (run 6): on the same AP
+  both PHYs then counted the same glitch rate (108 and 106 per data frame).
+  The same run's register captures found the next case at once: the model
+  has no Bluetooth coexistence (MAC capabilities bit 29 = 0), the card has,
+  so the open idle-TSSI measurement had a stub where Broadcom's takes the
+  radio from the coexistence logic, and core 1 measured the rail.
+  List what a session leaves at 0 before trusting it.
 * A layer whose state Broadcom's other code reads cannot be taken over in
   part. The PMU keeps no state of its own (one cached clock measurement), so
   its functions can be taken over one by one. The PHY keeps a large state that

@@ -35,7 +35,17 @@ calibration on four channels, long watchdog runs, measured temperatures, IQ
 powers and noise: 513,322 accesses), and **so is the open PHY** (switch
 `open_phy`), on the synthetic board and on eight board variants of
 `phy_soak.py --board N`. What is left before `open_phy` becomes the default is
-a run on a real card (`scripts/layer-test.sh`, step 3). **The open AC-PHY now
+a run on a real card (`scripts/layer-test.sh`, step 3). (2026-11-03: the
+first full staged card run with the open PHY passed every functional stage
+but its link died in the 20-minute soak on a busy 2.4 GHz channel; the
+interference session `phy_soak.py --interference`, which gives the
+watchdog's glitch counters live values, then found four differences in the
+open desense and temperature code, all fixed - see
+[questions/phy-interference.md](questions/phy-interference.md). Card run 6
+confirmed the fixes: on the same 2.4 GHz AP both PHYs count the same glitch
+rate, the open PHY passed every stage and a 20-minute 5 GHz soak without a
+lost ping. Its captures show the next difference, the Bluetooth-coexistence
+override of the idle-TSSI measurement, a stub in the open code.) **The open AC-PHY now
 takes over all 79 entry points of Broadcom's PHY** (module parameter
 `open_phy`, off by default until it has run on a card): with it switched on
 the whole session is identical to the object, and the Broadcom code that runs

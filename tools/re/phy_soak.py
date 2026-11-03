@@ -72,6 +72,20 @@ STEPS = (['attach', 'mpc 0', 'up', 'roam_off 1'] + CH_2G + CH_5G_20 + CH_5G_40 +
           'down', 'up', 'wait 20', 'rssi 9', 'noise 5', 'interf 0', 'wait 15',
           'down', 'detach'])
 
+# --interference: what the card test saw on 2.4 GHz - associated on channel
+# 11 under changing glitch rates and beacon RSSIs, the radio switched off and
+# on, down and up, then 5 GHz; every phase of GLITCH_RATE is passed.
+ISTEPS = (['attach', 'mpc 0', 'up', 'roam_off 1', '11', 'assoc', 'unquiet', 'joincal',
+           'interf 1', 'irssi 11 -67', 'wait 40', 'irssi 11 -71', 'noise 1', 'wait 60',
+           # a scan while the desense is on, then back on the home channel
+           'scan', 'wait 10', 'irssi 11 -95', 'wait 30', 'irssi 11 -60', 'wait 90', 'rssi 1',
+           'radio off', 'wait 3', 'radio on', 'wait 3', '11', 'assoc', 'unquiet', 'joincal',
+           'interf 1', 'irssi 11 -68', 'wait 120', 'noise 2', 'scan passive', 'wait 20',
+           'down', 'up', '11', 'assoc', 'unquiet', 'joincal', 'interf 1', 'irssi 11 -73',
+           'wait 240', 'rssi 2', 'noise 3',
+           'deassoc', '36/80', 'assoc', 'unquiet', 'joincal', 'interf 1', 'irssi 36/80 -66',
+           'wait 200', 'scan', 'wait 20', 'rssi 3', 'down', 'detach'])
+
 WLC_GET_PHY_NOISE = 135             # src/include/wlioctl.h
 WLC_CMI = 0x1a0                     # wlc->cmi, the channel manager (as wlc_join_BSS passes it)
 AUX_ADC = 0x13                      # PHY: the temperature sense's ADC readout
@@ -180,11 +194,73 @@ def board(seed):
     return Layout(Blob(hybrid.BLOB)).encode(v)
 
 
+# --interference: what the model leaves at 0 and the interference engines of
+# the watchdog read (docs/re/spec/acphy-api-watchdog.md step 5,
+# acphy-desense.md E1, E3). The MAC's glitch and bad-PLCP counters
+# SHM(0x10e), SHM(0x10c), SHM(0x158) (16 bit, counting up) as a share of a
+# glitch rate that changes every GLITCH_PHASE seconds; the card counted ~300
+# to ~2600 OFDM glitches a second on a busy 2.4 GHz channel (card test
+# 2026-11-03 18:16, channel 11).
+GLITCH_SHM = {0x10e: 1.0, 0x10c: 0.06, 0x158: 0.15}
+GLITCH_RATE = (20, 350, 900, 2600, 600, 80, 4000, 1200, 0, 1500, 260, 3100, 150, 700)
+GLITCH_PHASE = 16
+# the detectors of the hwaci engine (E1): wide-band sums per core, and the
+# four readings of the hwaci detector
+HWACI_WIDE = (0x7af, 0x7ab, 0x7b3, 0x7b1)
+HWACI_DET = (0x523, 0x529, 0x528, 0x527)
+WIDE_VALUES = (0, 40, 150, 199, 200, 230, 400, 700, 1200, 2600)
+
+
+class Interference:
+    """Live readings for the interference engines: the glitch counters by
+    the emulated clock, the detector registers by the number of reads (the
+    same in both runs as long as they read the same registers in the same
+    order and at the same emulated time)."""
+
+    def __init__(self, chip, m):
+        self.m = m
+        self.n = {}
+        self.phy_read0 = chip.phy_read
+        self.obj_read0 = chip.obj_read
+        chip.phy_read = self.phy_read
+        chip.obj_read = self.obj_read
+
+    @staticmethod
+    def glitches(t):
+        """Glitches counted from time 0 to t seconds."""
+        full, part = divmod(t, GLITCH_PHASE)
+        n = int(full)
+        total = sum(GLITCH_RATE[i % len(GLITCH_RATE)] for i in range(n)) * GLITCH_PHASE
+        return total + GLITCH_RATE[n % len(GLITCH_RATE)] * part
+
+    def obj_read(self, space, addr, size, value):
+        value = self.obj_read0(space, addr, size, value)
+        if space == 'shm' and addr in GLITCH_SHM and size == 2:
+            t = self.m.os.now_us / 1e6
+            return int(self.glitches(t) * GLITCH_SHM[addr] + addr) & 0xffff
+        return value
+
+    def phy_read(self, addr, value):
+        value = self.phy_read0(addr, value)
+        wide = addr in HWACI_WIDE or addr - 0x200 in HWACI_WIDE      # cores 0, 1
+        if wide or addr in HWACI_DET:
+            k = self.n.get(addr, 0)
+            self.n[addr] = k + 1
+            rng = random.Random(addr * 7919 + k)
+            if wide:
+                return rng.choice(WIDE_VALUES) + rng.randrange(8)
+            # mostly quiet, now and then a detection (7-bit fields)
+            return rng.choice((0, 0, 0, 1, 2, 3, 5, 8, 12, 20, 40, 0x7f)) | (value & ~0x7f)
+        return value
+
+
 class SoakRun(hybrid.Run):
-    def __init__(self, path=None, off=(), on=(), **card):
+    def __init__(self, path=None, off=(), on=(), interference=False, **card):
         super().__init__(path, off=off, on=on, **card)
         self.s.chip.MAX_TRACE = 40000000
         Measurements(self.s.chip)
+        if interference:
+            Interference(self.s.chip, self.m)
         self.marks = []             # length of the trace at the start of each step
 
     def logical_steps(self):
@@ -242,6 +318,15 @@ class SoakRun(hybrid.Run):
             r = 0
         elif word == 'rssi':
             r = self.rssi(int(arg))
+        elif word == 'irssi':
+            # 'irssi CHANNEL RSSI': the RSSI of the beacons of the BSS on that
+            # channel as the upper layer passes it (wlc_phy_interf_rssi_update
+            # (pi, chanspec, rssi): E4's input). The channel is named because
+            # the chanspec iovar answers the BSS's, not the one tuned.
+            from run_chan import chanspec
+            ch, _, rssi = arg.partition(' ')
+            m.call('wlc_phy_interf_rssi_update', self.pi(), chanspec(m, ch), int(rssi) & 0xff)
+            r = 0
         elif word == 'noise':
             pi = self.pi()
             m.call('wlc_phy_noise_sample_intr', pi)
@@ -273,11 +358,12 @@ class SoakRun(hybrid.Run):
         return out
 
 
-def soak(on=('phy',), off=(), show=20, steps=STEPS, board_seed=0):
+def soak(on=('phy',), off=(), show=20, steps=STEPS, board_seed=0, interference=False):
     core = hybrid.build(quiet=True)
     card = {'srom': board(board_seed)} if board_seed else {}
-    ref = SoakRun(**card).session(steps, stop_on_error=False)
-    got = SoakRun(core, off=off, on=on, **card).session(steps, stop_on_error=False)
+    ref = SoakRun(interference=interference, **card).session(steps, stop_on_error=False)
+    got = SoakRun(core, off=off, on=on, interference=interference,
+                  **card).session(steps, stop_on_error=False)
     want, have = ref.logical_steps(), got.logical_steps()
     bad = 0
     if ref.error:
@@ -329,12 +415,15 @@ def main():
     ap.add_argument('--steps', default='', help='comma-separated steps instead of the soak')
     ap.add_argument('--board', type=int, default=0,
                     help='a board variant (seed; 0: the synthetic card)')
+    ap.add_argument('--interference', action='store_true',
+                    help='live glitch counters and interference detectors; without '
+                         '--steps the 2.4 GHz interference session ISTEPS')
     ns = ap.parse_args()
     on = tuple(x for x in ns.on.split(',') if x)
     off = tuple(x for x in ns.off.split(',') if x)
-    steps = ns.steps.split(',') if ns.steps else STEPS
+    steps = ns.steps.split(',') if ns.steps else ISTEPS if ns.interference else STEPS
     try:
-        return 1 if soak(on, off, ns.show, steps, ns.board) else 0
+        return 1 if soak(on, off, ns.show, steps, ns.board, ns.interference) else 0
     except EmuError as e:
         print('emulation error: %s' % e)
         return 1

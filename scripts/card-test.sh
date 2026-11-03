@@ -6,12 +6,16 @@
 # installed driver restored at the end, whatever happens:
 #
 #   card-test.sh KO [--owner USER] [--soak MIN] [--base-soak MIN] [--deadline MIN]
-#                   [--no-capture] [--no-24] [--suspend] [--hotspot NAME] [--gap SEC]
+#                   [--no-capture] [--no-24] [--watch24 SEC] [--suspend] [--hotspot NAME]
+#                   [--gap SEC]
 #                   [--extra PARAMS] [--no-off] [--confirm PARAMS]
 #                   [--captures "NAME:PARAMS;NAME:PARAMS"] [--def-repeat N]
 #                   [--quick "NAME:PARAMS;NAME:PARAMS"] [--cycles N] [--no-measure]
 #                   [--capture-radio "NAME:PARAMS;NAME:PARAMS"]
 #
+# --watch24 sets how long the 2.4 GHz stage of def and phy watches the link
+# (default 120 s); with both on the same BSSID it compares the two PHYs on
+# one AP, the MAC counters (diag) are recorded at its end.
 # --extra adds module parameters to the stages def and phy (e.g. "open_pmu=0"
 # to test the open PHY while the PMU layer is under suspicion); --no-off
 # skips the stage off; --confirm runs one more swap with PARAMS before def
@@ -78,6 +82,7 @@ base_soak=8
 deadline=110
 capture=1
 band24=1
+watch24=120
 suspend=0
 hotspot=
 gap=90
@@ -98,6 +103,7 @@ while [ $# -gt 0 ]; do
 	--deadline) deadline=$2; shift 2 ;;
 	--no-capture) capture=0; shift ;;
 	--no-24) band24=0; shift ;;
+	--watch24) watch24=$2; shift 2 ;;
 	--suspend) suspend=1; shift ;;
 	--hotspot) hotspot=$2; shift 2 ;;
 	--gap) gap=$2; shift 2 ;;
@@ -425,7 +431,8 @@ band24() {
 	if wait_connected 60 && [ "$(cur_freq)" -gt 0 ] && [ "$(cur_freq)" -lt 3000 ]; then
 		say "PASS $l-2g: joined $bssid ($sig dBm in the scan) on 2.4 GHz"
 		measure "$l-2g"
-		watch_link 120 "$l-2g"
+		watch_link "$watch24" "$l-2g"
+		diag "$l-2g-end"
 	else
 		say "FAIL $l-2g: no 2.4 GHz link to $bssid (frequency now $(cur_freq) MHz)"
 		diag "$l-2g-fail"
@@ -567,7 +574,7 @@ cp "$ko" "$tko"
 say "kernel $kver; running $(running_version); installed bcm4360 $(modinfo -F version bcm4360);" \
     "wl $(modinfo -F filename wl >/dev/null 2>&1 && echo present || echo missing); test build $(modinfo -F version "$tko")" \
     "$(modinfo -F srcversion "$tko"); connection '$conn' on $iface"
-say "plan: soak ${soak} min (open PHY) and ${base_soak} min (Broadcom's PHY), 2.4 GHz $band24," \
+say "plan: soak ${soak} min (open PHY) and ${base_soak} min (Broadcom's PHY), 2.4 GHz $band24 (${watch24}s)," \
     "capture $capture, suspend $suspend, gap ${gap}s, deadline ${deadline} min," \
     "extra '${extra}', off $((1 - skip_off)), confirm '${confirm}', captures '${captures:-default}'"
 

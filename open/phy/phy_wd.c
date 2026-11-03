@@ -153,6 +153,9 @@ static u8 daci_step(const struct daci_path *p, u8 level, u32 avg)
 				if (n < 0)
 					n = 0;
 			}
+			/* the level lowered from becomes the upper bound (as a raise
+			 * sets the lower one; acphy-desense.md E3, corrections) */
+			hi = lvl;
 			reset = true;
 		} else {
 			n = lvl;
@@ -163,9 +166,10 @@ static u8 daci_step(const struct daci_path *p, u8 level, u32 avg)
 
 	*p->lo = (u8)lo;
 	*p->hi = (u8)hi;
+	/* reset on a change, then counted: 1 after a change (E3, corrections) */
 	if (reset)
 		*p->dwell = 0;
-	else if (*p->dwell < 0xff)
+	if (*p->dwell < 0xff)
 		(*p->dwell)++;
 	return (u8)n;
 }

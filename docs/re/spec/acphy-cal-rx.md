@@ -127,7 +127,7 @@ Four independent pieces:
 | `.rodata+0x2cdab8` | bytes `01 00 01 00` | tempsense phase table A: `RADIO(0x0e)` bit 1 per measurement phase |
 | `.rodata+0x2cdabc` | bytes `00 00 01 01` | tempsense phase table B: `RADIO(0x0e)` mask-0x4 value per phase (all entries have bit 2 = 0, so bit 2 is cleared every phase) |
 | tempsense | 0x223e = 8766 | slope numerator (rev 0/1) |
-| tempsense | 0x1d0614 = 1901076 | offset added before the final `/0x4000` (rev 0/1) |
+| tempsense | 0x1d0614 = 1902100 | offset added before the final `/0x4000` (rev 0/1). **Corrected 2026-11-03:** the first version gave the decimal as 1901076 (= 0x1d0214, 1/16 degree low); `tools/re/blackbox.py tempsense` bounds the object's constant to exactly 1902100 |
 | tempsense | 0x4000 = 16384 | final divisor (all revs) |
 | tempsense | `{0x20f,0x209,0x20a}` = `{527,521,522}` | per-core slope divisor (cores 0,1,2), array `local_58` |
 
@@ -593,7 +593,7 @@ Steps (BCM4360, radio major rev 0, phy rev 0/1):
        diff = m[c][3] + m[c][1] - m[c][2] - m[c][0]
        term = (((diff * 8766) / 2) << 8) / DIV[c]     # DIV = {527,521,522}
        acc += term / n                                 # 32-bit signed / n
-   acc += 1901076
+   acc += 0x1d0614                                # = 1902100 (corrected 2026-11-03)
    degrees = acc / 16384
    temperature = tempoffset + degrees
    ```

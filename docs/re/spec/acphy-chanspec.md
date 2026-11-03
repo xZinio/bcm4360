@@ -1166,7 +1166,10 @@ With the synthetic SROM the traces show r1 = -41, r2 = -23 on channel 36 and
 ### A7. sub_09a539 (.text+0x09a539, 850 bytes; name assigned: wlc_phy_desense_apply_acphy) with sub_08f84d, sub_090b77
 
 Step 24 of the channel function, called as `sub_09a539(pi, on)` with `on` =
-`pi_ac+0x670`; assignment `acphy-desense`. In all traces `on` is 0.
+`pi_ac+0x670`; assignment `acphy-desense`. In all traces `on` is 0. (Since
+2026-11-03, `tools/re/phy_soak.py --interference` reaches `on` != 0 here:
+radio on, `up` and the return from a scan while the channel's record holds a
+desense; the open code matches the object there.)
 
 1. `wlapi_suspend_mac_and_wait(sh+0x20)`; s19e = `PHY(0x19e)`;
    `mod(PHY(0x19e), 0x0002, 0x0002)`.

@@ -1500,7 +1500,8 @@ void bcm4360_phy_hwaci_engine_acphy(struct bcm4360_phy *phy)
 		bcm4360_phy_desense_calc_total_acphy(phy);
 		phy_set_lna_gainlimit(phy, 1);
 		phy_set_lna_gainlimit(phy, 2);
-		bcm4360_phy_write(io, ACPHY_REG_0x19e, s19e);
+		/* only bit 1 is restored (acphy-desense.md E1, corrections) */
+		bcm4360_phy_mod(io, ACPHY_REG_0x19e, 0x0002, s19e);
 		phy_aci_updsts(phy);
 	}
 

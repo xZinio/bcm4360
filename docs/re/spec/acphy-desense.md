@@ -587,7 +587,9 @@ shift `s`: 0 for 20 MHz, 1 for 40 MHz, 2 for 80 MHz.
    this record's desense set). Then save `PHY(0x19e)`, `mod(PHY(0x19e), 2, 2)`,
    `sub_0909fd(pi)` (rebuild the total desense, A4), `sub_0998cc(pi, 1)` and
    `sub_0998cc(pi, 2)` (rewrite the gain-limit tables `TBL(0x0b)`, A5), restore
-   `PHY(0x19e)`, then `wlc_phy_aci_updsts_acphy(pi)` (E2).
+   `PHY(0x19e)`, then `wlc_phy_aci_updsts_acphy(pi)` (E2). **Corrected
+   (interference session, 2026-11-03):** the restore is `mod(PHY(0x19e),
+   0x0002, saved)` (bit 1 only, a read and a write).
 9. Enable the MAC.
 
 If `rec[0x49] != 0` at entry (step 2) the whole body is skipped for that tick.
@@ -632,9 +634,14 @@ step 4 in every model run and changes nothing.
      level-4)`; reset the counter. Otherwise `new = level` (no change).
    * Clamp `new` to <= 24. Save `rec[0x2c]`, `rec[0x2d]`, and the counter
      (`+1`, capped at 255).
+   * **Corrected (interference session, 2026-11-03):** a lower also sets the
+     upper bound `rec[0x2d]` = `level`; the counter is reset and *then*
+     counted, so it is 1 after a change.
 6. Wide path (drives the OFDM desense `rec[0x10]`, hysteresis `rec[0x40]`,
    `rec[0x41]`, `rec[0x42]`): the same shape with `avgW`, threshold 601, the
-   sub-threshold constant 300 instead of 100, and clamp <= 48.
+   sub-threshold constant 300 instead of 100, and clamp <= 48 (the same
+   corrections: a lower sets `rec[0x41]` = `level`; the counter is 1 after a
+   change).
 7. If `pi_ac[0x671] != 0` (RSSI cap enabled): cap the b-PHY result to
    `max(0, rec[0x19] + 90)` and the OFDM result to `max(0, rec[0x19] + 85)`,
    where `rec[0x19]` is the RSSI-based value from E4 (so at low RSSI the desense
@@ -818,6 +825,42 @@ with one receive chain) the 42 restore calls of the channel changes and the
 calibrations inside the 18 noise readings match the model as well (480 calls,
 0 differences).
 
+## Corrections (interference session, 2026-11-03)
+
+Found by giving the interference engines live input for the first time
+(`tools/re/phy_soak.py --interference`: the MAC's glitch and bad-PLCP counters
+`SHM(0x10e)`, `SHM(0x10c)`, `SHM(0x158)` count at rates like those a card
+counted on a busy 2.4 GHz channel, the detector registers of E1 read varying
+values, the upper layer passes beacon RSSIs, with radio off/on, down/up and
+scans while associated). The corrections were established black-box, by
+running the object with chosen inputs and comparing its state with a model
+(`tools/re/blackbox.py`), not by reading code.
+
+1. **E3 steps 5 and 6, the dwell counter.** "Reset the counter" and "the
+   counter (+1, capped at 255)" both apply on a change: the counter is set to
+   0 and then counted, so it is **1** after a raise or a lower, not 0. (The
+   open code had left it at 0, so every later lowering came one tick late.)
+2. **E3 steps 5 and 6, the upper bound.** A *lower* sets the upper bound
+   (`rec[0x2d]` for the narrow path, `rec[0x41]` for the wide one) to the level
+   lowered from, as a raise sets the lower bound to the level raised from.
+   The text above omitted it; without it the next raise always takes the
+   `level + 4` branch instead of going half-way back.
+3. **E1 step 8, the restore of `PHY(0x19e)`** is `mod(PHY(0x19e), 0x0002,
+   saved)`: only bit 1 is restored (read, then written), as in A7 step 4 of
+   `acphy-chanspec.md` - not a plain write of the saved word. With
+   `PHY(0x19e)` reading random values inside the engine, the written value is
+   always the read value with bit 1 taken from the saved one.
+
+With 1 and 2, the model of E3 agrees with the object in every call of the
+interference session (`blackbox.py e3`: about 370 calls, 173 of them with a
+level change, RSSI caps from -95 to -60 dBm): 0 differences. Not a spec
+error, but found by the same session: the channel function must pass the
+"on" byte `pi_ac+0x670` to A7 at its step 24 (as `acphy-chanspec.md` says);
+the open code passed 0, so after every channel set (scan, the return from it,
+radio on, `up`) the desense was taken out of the hardware while the record
+still held it, and on a saturated channel (level at its clamp, no further
+change) it was never applied again.
+
 ## Open questions
 
 * (Answered by phy-noise: the writer of `pi_ac+0x14+c` is `sub_0b701e`, see
@@ -830,8 +873,10 @@ calibrations inside the 18 noise readings match the model as well (480 calls,
 * The hwaci detector logic (E1 steps 4-5) and the whole desense-aci engine
   decision (E3) were read from the code only: every measured input reads 0 in
   the model, so only the register addresses, the constants and the fact that
-  the engines run were verified against the object. The comparison against a
-  real card's measurements is not possible here.
+  the engines run were verified against the object. (Since 2026-11-03 the
+  model gives them input - see "Corrections (interference session)" - and E3
+  is verified by running; whether the inputs behave like a real card's is
+  still open.)
 * The interference mode `sh+0x80` is 7 in the model (bits 0, 1, 2), so both
   detector branches of E1 run. Which SROM/iovar values map to which mode, and
   what bit 0 selects, is `acphy-attach`/`acphy-chanspec` (section 4) territory.

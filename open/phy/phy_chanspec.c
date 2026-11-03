@@ -342,7 +342,9 @@ void bcm4360_phy_chanspec_set_acphy(struct bcm4360_phy *phy, u16 chanspec)
 	bcm4360_phy_desense_calc_total_acphy(phy);
 	bcm4360_phy_rxgainctrl_set_gaintbls_acphy(phy, init, bandchg, bwchg);
 	bcm4360_phy_rxgainctrl_set_init_clip_gain_acphy(phy);
-	bcm4360_phy_desense_apply_acphy(phy, 0);
+	/* step 24: with the "on" byte calc_total left (pi_ac+0x670), so that a
+	 * channel's desense is applied again after a re-initialisation */
+	bcm4360_phy_desense_apply_acphy(phy, phy->desense.total[BCM4360_DESENSE_ON]);
 
 	/* step 25: converter calibration */
 	if (bwchg || init) {

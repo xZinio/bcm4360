@@ -2159,7 +2159,7 @@ u32 bcm4360_phy_tempsense(struct bcm4360_phy *phy)
 		term = (((diff * 8766) / 2) << 8) / (s32)tempsense_div[c];
 		acc += term / (s32)ncores;
 	}
-	acc += 1901076;
+	acc += 0x1d0614;					/* = 1902100 (acphy-cal-rx.md, corrections) */
 	degrees = acc / 16384;
 	temp = (s32)phy->temp.offset + degrees;
 
