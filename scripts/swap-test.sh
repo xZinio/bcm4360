@@ -156,6 +156,11 @@ done_ok=0
 rollback() {
 	[ "$swapped" -eq 1 ] || return 0
 	swapped=0
+	# the failing driver's state, for the diagnosis (scripts/card-test.sh)
+	if [ -n "${BCM4360_DIAG:-}" ] && [ -n "${iface:-}" ]; then
+		{ date; timeout 20 python3 -I "$(dirname "$0")/wl-iovar.py" --dev "$iface" diag; } \
+			> "$BCM4360_DIAG" 2>&1
+	fi
 	say "ROLLBACK: removing $new_mod, loading $restore"
 	rmmod "$new_mod" 2>/dev/null
 	modprobe "$restore" || say "rollback: loading $restore failed"

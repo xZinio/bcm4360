@@ -8,13 +8,14 @@
 #   card-test.sh KO [--owner USER] [--soak MIN] [--base-soak MIN] [--deadline MIN]
 #                   [--no-capture] [--no-24] [--suspend] [--hotspot NAME] [--gap SEC]
 #                   [--extra PARAMS] [--no-off] [--confirm PARAMS]
-#                   [--captures "NAME:PARAMS;NAME:PARAMS"]
+#                   [--captures "NAME:PARAMS;NAME:PARAMS"] [--def-repeat N]
 #
 # --extra adds module parameters to the stages def and phy (e.g. "open_pmu=0"
 # to test the open PHY while the PMU layer is under suspicion); --no-off
 # skips the stage off; --confirm runs one more swap with PARAMS before def
 # (e.g. to confirm a failure the bisection found); --captures replaces the
-# default recordings ("broadcom:<every switch off>;openphy:open_phy=1").
+# default recordings ("broadcom:<every switch off>;openphy:open_phy=1");
+# --def-repeat loads the defaults N times in all (intermittent failures).
 # Every swap also reads the card's identity and PMU registers
 # (peek-on-target.py) 20 s after loading, into peek-LABEL.txt.
 #
@@ -69,6 +70,7 @@ suspend=0
 hotspot=
 gap=90
 extra=
+def_repeat=1
 skip_off=0
 confirm=
 captures=
@@ -87,6 +89,7 @@ while [ $# -gt 0 ]; do
 	--no-off) skip_off=1; shift ;;
 	--confirm) confirm=$2; shift 2 ;;
 	--captures) captures=$2; shift 2 ;;
+	--def-repeat) def_repeat=$2; shift 2 ;;
 	*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
 done
@@ -108,7 +111,7 @@ TR=/sys/kernel/tracing
 [ -d "$TR" ] || TR=/sys/kernel/debug/tracing
 DL_URLS="https://speed.cloudflare.com/__down?bytes=40000000 https://mirror.one.com/archlinux/iso/latest/archlinux-x86_64.iso"
 UL_URL=https://speed.cloudflare.com/__up
-LAYERS="pmu access mac utils clm ppr srom si dma chan iovar nvram rate cca phy"
+LAYERS="pmu access mac utils clm ppr srom si dma chan iovar nvram rate cca stf phy"
 ALL_OFF=
 for l in $LAYERS; do ALL_OFF="$ALL_OFF open_$l=0"; done
 ALL_OFF=${ALL_OFF# }
@@ -214,6 +217,14 @@ cur_freq() {
 	iw dev "${iface:-wlan0}" link 2>/dev/null | awk '/freq:/ { f = int($2) } END { print f + 0 }'
 }
 
+# diag LABEL: the core's state and counters (scripts/wl-iovar.py) into diag-LABEL.txt
+diag() {
+	local dev
+	dev=$(wifi_iface) || return 0
+	{ date; timeout 20 python3 -I "$here/wl-iovar.py" --dev "$dev" diag; } \
+		> "$out/diag-$1.txt" 2>&1
+}
+
 mbit() { awk -v b="${1:-0}" 'BEGIN { printf "%.1f", b * 8 / 1e6 }'; }
 
 # throughput down and up over the Wi-Fi interface, Mbit/s
@@ -261,6 +272,7 @@ measure() {
 	say "MEASURE $l: freq=${freq:-?} signal=${sig:-?} tx=[${txr:-?}] rx=${rxr:-?} ping_loss=${loss:-?} rtt=${rtt:-?}ms down/up=${tp% *}/${tp#* } Mbit/s scan=$n BSS (2.4 GHz $n2, 5 GHz $n5)"
 	getent hosts archlinux.org >/dev/null || say "FAIL $l: DNS"
 	[ "$n" -gt 0 ] || say "FAIL $l: the scan found nothing"
+	diag "$l"
 	return 0
 }
 
@@ -303,11 +315,13 @@ soak() {
 			note "soak $l: freq=$f signal=$sig tx=$txr received ${r:-0}/3"
 			if [ $((i % 10)) -eq 9 ]; then
 				tps="$tps $(throughput | tr ' ' '/')"
+				diag "$l-soak-$i"
 			fi
 		else
 			down=$((down + 1))
 			run_down=$((run_down + 1))
 			note "soak $l: NOT connected"
+			[ "$run_down" -eq 1 ] && diag "$l-soak-down-$i"
 			if [ "$run_down" -ge 4 ]; then
 				say "SOAK $l: stopped after $samples samples: no connection for 2 minutes"
 				return 1
@@ -331,6 +345,7 @@ swap() {
 	# swap-test.sh unloads after 5 s: this reads the card 20 s after the load
 	(sleep 25; cd "$out" && timeout 60 python3 -I "$root/tools/re/peek-on-target.py" \
 		> "$out/peek-$l.txt" 2>/dev/null) &
+	BCM4360_DIAG="$out/diag-$l-swapfail.txt" \
 	bash "$here/swap-test.sh" "$tko" --fallback bcm4360 --settle 120 --log "$swaplog" \
 		${params:+--params "$params"}
 	r=$?
@@ -391,6 +406,7 @@ band24() {
 		watch_link 120 "$l-2g"
 	else
 		say "FAIL $l-2g: no 2.4 GHz link to $bssid (frequency now $(cur_freq) MHz)"
+		diag "$l-2g-fail"
 	fi
 	pace
 	nmcli --wait 60 con up "$conn" ifname "$iface" >/dev/null 2>&1
@@ -416,6 +432,7 @@ cycle() {
 		idle
 	else
 		say "FAIL $l: not connected again"
+		diag "$l-fail"
 		idle
 		# a link that does not come back by itself is a failure of the stage:
 		# do not test on top of it
@@ -584,11 +601,20 @@ if swap "$extra" def; then
 	soak "$base_soak" def || say "FAIL def-soak: too long without connection"
 	klog_check "$t0" def
 fi
+# further loads of the same configuration: how often does it connect?
+def_pass=$ok_def
+for k in $(seq 2 "$def_repeat"); do
+	if swap "$extra" "def-load-$k"; then
+		def_pass=$((def_pass + 1))
+		measure "def-load-$k"
+	fi
+done
+[ "$def_repeat" -gt 1 ] && say "LOADS def: $def_pass of $def_repeat connected"
 
 # The defaults failed: find the layer at fault by halving the set of layers
 # switched off (assumes one layer at fault; about four swaps).
 bisect() {
-	local cand=(pmu access mac utils clm ppr srom si dma chan iovar nvram rate cca) half p l
+	local cand=(pmu access mac utils clm ppr srom si dma chan iovar nvram rate cca stf) half p l
 	while [ "${#cand[@]}" -gt 1 ]; do
 		half=("${cand[@]:0:$((${#cand[@]} / 2))}")
 		p=
@@ -613,10 +639,13 @@ elif swap "open_phy=1${extra:+ $extra}" phy; then
 	measure phy
 	band24 phy
 	if cycle phy-reconnect-1 disconnect_connect &&
-		cycle phy-reconnect-2 disconnect_connect &&
+		cycle phy-radio-1 radio_off_on &&
+		measure phy-radio-1 &&
+		cycle phy-radio-2 radio_off_on &&
 		cycle phy-linkdown link_down_up &&
-		cycle phy-radio radio_off_on &&
-		{ [ "$suspend" -eq 0 ] || { cycle phy-suspend suspend_resume && measure phy-resumed; }; }; then
+		cycle phy-reconnect-2 disconnect_connect &&
+		{ [ "$suspend" -eq 0 ] || { cycle phy-suspend suspend_resume && measure phy-resumed &&
+			watch_link 60 phy-resumed && measure phy-resumed-2; }; }; then
 		soak "$soak" phy || { ok_phy=0; say "FAIL phy-soak: too long without connection"; }
 		measure phy-end
 	else

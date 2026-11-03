@@ -76,6 +76,9 @@ Changes, all in the open (ISC) wrapper; Broadcom's binary core is untouched:
    favours 2.4 GHz, where it stalls on busy enterprise networks. Before
    every join, give 5 GHz APs a bonus of prefer_5ghz dB (module parameter,
    default 15) through the core's join_pref setting, in brcmfmac's layout.
+ * Private ioctls: since Linux 5.15 SIOCDEVPRIVATE reaches a driver only
+   through ndo_siocdevprivate, so the core's raw ioctl interface (root only,
+   used by scripts/wl-iovar.py) was unreachable. Route it there as well.
 
 diff --git a/src/wl/sys/wl_cfg80211_hybrid.c b/src/wl/sys/wl_cfg80211_hybrid.c
 index a70d888..6ba0640 100644
@@ -599,11 +602,11 @@ index a70d888..6ba0640 100644
 +		u32 len;
 +
 +		if (off + offsetof(struct wl_bss_info, BSSID) > buflen)
- 			break;
++			break;
 +		len = dtoh32(bi->length);
 +		if (len < WL_BSS_INFO_MIN_LEN || len > buflen - off) {
 +			WL_ERR(("scan entry %d has bad length %u, dropping the rest\n", i, len));
-+			break;
+ 			break;
 +		}
 +		/*
 +		 * One odd entry must not hide every network after it: the old
@@ -681,7 +684,7 @@ index a70d888..6ba0640 100644
 -	beacon_proberesp->beacon_int = cpu_to_le16(bi->beacon_period);
 -	beacon_proberesp->capab_info = cpu_to_le16(bi->capability);
 -	wl_rst_ie(wl);
--
+ 
 -	err = wl_mrg_ie(wl, ((u8 *) bi) + bi->ie_offset, bi->ie_length);
 -	if (err)
 -		goto inform_single_bss_out;
@@ -690,7 +693,7 @@ index a70d888..6ba0640 100644
 -	         offsetof(struct wl_cfg80211_bss_info, frame_buf));
 -	if (err)
 -		goto inform_single_bss_out;
- 
+-
 -	notif_bss_info->frame_len = offsetof(struct ieee80211_mgmt, u.beacon.variable) +
 -	                            wl_get_ielen(wl);
 -#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 39)
@@ -1112,7 +1115,7 @@ index a70d888..6ba0640 100644
 +#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
 +			.bssid = wl->profile->bssid,
 +			.bss = bss,
- #else
++#else
 +			.links[0].bssid = wl->profile->bssid,
 +			.links[0].bss = bss,
 +#endif
@@ -1124,7 +1127,7 @@ index a70d888..6ba0640 100644
 +
 +		cfg80211_roamed(ndev, &roam_info, GFP_KERNEL);
 +	}
-+#else
+ #else
 +	if (bss)
 +		cfg80211_put_bss(wl_to_wiphy(wl), bss);
 +	cfg80211_roamed(ndev,
@@ -1152,10 +1155,10 @@ index a70d888..6ba0640 100644
 -		struct cfg80211_scan_info info = {
 -			.aborted = true,
 -		};
- 		WL_DBG(("%s: Aborting scan\n", __FUNCTION__));
+-		WL_DBG(("%s: Aborting scan\n", __FUNCTION__));
 -		cfg80211_scan_done(wl->scan_request, &info);
 -#else
--		WL_DBG(("%s: Aborting scan\n", __FUNCTION__));
+ 		WL_DBG(("%s: Aborting scan\n", __FUNCTION__));
 -		cfg80211_scan_done(wl->scan_request, true);     
 -#endif
 -		wl->scan_request = NULL;
@@ -1366,14 +1369,14 @@ index a70d888..6ba0640 100644
 -{
 -	struct wl_cfg80211_ie *ie = wl_to_ie(wl);
 -	s32 err = 0;
--
+ 
 -	if (ie->offset + ie_size > WL_TLV_INFO_MAX) {
 -		WL_ERR(("ei_stream crosses buffer boundary\n"));
 -		return -ENOSPC;
 -	}
 -	memcpy(&ie->buf[ie->offset], ie_stream, ie_size);
 -	ie->offset += ie_size;
- 
+-
 -	return err;
 +static void wl_link_up(struct wl_cfg80211_priv *wl)
 +{
@@ -1548,7 +1551,7 @@ index bc6f3ad..53df9c5 100644
  	bool passive;	
  	bool offloads;	
 diff --git a/src/wl/sys/wl_linux.c b/src/wl/sys/wl_linux.c
-index 944ae59..211e124 100644
+index 944ae59..1b59a2d 100644
 --- a/src/wl/sys/wl_linux.c
 +++ b/src/wl/sys/wl_linux.c
 @@ -168,14 +168,22 @@ static int wl_set_radio_block(void *data, bool blocked);
@@ -1578,7 +1581,52 @@ index 944ae59..211e124 100644
  	{ 0 }
  };
  
-@@ -739,14 +747,14 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
+@@ -448,6 +456,21 @@ static const struct ethtool_ops wl_ethtool_ops =
+ 
+ #if defined(WL_USE_NETDEV_OPS)
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
++/*
++ * Since Linux 5.15 the private ioctls (SIOCDEVPRIVATE..+15) reach a driver
++ * only through ndo_siocdevprivate; ndo_do_ioctl no longer sees them, so the
++ * core's raw ioctl interface (wl_ioctl, root only) was unreachable. ifr is
++ * the kernel's copy of the request; its ifr_data is still the user pointer
++ * wl_ioctl copies from.
++ */
++static int
++wl_siocdevprivate(struct net_device *dev, struct ifreq *ifr, void __user *data, int cmd)
++{
++	return wl_ioctl(dev, ifr, cmd);
++}
++#endif
++
+ static const struct net_device_ops wl_netdev_ops =
+ {
+ 	.ndo_open = wl_open,
+@@ -460,14 +483,20 @@ static const struct net_device_ops wl_netdev_ops =
+ #else
+ 	.ndo_set_multicast_list = wl_set_multicast_list,
+ #endif
+-	.ndo_do_ioctl = wl_ioctl
++	.ndo_do_ioctl = wl_ioctl,
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
++	.ndo_siocdevprivate = wl_siocdevprivate,
++#endif
+ };
+ 
+ static const struct net_device_ops wl_netdev_monitor_ops =
+ {
+ 	.ndo_start_xmit = wl_monitor_start,
+ 	.ndo_get_stats = wl_get_stats,
+-	.ndo_do_ioctl = wl_ioctl
++	.ndo_do_ioctl = wl_ioctl,
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
++	.ndo_siocdevprivate = wl_siocdevprivate,
++#endif
+ };
+ #endif 
+ 
+@@ -739,14 +768,14 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
  
  	wl_reg_proc_entry(wl);
  
@@ -1597,7 +1645,7 @@ index 944ae59..211e124 100644
  
  	wl_found++;
  	return wl;
-@@ -901,7 +909,7 @@ static SIMPLE_DEV_PM_OPS(wl_pm_ops, wl_suspend, wl_resume);
+@@ -901,7 +930,7 @@ static SIMPLE_DEV_PM_OPS(wl_pm_ops, wl_suspend, wl_resume);
  #endif
  
  static struct pci_driver wl_pci_driver __refdata = {
@@ -1606,7 +1654,7 @@ index 944ae59..211e124 100644
  	.probe =	wl_pci_probe,
  	.remove =	__devexit_p(wl_remove),
  	.id_table =	wl_id_table,
-@@ -916,12 +924,12 @@ static struct pci_driver wl_pci_driver __refdata = {
+@@ -916,12 +945,12 @@ static struct pci_driver wl_pci_driver __refdata = {
  static int __init
  wl_module_init(void)
  {
@@ -1623,7 +1671,7 @@ index 944ae59..211e124 100644
  #ifdef BCMDBG
  	if (msglevel != 0xdeadbeef)
  		wl_msg_level = msglevel;
-@@ -1542,7 +1550,7 @@ wl_get_driver_info(struct net_device *dev, struct ethtool_drvinfo *info)
+@@ -1542,7 +1571,7 @@ wl_get_driver_info(struct net_device *dev, struct ethtool_drvinfo *info)
  		return;
  #endif
  	bzero(info, sizeof(struct ethtool_drvinfo));
@@ -1632,7 +1680,7 @@ index 944ae59..211e124 100644
  #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 2, 0)
  	strscpy(info->version, EPI_VERSION_STR, sizeof(info->version));
  #else
-@@ -1709,13 +1717,16 @@ done2:
+@@ -1709,13 +1738,16 @@ done2:
  	return (OSL_ERROR(bcmerror));
  }
  
@@ -1651,7 +1699,7 @@ index 944ae59..211e124 100644
  	if (!dev)
  		return -ENETDOWN;
  
-@@ -1729,7 +1740,7 @@ wlc_ioctl_internal(struct net_device *dev, int cmd, void *buf, int len)
+@@ -1729,7 +1761,7 @@ wlc_ioctl_internal(struct net_device *dev, int cmd, void *buf, int len)
  	WL_TRACE(("wl%d: wlc_ioctl_internal: cmd 0x%x\n", wl->pub->unit, cmd));
  
  	WL_LOCK(wl);
@@ -1660,7 +1708,7 @@ index 944ae59..211e124 100644
  		bcmerror = BCME_EPERM;
  	} else {
  		bcmerror = wlc_ioctl(wl->wlc, cmd, buf, len, wlif->wlcif);
-@@ -1739,9 +1750,31 @@ wlc_ioctl_internal(struct net_device *dev, int cmd, void *buf, int len)
+@@ -1739,9 +1771,31 @@ wlc_ioctl_internal(struct net_device *dev, int cmd, void *buf, int len)
  	ASSERT(VALID_BCMERROR(bcmerror));
  	if (bcmerror != 0)
  		wl->pub->bcmerror = bcmerror;

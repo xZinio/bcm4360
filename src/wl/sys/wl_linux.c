@@ -456,6 +456,21 @@ static const struct ethtool_ops wl_ethtool_ops =
 
 #if defined(WL_USE_NETDEV_OPS)
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+/*
+ * Since Linux 5.15 the private ioctls (SIOCDEVPRIVATE..+15) reach a driver
+ * only through ndo_siocdevprivate; ndo_do_ioctl no longer sees them, so the
+ * core's raw ioctl interface (wl_ioctl, root only) was unreachable. ifr is
+ * the kernel's copy of the request; its ifr_data is still the user pointer
+ * wl_ioctl copies from.
+ */
+static int
+wl_siocdevprivate(struct net_device *dev, struct ifreq *ifr, void __user *data, int cmd)
+{
+	return wl_ioctl(dev, ifr, cmd);
+}
+#endif
+
 static const struct net_device_ops wl_netdev_ops =
 {
 	.ndo_open = wl_open,
@@ -468,14 +483,20 @@ static const struct net_device_ops wl_netdev_ops =
 #else
 	.ndo_set_multicast_list = wl_set_multicast_list,
 #endif
-	.ndo_do_ioctl = wl_ioctl
+	.ndo_do_ioctl = wl_ioctl,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+	.ndo_siocdevprivate = wl_siocdevprivate,
+#endif
 };
 
 static const struct net_device_ops wl_netdev_monitor_ops =
 {
 	.ndo_start_xmit = wl_monitor_start,
 	.ndo_get_stats = wl_get_stats,
-	.ndo_do_ioctl = wl_ioctl
+	.ndo_do_ioctl = wl_ioctl,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+	.ndo_siocdevprivate = wl_siocdevprivate,
+#endif
 };
 #endif 
 
