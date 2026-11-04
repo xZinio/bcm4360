@@ -269,3 +269,51 @@ both sides.
 other functions' accesses; it now checks per call of the hwaci engine (its
 first read is the save, its last write the restore): 3 calls, all "only
 bit 1".
+
+## Card run 8: the power floor on the card (2026-11-04 21:48, `/var/log/bcm4360-card-test-20261104-214816`)
+
+Build 1.1.0 `9C3F9FC2620995660FC1FBC` (module parameter `stf_min_txpower`,
+commit 3ffe820). `card-test.sh --ab24 ... --watch24 600`: every configuration
+loaded, measured, then watched for 600 s on the same 2.4 GHz AP (B-DTU
+Wireless, `a8:46:9d:29:65:d7`, channel 11, -64 to -72 dBm), in this order,
+with `def0` repeated at the end against drift. The deltas are the core's
+counters from the start to the end of each watch.
+
+| per 600 s | def0 | def16 | stock | phy16 | def0b |
+|---|---|---|---|---|---|
+| watch start | 21:56 | 22:17 | 22:37 | 22:57 | 23:23 |
+| floor (dBm) | 0 | 16 | Broadcom's stack | 16 | 0 |
+| pings lost / longest outage | 411 / 144 s | 351 / 125 s | 292 / 34 s | 368 / 46 s | 114 / 44 s |
+| frames sent | 12,560 | 21,141 | 10,246 | 11,315 | 5,757 |
+| retransmissions per frame | 1.23 | 0.94 | 0.68 | 0.85 | 0.43 |
+| transmit failures | 10.2 % | 9.9 % | 0.6 % | 2.0 % | 0.7 % |
+| RTS from the AP to us | 273,669 | 166,936 | 182,239 | 209,811 | 69,041 |
+| data frames received | 2,402 | 6,639 | 2,652 | 2,362 | 2,254 |
+
+`phy0` (open PHY, floor 0) has no watch: its load joined another AP of the
+network (`a8:46:9d:29:66:00`, 2.4 GHz, -83 dBm; the scans of the run show
+that AP anywhere between -65 and -88 dBm), DNS timed out and swap-test rolled
+back. The kernel log stayed clean.
+
+**The channel dominates, the floor does not show.** The same configuration
+`def0` lost 411 pings with 10.2 % transmit failures at 21:56 and 114 with
+0.7 % at 23:23; in between, the AP's RTS to us fell from 274,000 to 69,000
+per 10 minutes (each answered with a CTS, `txctsfrm`; most of the data
+after them never arrives, the run 5 RTS loop, and the AP tries again). `def0` and
+`def16`, next to each other in time, differ less than `def0` and `def0b`.
+The earlier A/B on a clean AP (eduroam, channel 6, -47 dBm,
+`/var/log/bcm4360-card-test-20261104-141647`, 480 s each, the same four open
+configurations) lost no ping in any of them, with at most 0.1 % transmit
+failures. Neither run measures an effect of the floor.
+
+The open PHY next to Broadcom's code (`stock` 22:37, `phy16` 22:57): 2.0 %
+against 0.6 % transmit failures, 368 against 292 pings lost - the same
+direction as runs 6 and 7 (2.7 % against 0.8 %, 0.9 % against 0.6 %, there
+against the stage "def"), still within the drift of this channel.
+
+So `stf_min_txpower` stays 0 by default, the value of the specification: the
+floor of Broadcom's driver comes from a stack word nobody wrote, whose value
+depends on the calls before it, and two chains for single-stream frames on
+2.4 GHz gave nothing measurable on either AP. The parameter stays, for
+comparisons with captures of Broadcom's driver (16 reproduces its mask
+writes).
