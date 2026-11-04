@@ -122,6 +122,7 @@ static void wl_timer_task(wl_task_t *task);
 static void wl_dpc_rxwork(struct wl_task *task);
 
 static int wl_reg_proc_entry(wl_info_t *wl);
+static void wl_snap_proc_remove(wl_info_t *wl);
 
 static int wl_linux_watchdog(void *ctx);
 static
@@ -1057,6 +1058,7 @@ wl_free(wl_info_t *wl)
 		char tmp1[128];
 		sprintf(tmp1, "%s%d", HYBRID_PROC, wl->pub->unit);
 		remove_proc_entry(tmp1, 0);
+		wl_snap_proc_remove(wl);
 		}
 		wlc_detach(wl->wlc);
 		wl->wlc = NULL;
@@ -3487,10 +3489,171 @@ static const struct file_operations wl_fops = {
 #endif
 #endif
 
+#if defined(BCM4360_HYBRID) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
+/*
+ * bcm4360: /proc/bcm4360_snap<unit> (root only), the read-only snapshot of the
+ * card's PHY registers, radio registers, PHY tables and shared memory
+ * (hybrid/snap.c; scripts/phy-snap.py). A write is a request, text with one
+ * item per line, at most 64 KiB; its items are read at once, each with the
+ * driver's lock held, and the following reads return the result: 16-bit words
+ * in the order of the request. A failed item fails the whole write: -EAGAIN
+ * while the core is down or without its clock, -ENODEV when it cannot be
+ * reached, -EINVAL for a malformed request, -E2BIG for too much.
+ */
+#include <linux/vmalloc.h>
+#include <linux/mutex.h>
+
+/* hybrid/hybrid.h; its own header does not mix with Broadcom's types */
+struct hyb_snap_item {
+	unsigned char space, width;
+	unsigned short id;
+	unsigned int start, count;
+};
+extern int hyb_snap_parse(const char *req, unsigned int len, struct hyb_snap_item *items,
+	unsigned int max);
+extern unsigned int hyb_snap_words(const struct hyb_snap_item *it);
+extern int hyb_snap_read(void *wlc, const struct hyb_snap_item *it, unsigned short *out,
+	unsigned int max);
+
+#define WL_SNAP_PROC		"bcm4360_snap"
+#define WL_SNAP_REQ_MAX		(64 * 1024)
+#define WL_SNAP_ITEMS		4096
+#define WL_SNAP_WORDS		(512 * 1024)
+
+static DEFINE_MUTEX(wl_snap_mutex);
+static unsigned short *wl_snap_out;	/* the result of the last request */
+static size_t wl_snap_bytes;
+
+static int
+wl_snap_errno(int r)
+{
+	switch (-r) {
+	case 2: return -EAGAIN;		/* HYB_SNAP_EAGAIN */
+	case 3: return -ENODEV;		/* HYB_SNAP_ENODEV */
+	case 4: return -E2BIG;		/* HYB_SNAP_ENOSPC */
+	default: return -EINVAL;	/* HYB_SNAP_EINVAL */
+	}
+}
+
+static ssize_t
+wl_snap_write(struct file *filp, const char __user *buff, size_t length, loff_t *offp)
+{
+	wl_info_t *wl = PDE_DATA(file_inode(filp));
+	struct hyb_snap_item *items = NULL;
+	unsigned short *out = NULL;
+	size_t total = 0, words = 0;
+	char *req = NULL;
+	ssize_t ret;
+	int n, i, r;
+
+	if (length == 0 || length > WL_SNAP_REQ_MAX)
+		return -EINVAL;
+	req = vmalloc(length);
+	items = vmalloc(sizeof(*items) * WL_SNAP_ITEMS);
+	if (!req || !items) {
+		ret = -ENOMEM;
+		goto done;
+	}
+	if (copy_from_user(req, buff, length)) {
+		ret = -EFAULT;
+		goto done;
+	}
+	n = hyb_snap_parse(req, length, items, WL_SNAP_ITEMS);
+	if (n < 0) {
+		ret = wl_snap_errno(n);
+		goto done;
+	}
+	for (i = 0; i < n; i++)
+		total += hyb_snap_words(&items[i]);
+	if (total > WL_SNAP_WORDS) {
+		ret = -E2BIG;
+		goto done;
+	}
+	out = vmalloc(total * sizeof(*out) + sizeof(*out));
+	if (!out) {
+		ret = -ENOMEM;
+		goto done;
+	}
+	for (i = 0; i < n; i++) {
+		WL_LOCK(wl);
+		r = wl->wlc ? hyb_snap_read(wl->wlc, &items[i], out + words, total - words) : -3;
+		WL_UNLOCK(wl);
+		if (r < 0) {
+			ret = wl_snap_errno(r);
+			goto done;
+		}
+		words += r;
+	}
+	mutex_lock(&wl_snap_mutex);
+	vfree(wl_snap_out);
+	wl_snap_out = out;
+	wl_snap_bytes = words * sizeof(*out);
+	mutex_unlock(&wl_snap_mutex);
+	out = NULL;
+	ret = length;
+done:
+	vfree(req);
+	vfree(items);
+	vfree(out);
+	return ret;
+}
+
+static ssize_t
+wl_snap_read(struct file *filp, char __user *buffer, size_t length, loff_t *offp)
+{
+	ssize_t ret = 0;
+
+	mutex_lock(&wl_snap_mutex);
+	if (wl_snap_out && *offp >= 0 && *offp < wl_snap_bytes) {
+		ret = min_t(size_t, length, wl_snap_bytes - *offp);
+		if (copy_to_user(buffer, (char *)wl_snap_out + *offp, ret))
+			ret = -EFAULT;
+		else
+			*offp += ret;
+	}
+	mutex_unlock(&wl_snap_mutex);
+	return ret;
+}
+
+static struct proc_ops wl_snap_fops = {
+	.proc_read	= wl_snap_read,
+	.proc_write	= wl_snap_write,
+};
+
+static void
+wl_snap_proc_add(wl_info_t *wl)
+{
+	char tmp[32];
+
+	snprintf(tmp, sizeof(tmp), "%s%d", WL_SNAP_PROC, wl->pub->unit);
+	if (!proc_create_data(tmp, 0600, NULL, &wl_snap_fops, wl)) {
+		WL_ERROR(("%s: proc_create_data %s failed\n", __FUNCTION__, tmp));
+	}
+}
+
+static void
+wl_snap_proc_remove(wl_info_t *wl)
+{
+	char tmp[32];
+
+	snprintf(tmp, sizeof(tmp), "%s%d", WL_SNAP_PROC, wl->pub->unit);
+	remove_proc_entry(tmp, NULL);
+	mutex_lock(&wl_snap_mutex);
+	vfree(wl_snap_out);
+	wl_snap_out = NULL;
+	wl_snap_bytes = 0;
+	mutex_unlock(&wl_snap_mutex);
+}
+#else
+static void wl_snap_proc_add(wl_info_t *wl) { }
+static void wl_snap_proc_remove(wl_info_t *wl) { }
+#endif
+
 static int
 wl_reg_proc_entry(wl_info_t *wl)
 {
 	char tmp[32];
+	wl_snap_proc_add(wl);
 	sprintf(tmp, "%s%d", HYBRID_PROC, wl->pub->unit);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0)
 	if ((wl->proc_entry = create_proc_entry(tmp, 0644, NULL)) == NULL) {

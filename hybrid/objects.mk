@@ -4,7 +4,7 @@
 # the open code they use. Included by the Makefile; tools/re/hybrid.py reads
 # the same list to link the hybrid core for the emulator.
 
-hybrid-objs := hybrid/card.o \
+hybrid-objs := hybrid/card.o hybrid/snap.o \
                hybrid/pmu.o open/chip/pmu.o \
                hybrid/access.o open/hw/access.o \
                hybrid/mac.o open/mac/bmac_ctrl.o open/mac/bmac_mhf.o \

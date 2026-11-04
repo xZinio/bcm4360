@@ -39,6 +39,9 @@
 # a measurement, then the 2.4 GHz watch of --watch24 seconds with the diag at
 # its start and end, all configurations on the AP the first one joined (its
 # BSSID is kept), to compare them on one AP (PARAMS ALLOFF: every switch off).
+# The 2.4 GHz stage takes hardware snapshots (scripts/phy-snap.py: PHY and
+# radio registers, PHY tables, shared memory) after the join and twice at the
+# end of the watch, into snap-LABEL-2g*.json, when the module has them.
 # Every swap also reads the card's identity and PMU registers
 # (peek-on-target.py) 20 s after loading, into peek-LABEL.txt.
 #
@@ -262,6 +265,15 @@ diag() {
 		> "$out/diag-$1.txt" 2>&1
 }
 
+# snap LABEL: the hardware snapshot of the PHY, radio, PHY tables and shared
+# memory (scripts/phy-snap.py, hybrid/snap.c) into snap-LABEL.json; nothing
+# when the loaded module has none (the installed 1.0.3)
+snap() {
+	compgen -G '/proc/bcm4360_snap*' >/dev/null || return 0
+	timeout 30 python3 -I "$here/phy-snap.py" take --label "$1" -o "$out/snap-$1.json" \
+		>> "$out/snap.log" 2>&1 || note "snapshot $1 failed (snap.log)"
+}
+
 mbit() { awk -v b="${1:-0}" 'BEGIN { printf "%.1f", b * 8 / 1e6 }'; }
 
 # throughput down and up over the Wi-Fi interface, Mbit/s
@@ -450,8 +462,13 @@ band24() {
 		say "PASS $l-2g: joined $bssid ($sig dBm in the scan) on 2.4 GHz"
 		last24_bssid=$bssid
 		measure "$l-2g"
+		snap "$l-2g"
 		watch_link "$watch24" "$l-2g"
 		diag "$l-2g-end"
+		# twice, moments apart: what moves by itself (phy-snap.py diff --same)
+		snap "$l-2g-end"
+		sleep 2
+		snap "$l-2g-end2"
 	else
 		say "FAIL $l-2g: no 2.4 GHz link to $bssid (frequency now $(cur_freq) MHz)"
 		diag "$l-2g-fail"

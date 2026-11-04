@@ -14,6 +14,7 @@ traces have to be the same.
     hybrid.py check [--on L,..] [--off L,..]   the session on both cores, compared
     hybrid.py share                    how much of the code that runs is Broadcom's
     hybrid.py selftest                 a broken open function must be found
+    hybrid.py snap                     the hardware snapshot of hybrid/snap.c (snap_scenarios.py)
     hybrid.py srom | chan | iovar | small | rate | cca   direct calls of one layer's functions
                                        on both cores (srom: ten cards; small:
                                        small_scenarios.py), compared
@@ -488,7 +489,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('cmd', choices=('build', 'check', 'share', 'selftest', 'srom', 'attach', 'led', 'chan',
-                                    'iovar', 'small', 'rate', 'cca', 'dma', 'stf'))
+                                    'iovar', 'small', 'rate', 'cca', 'dma', 'stf', 'snap'))
     ap.add_argument('--model', action='store_true',
                     help='chan, iovar: compare the object with the Python model of the '
                          'specification (coordinator) instead of the hybrid core')
@@ -536,6 +537,9 @@ def main():
     if ns.cmd == 'stf':
         import stf_scenarios
         return 1 if stf_scenarios.stf_check(off, ns.show, on=on) else 0
+    if ns.cmd == 'snap':
+        import snap_scenarios
+        return 1 if snap_scenarios.snap_check(off, ns.show, on=on) else 0
     if ns.cmd == 'dma':
         import dma_scenarios
         return 1 if dma_scenarios.dma_check(off, ns.show, on=on) else 0

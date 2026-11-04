@@ -68,6 +68,23 @@ are provided. `emu.py` runs it under Unicorn:
   trace with function names, and lists where the model answers differently
   from the card. `mmiotrace.py selftest` checks the mechanism with a
   recording made from the model.
+* `scripts/phy-snap.py` (on the machine with the card, root): a snapshot of
+  the card's hardware state at any moment, through the hybrid module's
+  `/proc/bcm4360_snap<unit>` (`hybrid/snap.c`): the PHY and radio registers,
+  PHY table entries and shared memory of `scripts/phy-snap.list`, read with
+  the driver's lock held, the microcode kept awake and, for tables, the MAC
+  suspended. The registers are those of both PHYs' state, so a snapshot
+  taken with Broadcom's PHY and one with the open PHY compare directly,
+  where their software state does not. `phy-snap.py list CAPTURES` makes the
+  list from mmiotrace captures (every register, entry and word the drivers
+  touched); it also covers everything the emulator's interference session
+  touches. `phy-snap.py diff A B --same A2 --same B2` leaves out what moves
+  by itself between two snapshots of one configuration. `card-test.sh` takes
+  them in its 2.4 GHz stage, after the join and twice at the end of the
+  watch. `hybrid.py snap` checks the snapshot in the emulator: the values
+  are the model's, its own writes only address registers, the table pointer
+  and the MAC control, the session after it unchanged, and Broadcom's PHY
+  and the open PHY give the same snapshot.
 
 ## Comparing open code with the object
 

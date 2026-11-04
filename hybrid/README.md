@@ -70,6 +70,12 @@ sudo rmmod bcm4360; sudo modprobe bcm4360; sudo systemctl restart wpa_supplicant
 
 `make HYBRID=0` builds the module without any of this, exactly as 1.0.3.
 
+Not a takeover: `snap.c` reads the card's PHY and radio registers, PHY
+tables and shared memory for `/proc/bcm4360_snap<unit>` (root only,
+`scripts/phy-snap.py`, `docs/re/03-tools.md`), whatever the switches, so that
+the hardware state under Broadcom's PHY and under the open PHY can be
+compared on the card.
+
 ## Testing on the card
 
 Nothing of the open code has run on a real BCM4360 yet. `scripts/layer-test.sh`

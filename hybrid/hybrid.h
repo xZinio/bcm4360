@@ -149,4 +149,31 @@ extern bool bcm4360_open_cca;
 extern bool bcm4360_open_stf;
 extern bool bcm4360_open_stf_policy;
 
+/*
+ * hybrid/snap.c: the read-only snapshot of the card's PHY, radio, PHY tables
+ * and shared memory behind /proc/bcm4360_snap<unit> (scripts/phy-snap.py).
+ * hyb_snap_parse makes items of a request (its text format is in snap.c) and
+ * returns their number; hyb_snap_read reads one item into `out` (with the
+ * driver's lock held) and returns the number of 16-bit words. Errors are
+ * negative HYB_SNAP_E*.
+ */
+#define HYB_SNAP_PHY		1
+#define HYB_SNAP_RADIO		2
+#define HYB_SNAP_TBL		3
+#define HYB_SNAP_SHM		4
+#define HYB_SNAP_EINVAL		1	/* a malformed item or out of range */
+#define HYB_SNAP_EAGAIN		2	/* the core is down, in reset or without clock */
+#define HYB_SNAP_ENODEV		3	/* no core, the window elsewhere, the card gone */
+#define HYB_SNAP_ENOSPC		4	/* more items or words than room */
+struct hyb_snap_item {
+	u8 space;		/* HYB_SNAP_PHY .. HYB_SNAP_SHM */
+	u8 width;		/* tbl: entry width in bits */
+	u16 id;			/* tbl: table id */
+	u32 start;		/* register, entry or byte offset */
+	u32 count;
+};
+int hyb_snap_parse(const char *req, u32 len, struct hyb_snap_item *items, u32 max);
+u32 hyb_snap_words(const struct hyb_snap_item *it);
+int hyb_snap_read(void *wlc, const struct hyb_snap_item *it, u16 *out, u32 max);
+
 #endif
