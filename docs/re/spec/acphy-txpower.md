@@ -819,7 +819,10 @@ bit 29 of `sh+0x2c` is set (any band): `D11(0x6b4)`: read, write value | 3;
 `D11(0x6b8)`: read, write value & 0xff3f.
 
 In the traces `sh+0x2c` is 0 (the model's MAC capabilities) and both cause
-no access.
+no access. (Note, 2026-11-04: the card's MAC capabilities are 0xb0518c05, bit
+29 set, so on the card both run around every power-detector measurement;
+`phy_soak.py --machwcap 0xb0518c05` gives the model the card's value. The
+result of `wlapi_is_eci_coex_enabled` is 0 or 1, `blackbox.py eci`.)
 
 ### 29. sub_0b1227 (.text+0x0b1227, name assigned by `acphy-init`: wlc_phy_precal_txgain_acphy), sub_0b0455 (.text+0x0b0455, name assigned: wlc_phy_precal_target_tssi_search_acphy)
 

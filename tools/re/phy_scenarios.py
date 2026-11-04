@@ -36,6 +36,7 @@ PHY_SERVICES = [
     S('wlapi_bmac_mhf', 'mac_mhf', (1, 2, 2, 4)),
     S('wlapi_bmac_mctrl', 'mac_mctrl', (4, 4)),
     S('wlapi_bmac_btc_mode_get', 'mac_btc_mode', result=True),
+    S('wlapi_is_eci_coex_enabled', 'mac_eci_coex_enabled', result=True),
     S('wlapi_bmac_ucode_wake_override_phyreg_set', 'mac_wake_override_set'),
     S('wlapi_bmac_ucode_wake_override_phyreg_clear', 'mac_wake_override_clear'),
     S('wlapi_update_bt_chanspec', 'mac_update_bt_chanspec', (2, 1, 1)),

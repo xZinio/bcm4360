@@ -358,9 +358,19 @@ class SoakRun(hybrid.Run):
         return out
 
 
-def soak(on=('phy',), off=(), show=20, steps=STEPS, board_seed=0, interference=False):
+# the MAC capabilities of the card (D11 0x15c, card run 6), with bit 29: the
+# Bluetooth coexistence; the ChipCommon capabilities of the card have no ECI
+CARD_MACHWCAP = 0xb0518c05
+
+
+def soak(on=('phy',), off=(), show=20, steps=STEPS, board_seed=0, interference=False,
+         machwcap=None, cc_caps=None):
     core = hybrid.build(quiet=True)
     card = {'srom': board(board_seed)} if board_seed else {}
+    if machwcap is not None:
+        card['machwcap'] = machwcap
+    if cc_caps is not None:
+        card['cc_caps'] = cc_caps
     ref = SoakRun(interference=interference, **card).session(steps, stop_on_error=False)
     got = SoakRun(core, off=off, on=on, interference=interference,
                   **card).session(steps, stop_on_error=False)
@@ -418,12 +428,18 @@ def main():
     ap.add_argument('--interference', action='store_true',
                     help='live glitch counters and interference detectors; without '
                          '--steps the 2.4 GHz interference session ISTEPS')
+    ap.add_argument('--machwcap', type=lambda s: int(s, 0), default=None,
+                    help='MAC capabilities of the model (default 0; the card: %#x, '
+                         'with the Bluetooth coexistence)' % CARD_MACHWCAP)
+    ap.add_argument('--cc-caps', type=lambda s: int(s, 0), default=None,
+                    help='ChipCommon capabilities of the model (bit 29: ECI)')
     ns = ap.parse_args()
     on = tuple(x for x in ns.on.split(',') if x)
     off = tuple(x for x in ns.off.split(',') if x)
     steps = ns.steps.split(',') if ns.steps else ISTEPS if ns.interference else STEPS
     try:
-        return 1 if soak(on, off, ns.show, steps, ns.board, ns.interference) else 0
+        return 1 if soak(on, off, ns.show, steps, ns.board, ns.interference,
+                         ns.machwcap, ns.cc_caps) else 0
     except EmuError as e:
         print('emulation error: %s' % e)
         return 1

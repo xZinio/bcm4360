@@ -80,10 +80,13 @@ are provided. `emu.py` runs it under Unicorn:
   [implementing.md](implementing.md).
 * `phy_soak.py`: the long PHY session on the hybrid core (`--board N` for
   board variants; `--interference` makes the glitch counters and the hwaci
-  detectors of the model live, for the watchdog's interference engines).
-* `blackbox.py e3 | restore | tempsense`: checks of a specification against
-  the object by running it with chosen inputs (the desense-aci engine, the
-  restore of `PHY(0x19e)` in the hwaci engine, the temperature constant).
+  detectors of the model live, for the watchdog's interference engines;
+  `--machwcap 0xb0518c05` gives the model the card's MAC capabilities, with
+  the Bluetooth coexistence, `--cc-caps` its ChipCommon capabilities).
+* `blackbox.py e3 | restore | tempsense | eci`: checks of a specification
+  against the object by running it with chosen inputs (the desense-aci
+  engine, the restore of `PHY(0x19e)` in the hwaci engine, the temperature
+  constant, the result of `wlapi_is_eci_coex_enabled`).
 * `scenarios.py`: scenarios for single procedures (register access, radio,
   PMU). A function of the object is called, or cut out of a session by its
   entry and exit, and the corresponding function of the open code is run on a

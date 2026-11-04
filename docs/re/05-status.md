@@ -45,7 +45,18 @@ open desense and temperature code, all fixed - see
 confirmed the fixes: on the same 2.4 GHz AP both PHYs count the same glitch
 rate, the open PHY passed every stage and a 20-minute 5 GHz soak without a
 lost ping. Its captures show the next difference, the Bluetooth-coexistence
-override of the idle-TSSI measurement, a stub in the open code.) **The open AC-PHY now
+override of the idle-TSSI measurement, a stub in the open code because the
+model's MAC capabilities are 0; implemented, the same as the object with the
+card's capabilities (`phy_soak.py --machwcap 0xb0518c05`). Card run 7 confirmed
+it: core 1's idle TSSI 0x256 as with Broadcom's PHY. It also showed that the
+open driver transmits CCK, OFDM and one-stream frames on core 0 only on
+2.4 GHz where Broadcom's driver uses both chains: Broadcom's spatial policy
+depends on an uninitialised stack value (`min_txpower`, `cca-stf.md` open
+question 1), which on the card makes a power floor and two chains, while the
+open STF takes 0 as specified (shown by replaying the card's recording; a
+choice for the open code, not a PHY fault). The scans of the interference session found a missing
+step of the channel function (a scan channel kept the home channel's
+desense), fixed; see `questions/phy-interference.md`, "Card run 7".) **The open AC-PHY now
 takes over all 79 entry points of Broadcom's PHY** (module parameter
 `open_phy`, off by default until it has run on a card): with it switched on
 the whole session is identical to the object, and the Broadcom code that runs

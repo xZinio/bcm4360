@@ -207,6 +207,7 @@ class D11(Core):
     RADIOREGADDR = 0x3d8
     RADIOREGDATA = 0x3da
     PSM_PHY_HDR_PARAM = 0x492
+    MACHWCAP = 0x15c          # MAC capabilities (read only): Chip.machwcap
 
     MCTL_PSM_RUN = 0x00000002
     MCTL_EN_MAC = 0x00000001
@@ -266,6 +267,8 @@ class D11(Core):
             return self.phy.radio_read(self.peek(self.RADIOREGADDR, 2))
         if off == self.MACINTSTATUS:
             return self.peek(off)
+        if off == self.MACHWCAP and size == 4:
+            return self.chip.machwcap
         return self.peek(off, size)
 
     def write(self, off, size, value):
@@ -490,6 +493,9 @@ class Bcm4360(Chip):
     erom_base = 0x180fe000
     cc_caps = CC_CAP_PMU | CC_CAP_SROM | 0x00280000
     cc_caps_ext = 0
+    # MAC capabilities of the 802.11 core (D11 0x15c). 0 by default; the card
+    # reads 0xb0518c05 (card run 6), with bit 29, the Bluetooth coexistence
+    machwcap = 0
     chipstatus = 0x00000001     # bit 0: the crystal is 40 MHz
     pmu_caps = 0x10a22b11 & 0xffffff00 | 17     # PMU rev 17, 11 resources
     pmu_status = 0
@@ -504,7 +510,12 @@ class Bcm4360(Chip):
     dma64 = True                # status flag of the 802.11 core (assumed, see D11.reset)
     core_classes = (ChipCommon, D11, ArmCR4, Pcie2, Usb20d)
 
-    def __init__(self, m, srom=None, otp=None, phy_rev=1, radio_rev=4, layout=None):
+    def __init__(self, m, srom=None, otp=None, phy_rev=1, radio_rev=4, layout=None,
+                 machwcap=None, cc_caps=None):
+        if machwcap is not None:
+            self.machwcap = machwcap
+        if cc_caps is not None:
+            self.cc_caps = cc_caps
         self.srom = srom            # list of 16 bit words, or None: no SROM
         self.otp = otp or {}        # word number -> 16 bit value; blank otherwise
         self.phy = Phy(self, 11, phy_rev, 0x2069, radio_rev)

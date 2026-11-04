@@ -70,6 +70,12 @@
 /* the 802.11 core registers touched directly by the debug-output select (section 27) */
 #define D11_REG_MACCONTROL	0x120
 #define D11_REG_0x49e		0x49e
+/* the Bluetooth-coexistence registers of section 28 (16 bit) */
+#define D11_REG_0x6b4		0x6b4
+#define D11_REG_0x6b6		0x6b6	/* bit 0: busy */
+#define D11_REG_0x6b8		0x6b8
+#define D11_REG_0x6f0		0x6f0	/* ECI address */
+#define D11_REG_0x6f2		0x6f2	/* ECI data */
 
 /* PHY table ids (access.md, acphy-txpower.md "Data") */
 #define TBL_TXGAIN		0x20	/* transmit gain table of the band (48 bit) */
@@ -114,7 +120,8 @@
 /* the transmit-gain "by index" of an uninitialised core saved index (section 7) */
 #define TXPWR_INDEX_NONE	0x80
 
-/* MAC capability bit 29 (sh+0x2c): Bluetooth coexistence (section 28); 0 in the model */
+/* MAC capability bit 29 (sh+0x2c): Bluetooth coexistence (section 28); 0 in the
+ * model, set on the card */
 #define MACHWCAP_BTCX		0x20000000
 
 /* --------------------------------------------------------------- helpers */
@@ -807,22 +814,52 @@ static void phy_conv_reset_pulse(struct bcm4360_phy *phy)
  */
 
 /*
- * acphy-txpower.md, section 28: the Bluetooth-coexistence overrides. No access
- * unless the MAC has the coexistence capability (sh+0x2c bit 29) and the band
- * is 2.4 GHz; sh+0x2c is 0 in the model.
+ * acphy-txpower.md, section 28 (wlc_btcx_override_enable): take the radio from
+ * the Bluetooth coexistence for a measurement. Only if the MAC has the
+ * coexistence capability (sh+0x2c bit 29) and the band is 2.4 GHz. The bit is
+ * 0 in the model and set on the card (card run 6: without this the idle TSSI
+ * of core 1 read the converter's rail).
  */
 static void phy_btcx_override_enable(struct bcm4360_phy *phy)
 {
+	struct bcm4360_hw *hw = phy->hw;
+	u32 i;
+
 	if (!(phy->machwcap & MACHWCAP_BTCX) || !phy_is_2g(phy))
 		return;
-	/* the coexistence path is out of scope (machwcap bit 29 is 0 here) */
+	d11_write16(hw, D11_REG_0x6b4, d11_read16(hw, D11_REG_0x6b4) | 0x0003);
+	d11_write16(hw, D11_REG_0x6b8, d11_read16(hw, D11_REG_0x6b8) & 0xff3f);
+	d11_write16(hw, D11_REG_0x6f0, 1);
+	(void)d11_read16(hw, D11_REG_0x6f2);
+	if (bcm4360_mac_eci_coex_enabled(hw)) {
+		d11_write16(hw, D11_REG_0x6f0, 1);
+		for (i = 0; i < 5000; i++) {
+			if (!(d11_read16(hw, D11_REG_0x6f2) & 0x00f0))
+				break;
+			hw_udelay(100);
+		}
+	}
+	d11_write16(hw, D11_REG_0x6b8, d11_read16(hw, D11_REG_0x6b8) | 0x0080);
+	for (i = 0; i < 502; i++) {
+		if (!(d11_read16(hw, D11_REG_0x6b6) & 0x0001) || i == 501)
+			break;
+		hw_udelay(100);
+	}
+	d11_write16(hw, D11_REG_0x6b8, d11_read16(hw, D11_REG_0x6b8) | 0x00c0);
 }
 
+/*
+ * acphy-txpower.md, section 28 (wlc_phy_btcx_override_disable): give the radio
+ * back. Only if the MAC has the coexistence capability (any band).
+ */
 static void phy_btcx_override_disable(struct bcm4360_phy *phy)
 {
+	struct bcm4360_hw *hw = phy->hw;
+
 	if (!(phy->machwcap & MACHWCAP_BTCX))
 		return;
-	/* out of scope (machwcap bit 29 is 0 here) */
+	d11_write16(hw, D11_REG_0x6b4, d11_read16(hw, D11_REG_0x6b4) | 0x0003);
+	d11_write16(hw, D11_REG_0x6b8, d11_read16(hw, D11_REG_0x6b8) & 0xff3f);
 }
 
 /*

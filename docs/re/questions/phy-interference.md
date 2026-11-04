@@ -133,3 +133,139 @@ them. Differences:
   within the 50 s of the capture (Broadcom's did not); there the desense
   engine raised the thresholds (`PHY(0x304)` 0x5f62, `PHY(0x321)` 0x363e)
   as it should on that channel.
+
+## The Bluetooth-coexistence override (2026-11-04)
+
+`acphy-txpower.md` section 28 was fully specified; the open functions were
+empty because the model's MAC capabilities (`D11(0x15c)`) are 0. The card's
+are 0xb0518c05 (read in the capture), bit 29 set. Now implemented in
+`open/phy/phy_txpower.c`, with the new service
+`bcm4360_mac_eci_coex_enabled` (`wlapi_is_eci_coex_enabled`, 0 or 1:
+`blackbox.py eci`). The model has an option for the capabilities
+(`bcm4360.py` `machwcap`, `cc_caps`; `phy_soak.py --machwcap`, `--cc-caps`).
+
+* `phy_soak.py --machwcap 0xb0518c05`, 16 steps (2.4 GHz channel 11 with a
+  join and 40 s of watchdog, then 36/80): the object takes the radio from
+  the coexistence 4 times and gives it back 4 times (`D11(0x6b4)`,
+  `D11(0x6b8)`, `D11(0x6f0)`, `D11(0x6f2)`, `D11(0x6b6)`); the open PHY the
+  same, 117,837 accesses on both sides, the same. With the model's 0 neither
+  makes an access.
+* With ECI as well (`--cc-caps 0x70280000`, not the card's case) the
+  override is the same too, but 2 steps differ: the watchdog's coexistence
+  callback `wlc_phy_btc_adjust_acphy`, which has no specification and is
+  empty in the open code, runs when the state byte of the Bluetooth period
+  turns 1 (see `phy-api-watchdog.md`).
+
+Whether the override cures core 1's idle TSSI and the retransmissions on
+the card is for card run 7: `PHY(0x845)` near 0x25a and `PHY(0x844)` varying
+by channel in the open capture, and the 2.4 GHz watch's retransmission rate.
+
+## Card run 7 (2026-11-04 01:00, `/var/log/bcm4360-card-test-20261104-010053`)
+
+Build 1.1.0 `F873514CFC033962A7238B3` (the override). The same network and AP
+(channel 11), the same plan as run 6. Every stage passed (load, 2.4 GHz,
+reconnects, two radio switches, link down/up, suspend, the 20-minute soak,
+both captures); the restore left the installed driver connected.
+
+**The override works on the card.** In the open capture core 1's idle TSSI
+`PHY(0x845)` is 0x256 (Broadcom's 0x256, 0x257; run 6: 0x200), core 0's
+0x264, 0x265 (0x262, 0x264). Both captures take the radio from the
+coexistence the same number of times (`D11(0x6b4)` 8 reads and writes,
+`D11(0x6b6)` 4 reads, `D11(0x6b8)` 16, `D11(0x6f0)` 4 writes, `D11(0x6f2)` 4
+reads).
+
+**Core 1's start index is still 0x14, for another reason.** At each channel
+set the PHY reads the power loops' current indices from `PHY(0x640)` and
+`PHY(0x840)` (high byte) and writes them back as start indices
+(`PHY(0x644)`, `PHY(0x844)`). With Broadcom's driver both move (core 1 0x1a
+to 0x1c); with the open driver `PHY(0x840)` reads 0x1400 throughout: core 1's
+loop never got a TSSI sample, because core 1 never transmitted. The transmit
+core masks of `wlc_stf_txcore_shmem_write` (`SHM(0x5d4)`, `0x5d6`, `0x5d8`:
+CCK, OFDM, one stream) are, from the first channel set after the load:
+
+| | 2.4 GHz | 5 GHz |
+|---|---|---|
+| Broadcom's driver (every switch off) | 3, 3, 3 | 3, 3, 3 (3, 1, 3 on some channels) |
+| open driver (defaults and the open PHY) | 1, 1, 1 | 3, 1, 1 or 3, 1, 3 |
+
+So on 2.4 GHz the open driver sends every single-stream frame from core 0
+alone, without the second chain's diversity (CDD). The per-rate words of the
+rate table (`SHM(0x99a)` .. `SHM(0xa8e)`, stride 0x14) differ as well.
+
+The emulator with the card's own SROM (the run's `bcm4360-srom-window.bin`,
+234 words, CRC valid; it contains the MAC address, so it stays local): object
+and hybrid are identical with the defaults and with the open PHY (17 steps,
+125,347 accesses), and **Broadcom's object itself chooses 1, 1, 1 on
+channel 11** and 3, 1, 1 on 36/80. The SROM words both drivers read at the
+load on the card are the dump's. Ruled out in the emulator: `tempthresh`
+(98 on the card; 255 changes nothing), the user power limit (`qtxpower` 92 as
+on the card, or 127), the board identity (the model is 106b:0117 too),
+`boardflags2` (0x2: the "CCK on core 0" flag is not set). `regrev` matters
+(17 on the card, `ccode` X3; with 0 the object chooses 1, 3, 3; the country
+US gives 3, 3, 3), but the country in use is X3 in the model as on the card.
+
+**The input is not the card's: it is Broadcom's uninitialised
+`min_txpower`** (`cca-stf.md`, `wlc_update_txppr_offset` step 1 and open
+question 1). `tools/re/mmiotrace.py replay` runs the object with every read
+answered as the card answered it; through the hybrid core with every switch
+off (the module the capture recorded), skipping the interrupt handler's
+interleaved accesses (2) and accepting the host's DMA ring addresses, the
+replay of run 7's Broadcom capture reaches the first mask write (access
+27,649) and writes 1 where the card wrote 3: all hardware inputs equal, the
+choice still differs. With a value written into the stack slot that
+`wlc_update_txppr_offset` reads unwritten, 0 or -1 give the same divergence;
+16, 20, 23 or a stale heap address give 3, 3, 3 and the replay runs through
+`up` without a divergence (28,541 accesses). On the card the stack holds
+something there; the open code takes 0 as the specification says. Runs 5
+and 6 show the same (Broadcom's driver 3, 3, 3 at 77 of 78 channel sets on
+2.4 GHz, the open code 1, 1, 1 always).
+
+So the open driver sends single-stream frames from core 0 alone with every
+configuration that has `open_stf` on - **also the stage "def" with
+Broadcom's PHY**. The 2.4 GHz watch below compares two single-chain
+configurations; its difference between the PHYs is a PHY matter, not this
+one.
+
+The 2.4 GHz watch, 600 s on the same AP:
+
+| per 600 s | Broadcom's PHY | open PHY |
+|---|---|---|
+| pings lost / longest outage | 209 / 29 s | 228 / 35 s |
+| frames sent / retransmitted | 9,676 / 50 % | 10,121 / 65 % |
+| no ACK / transmit failures | 4,936 / 55 | 6,680 / 91 |
+| RTS sent, no CTS | 19,062 / 12,086 | 22,247 / 18,084 |
+| data frames received / bad FCS | 4,326 / 17,016 | 2,497 / 25,624 |
+
+Broadcom's PHY here is the stage "def" (the open layers with Broadcom's PHY),
+so both columns ran with the open spatial policy (masks 1, 1, 1). Both soaks stayed on 2.4 GHz
+this time (Broadcom's PHY 15 of 42 pings lost in 8 minutes, the open PHY 51
+of 102 in 20); the channel was as bad as in run 6.
+
+The hardware gives both drivers the same inputs up to the first mask write:
+aligned, the two captures (27,650 accesses to that point) differ in read
+values only in status and timing bits (OTP busy, TSF, clock status), one
+microcode scratch register (SCR 9), three PHY reads, and the
+coexistence data register `D11(0x6f2)` (0x1300 under Broadcom's driver, 0 under
+the open one; read and discarded by the override in both). The PMU writes of
+the attach are the same; the open code makes them through BAR0's fixed
+ChipCommon window (offset 0x3000 + register), Broadcom's through the switched
+window. The glue sets `qtxpower` 92 right after the attach, before `up`; in
+the emulator that order changes nothing either.
+
+## The scans with desense on (2026-11-04)
+
+The regression after the override found the interference session different
+in its three scans (steps 14, 33, 54; 114 accesses more each): on a scan
+channel the open code applied the home channel's desense (`PHY(0x304)` 0x5f62,
+`TBL(0x0b)` gain limits 0x7f), the object the baseline (0x4e51). Step 20 of
+the channel function (`acphy-chanspec.md`) sets the channel's record pointer
+`pi_ac+0x8a8` to 0 before anything else; the open code left it, so on a scan
+channel step 21 took the home channel's record. Harmless until run 6's step
+24 fix, since step 24 used to pass 0. Fixed in `open/phy/phy_chanspec.c`;
+the session (59 steps) is now the same as the object, 545,262 accesses on
+both sides.
+
+`blackbox.py restore` matched every R R W R W pattern of `PHY(0x19e)`, also
+other functions' accesses; it now checks per call of the hwaci engine (its
+first read is the save, its last write the restore): 3 calls, all "only
+bit 1".

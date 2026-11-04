@@ -124,7 +124,15 @@ which E3 input.
   bit)", the watchdog spec calls it when the *state* byte changes. Implemented
   as an empty function, called with the state; period and state are stored.
   Whether `wlapi_bmac_btc_mode_get` returns non-zero in the session is not
-  visible (the services make no card access).
+  visible (the services make no card access). (2026-11-04: with the card's
+  MAC capabilities and ECI in the ChipCommon capabilities,
+  `phy_soak.py --machwcap 0xb0518c05 --cc-caps 0x70280000`, the mode is 5 and
+  the state byte turns 1 after four watchdogs; the object's callback then
+  suspends the MAC, reads `SHM(0x40)` and writes `PHY(0x2d1)`, `PHY(0x2d2)`,
+  the open one does nothing: 2 steps differ. The card's ChipCommon has no ECI
+  (capabilities 0x58680001) but the serial interface (extended capabilities
+  0x3, SECI); whether its mode is non-zero is not known (the `btc_mode`
+  iovar would tell). The body still needs a specification.)
 * The spec asks for a new field `bt_scan_active` for `pi+0x18f`; phy.h already
   had `noise_reason` / `noise_time` for `pi+0x18f` / `pi+0x190` (the receive
   group's names). Used those.

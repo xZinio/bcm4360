@@ -286,6 +286,7 @@ use wlapi_bmac_mhf
 use wlapi_bmac_mctrl
 use wlapi_bmac_btc_mode_get
 use wlapi_bmac_btc_period_get
+use wlapi_is_eci_coex_enabled
 use wlapi_get_wlc_info
 use wlc_ol_noise_avg_offload
 use wlapi_noise_cb

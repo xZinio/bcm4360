@@ -57,6 +57,14 @@ u32 bcm4360_mac_btc_mode(struct bcm4360_hw *hw);
  */
 void bcm4360_mac_btc_period_get(struct bcm4360_hw *hw, u16 *period, u8 *state);
 
+/*
+ * wlapi_is_eci_coex_enabled: the Bluetooth coexistence runs over the ECI
+ * wires (docs/re/spec/bmac-init.md A18: MAC revision >= 15, ChipCommon
+ * capabilities bit 29, extended capabilities bit 0 clear, MAC capabilities
+ * bit 29). The object returns 0 or 1. No access.
+ */
+bool bcm4360_mac_eci_coex_enabled(struct bcm4360_hw *hw);
+
 /* wlapi_bmac_ucode_wake_override_phyreg_set, .._clear */
 void bcm4360_mac_wake_override_set(struct bcm4360_hw *hw);
 void bcm4360_mac_wake_override_clear(struct bcm4360_hw *hw);

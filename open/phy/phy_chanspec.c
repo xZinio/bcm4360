@@ -330,7 +330,10 @@ void bcm4360_phy_chanspec_set_acphy(struct bcm4360_phy *phy, u16 chanspec)
 	/* step 19 */
 	bcm4360_phy_set_regtbl_on_chan_change_acphy(phy, entry);
 
-	/* step 20: interference (desense) state of the channel */
+	/* step 20: interference (desense) state of the channel; a channel visited
+	 * during a scan has no record, so step 21 takes the baseline (and step 24
+	 * applies no desense there) */
+	phy->desense.cur = NULL;			/* pi_ac+0x8a8 */
 	if ((phy->hold & 0x0206) && phy->interference.channel != ch) {
 		/* the channel is only visited during a scan: nothing more */
 	} else {

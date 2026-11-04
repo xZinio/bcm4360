@@ -17,6 +17,10 @@ name, register accesses).
     blackbox.py tempsense   acphy-cal-rx.md, the conversion of
                             wlc_phy_tempsense_acphy: the constant added
                             before the division by 0x4000, bounded by search
+    blackbox.py eci         bmac-init.md A18, wlapi_is_eci_coex_enabled: its
+                            result (all of rax) for the combinations of the
+                            capabilities it reads; the open glue takes it as
+                            0 or 1
 """
 import argparse
 import random
@@ -164,10 +168,16 @@ def restore():
     run = phy_soak.SoakRun(interference=True)
     m, chip = run.m, run.s.chip
     inside = [False]
+    calls = []                  # (first, end) trace index of each engine call
 
     def entry(mm, *a):
         inside[0] = True
-        mm.at_return(lambda mm2, r: inside.__setitem__(0, False))
+        first = len(chip.trace)
+
+        def ret(mm2, r):
+            inside[0] = False
+            calls.append((first, len(chip.trace)))
+        mm.at_return(ret)
     m.on_call('wlc_phy_hwaci_engine_acphy', entry, 1)
     rng = random.Random(5)
     read0 = chip.phy_read
@@ -176,27 +186,32 @@ def restore():
         v = read0(addr, value)
         return rng.randrange(0x10000) if addr == 0x19e and inside[0] else v
     chip.phy_read = read
-    n0 = len(chip.trace)
     for s in phy_soak.ISTEPS[:phy_soak.ISTEPS.index('wait 40') + 1]:
         run.step(s)
-    acc = [a for a in ab.logical(chip.trace[n0:], chip.func_name)
-           if a[1] == 'phy' and a[2] == 0x19e]
-    # the pattern of step 8: R (save), R W (set bit 1), ... R W (restore)
+    # per call of the engine: its first access of the register is the read of
+    # step 1 (the save), its last write the restore of step 8, and the read
+    # before that write the value the restore starts from. Other functions
+    # that set and restore the register in between (the gain tables, the
+    # desense application) are not counted.
     bad = found = 0
-    for k in range(len(acc) - 4):
-        if [x[0] for x in acc[k:k + 5]] != ['R', 'R', 'W', 'R', 'W']:
+    for first, end in calls:
+        acc = [a for a in ab.logical(chip.trace[first:end], chip.func_name)
+               if a[1] == 'phy' and a[2] == 0x19e]
+        if not acc or acc[0][0] != 'R':
             continue
-        saved, cur = acc[k][4], acc[k + 3][4]
-        if acc[k + 2][4] != acc[k + 1][4] | 2:
+        last = max((i for i, a in enumerate(acc) if a[0] == 'W'), default=None)
+        reads = [a for a in acc[1:last] if a[0] == 'R'] if last else []
+        if not reads:
             continue
         found += 1
-        got = acc[k + 4][4]
+        saved, cur, got = acc[0][4], reads[-1][4], acc[last][4]
         masked = (cur & ~2) | (saved & 2)
         print('saved %04x, read before the restore %04x, written %04x: %s'
               % (saved, cur, got, 'bit 1 restored' if got == masked else
                  'whole word' if got == saved else 'OTHER'))
         bad += got != masked
-    print('restore: %d save/restore pairs, %d not "only bit 1"' % (found, bad))
+    print('restore: %d calls of the engine with a save and a restore, %d not "only bit 1"'
+          % (found, bad))
     return bad if found else 1
 
 
@@ -268,12 +283,44 @@ def tempsense():
     return 0 if hi - lo == 1 and lo == 0x1d0614 else 1
 
 
+# ----------------------------------------------------------------- eci
+
+def eci():
+    """Call wlapi_is_eci_coex_enabled with a shim of the session's wlc_hw
+    while the capabilities it depends on are set and cleared."""
+    run = phy_soak.SoakRun()
+    for s in ['attach', 'mpc 0', 'up']:
+        run.step(s)
+    m = run.m
+    wlc_hw = m.r64(run.d.wlc + 0x20)
+    sih = m.r64(wlc_hw + 0xb8)
+    shim = m.malloc(0x18, fill=0)
+    m.write(shim, struct.pack('<QQQ', wlc_hw, run.d.wlc, 0))
+    mach, cc, ext = wlc_hw + 0xa4, sih + 0x18, sih + 0x1c
+    m0, c0, e0 = m.r32(mach), m.r32(cc), m.r32(ext)
+    bad = 0
+    for mb in (0, 1):
+        for cb in (0, 1):
+            for eb in (0, 1):
+                m.write(mach, struct.pack('<I', m0 & ~(1 << 29) | mb << 29))
+                m.write(cc, struct.pack('<I', c0 & ~(1 << 29) | cb << 29))
+                m.write(ext, struct.pack('<I', e0 & ~1 | eb))
+                r = m.call('wlapi_is_eci_coex_enabled', shim)
+                want = int(mb and cb and not eb)
+                print('MAC caps bit 29 %d, ChipCommon caps bit 29 %d, ext caps bit 0 %d: '
+                      'rax = %#x%s' % (mb, cb, eb, r, '' if r == want else '  (not %d)' % want))
+                bad += r != want
+    print('eci: %d of 8 results differ from 0/1 as specified' % bad)
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('what', choices=('e3', 'restore', 'tempsense'))
+    ap.add_argument('what', choices=('e3', 'restore', 'tempsense', 'eci'))
     ns = ap.parse_args()
-    return 1 if {'e3': e3, 'restore': restore, 'tempsense': tempsense}[ns.what]() else 0
+    return 1 if {'e3': e3, 'restore': restore, 'tempsense': tempsense,
+                 'eci': eci}[ns.what]() else 0
 
 
 if __name__ == '__main__':
