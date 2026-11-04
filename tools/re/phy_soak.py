@@ -39,6 +39,7 @@ gain-error corrections) changed at random within plausible ranges, seed N.
 import argparse
 import os
 import random
+import struct
 import sys
 
 import ab
@@ -255,13 +256,54 @@ class Interference:
 
 
 class SoakRun(hybrid.Run):
-    def __init__(self, path=None, off=(), on=(), interference=False, **card):
-        super().__init__(path, off=off, on=on, **card)
+    def __init__(self, path=None, off=(), on=(), interference=False, min_txpower=None,
+                 **card):
+        saved = hybrid.STACK_ZEROED
+        if min_txpower is not None:
+            hybrid.STACK_ZEROED = tuple(n for n in saved if n != 'wlc_update_txppr_offset')
+        try:
+            super().__init__(path, off=off, on=on, **card)
+        finally:
+            hybrid.STACK_ZEROED = saved
+        if min_txpower is not None:
+            self._min_txpower(min_txpower)
         self.s.chip.MAX_TRACE = 40000000
         Measurements(self.s.chip)
         if interference:
             Interference(self.s.chip, self.m)
         self.marks = []             # length of the trace at the start of each step
+
+    def _min_txpower(self, v):
+        """wlc_update_txppr_offset step 1 with min_txpower = v dBm (cca-stf.md,
+        open question 1): the object reads it from the 4 bytes at its entry
+        rsp - 0x30, which it never writes; they get v after the stack below is
+        zeroed. The hybrid core: the parameter stf_min_txpower of the open
+        code, and the same slot of Broadcom's function (switch open_stf off)."""
+        from unicorn import x86_const as x86
+        m = self.m
+
+        def zero(mm, *a):
+            rsp = mm.mu.reg_read(x86.UC_X86_REG_RSP)
+            mm.write(rsp - 0x2000, bytes(0x2000))
+
+        def slot(mm, *a):
+            rsp = mm.mu.reg_read(x86.UC_X86_REG_RSP)
+            mm.write(rsp - 0x30, struct.pack('<i', v))
+
+        blob = 'bcm4360_blob_wlc_update_txppr_offset'
+        if blob in m.blob.byname:
+            m.on_call('wlc_update_txppr_offset', zero, 1)
+            m.on_call(blob, slot, 1)
+            hits = [x for x in m.blob.byname.get('bcm4360_stf_min_txpower', [])
+                    if x.kind == 'O']
+            if not hits:
+                raise SystemExit('bcm4360_stf_min_txpower: not in this core')
+            m.w32(hits[0].addr, v & 0xffffffff)
+        else:
+            def both(mm, *a):
+                zero(mm)
+                slot(mm)
+            m.on_call('wlc_update_txppr_offset', both, 1)
 
     def logical_steps(self):
         """The compared accesses of each step (as Run.logical, step by step)."""
@@ -364,15 +406,16 @@ CARD_MACHWCAP = 0xb0518c05
 
 
 def soak(on=('phy',), off=(), show=20, steps=STEPS, board_seed=0, interference=False,
-         machwcap=None, cc_caps=None):
+         machwcap=None, cc_caps=None, min_txpower=None):
     core = hybrid.build(quiet=True)
     card = {'srom': board(board_seed)} if board_seed else {}
     if machwcap is not None:
         card['machwcap'] = machwcap
     if cc_caps is not None:
         card['cc_caps'] = cc_caps
-    ref = SoakRun(interference=interference, **card).session(steps, stop_on_error=False)
-    got = SoakRun(core, off=off, on=on, interference=interference,
+    ref = SoakRun(interference=interference, min_txpower=min_txpower,
+                  **card).session(steps, stop_on_error=False)
+    got = SoakRun(core, off=off, on=on, interference=interference, min_txpower=min_txpower,
                   **card).session(steps, stop_on_error=False)
     want, have = ref.logical_steps(), got.logical_steps()
     bad = 0
@@ -433,13 +476,17 @@ def main():
                          'with the Bluetooth coexistence)' % CARD_MACHWCAP)
     ap.add_argument('--cc-caps', type=lambda s: int(s, 0), default=None,
                     help='ChipCommon capabilities of the model (bit 29: ECI)')
+    ap.add_argument('--min-txpower', type=int, default=None,
+                    help='min_txpower of wlc_update_txppr_offset in dBm: the object\'s '
+                         'uninitialised int and the open code\'s parameter stf_min_txpower '
+                         '(default: the stack zeroed, 0)')
     ns = ap.parse_args()
     on = tuple(x for x in ns.on.split(',') if x)
     off = tuple(x for x in ns.off.split(',') if x)
     steps = ns.steps.split(',') if ns.steps else ISTEPS if ns.interference else STEPS
     try:
         return 1 if soak(on, off, ns.show, steps, ns.board, ns.interference,
-                         ns.machwcap, ns.cc_caps) else 0
+                         ns.machwcap, ns.cc_caps, ns.min_txpower) else 0
     except EmuError as e:
         print('emulation error: %s' % e)
         return 1

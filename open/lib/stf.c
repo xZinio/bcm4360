@@ -12,7 +12,8 @@
  * place; everything else of the driver goes through the bcm4360_stf_env_*
  * services.
  *
- * The minimum transmit power (the iovar "min_txpower") is 0: the driver has
+ * The minimum transmit power (the iovar "min_txpower") is the module
+ * parameter stf_min_txpower, 0 by default (see below): the driver has
  * no such iovar, and the object reads a stack word it never wrote in its
  * place (cca-stf.md, "The uninitialised stack read") - which made the
  * ceiling and the chain mask of the real driver depend on whatever earlier
@@ -240,7 +241,7 @@ void bcm4360_stf_update_txppr_offset(void *wlc, void *ofs)
 	void *osh = bcm4360_stf_env_osh(wlc);
 	u16 cs = bcm4360_stf_env_chanspec(wlc);
 	u32 bw = chanspec_tx_bw(cs), i;
-	s32 min4 = 0, c;	/* step 1: min_txpower is 0 */
+	s32 min4 = 4 * bcm4360_stf_env_min_txpower(wlc), c;	/* step 1 */
 	void *ppr;
 	s8 tmax, tmin;
 	u8 ceil, mask;

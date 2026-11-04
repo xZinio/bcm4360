@@ -12,6 +12,7 @@
 #                   [--captures "NAME:PARAMS;NAME:PARAMS"] [--def-repeat N]
 #                   [--quick "NAME:PARAMS;NAME:PARAMS"] [--cycles N] [--no-measure]
 #                   [--capture-radio "NAME:PARAMS;NAME:PARAMS"]
+#                   [--ab24 "NAME:PARAMS;NAME:PARAMS"]
 #
 # --watch24 sets how long the 2.4 GHz stage of def and phy watches the link
 # (default 120 s); with both on the same BSSID it compares the two PHYs on
@@ -31,7 +32,13 @@
 # --capture-radio replaces all stages too: for each configuration an
 # mmiotrace from before the load (mmiotrace only sees mappings made while it
 # runs) through the connection, one radio switch (off 5 s, on) and the
-# reconnection attempt, into capture-radio-NAME/ with marks at each step.
+# reconnection attempt, into capture-radio-NAME/ with marks at each step;
+# the core's state once connected (country, chains, counters) goes into
+# diag-capture-radio-NAME.txt.
+# --ab24 replaces all stages too: for each configuration a load (swap-test),
+# a measurement, then the 2.4 GHz watch of --watch24 seconds with the diag at
+# its start and end, all configurations on the AP the first one joined (its
+# BSSID is kept), to compare them on one AP (PARAMS ALLOFF: every switch off).
 # Every swap also reads the card's identity and PMU registers
 # (peek-on-target.py) 20 s after loading, into peek-LABEL.txt.
 #
@@ -90,6 +97,9 @@ extra=
 def_repeat=1
 quick=
 capture_radio=
+ab24=
+fixed_bssid=
+last24_bssid=
 cycles=2
 measure_after=1
 skip_off=0
@@ -114,6 +124,7 @@ while [ $# -gt 0 ]; do
 	--def-repeat) def_repeat=$2; shift 2 ;;
 	--quick) quick=$2; shift 2 ;;
 	--capture-radio) capture_radio=$2; shift 2 ;;
+	--ab24) ab24=$2; shift 2 ;;
 	--cycles) cycles=$2; shift 2 ;;
 	--no-measure) measure_after=0; shift ;;
 	*) echo "unknown option: $1" >&2; exit 2 ;;
@@ -405,6 +416,13 @@ band24() {
 		/signal:/ { s = $2 }
 		/^\s*SSID: / { sub(/^\s*SSID: /, ""); if ($0 == want && f > 0 && f < 3000 && s > best) { best = s; bb = b } }
 		END { if (bb != "") print bb, best }' "$out/scan-$l.txt")
+	if [ -n "$fixed_bssid" ]; then
+		# --ab24: the AP of the first configuration (signal from this scan, if seen)
+		bssid=$fixed_bssid
+		sig=$(awk -v b="$bssid" '/^BSS / { m = substr($2, 1, 17) == b } m && /signal:/ { print $2; exit }' \
+			"$out/scan-$l.txt")
+		sig=${sig:-?}
+	fi
 	[ -n "${bssid:-}" ] || { say "skip $l-2g: no 2.4 GHz AP of '$ssid' in the scan"; return 0; }
 	tmp=/etc/NetworkManager/system-connections/$TEST_PROFILE.nmconnection
 	python3 -I - "$src" "$tmp" "$TEST_PROFILE" "$bssid" <<-'EOF' || { say "skip $l-2g: profile copy failed"; return 0; }
@@ -430,6 +448,7 @@ band24() {
 	attempted
 	if wait_connected 60 && [ "$(cur_freq)" -gt 0 ] && [ "$(cur_freq)" -lt 3000 ]; then
 		say "PASS $l-2g: joined $bssid ($sig dBm in the scan) on 2.4 GHz"
+		last24_bssid=$bssid
 		measure "$l-2g"
 		watch_link "$watch24" "$l-2g"
 		diag "$l-2g-end"
@@ -576,7 +595,8 @@ say "kernel $kver; running $(running_version); installed bcm4360 $(modinfo -F ve
     "$(modinfo -F srcversion "$tko"); connection '$conn' on $iface"
 say "plan: soak ${soak} min (open PHY) and ${base_soak} min (Broadcom's PHY), 2.4 GHz $band24 (${watch24}s)," \
     "capture $capture, suspend $suspend, gap ${gap}s, deadline ${deadline} min," \
-    "extra '${extra}', off $((1 - skip_off)), confirm '${confirm}', captures '${captures:-default}'"
+    "extra '${extra}', off $((1 - skip_off)), confirm '${confirm}', captures '${captures:-default}'" \
+    "${ab24:+, ab24 '$ab24'}"
 
 trap on_exit EXIT
 trap 'note "interrupted"; exit 1' TERM INT
@@ -638,6 +658,11 @@ if [ -n "$capture_radio" ]; then
 		if wait_connected 150 "$conn"; then
 			say "CAPTURE-RADIO $cl: connected under the trace after $(($(date +%s) - t0))s"
 			sleep 10
+			# the core's state (country, chains, counters); its own register
+			# reads are between the two marks
+			echo "MARK diag" > "$TR/trace_marker"
+			diag "capture-radio-$cl"
+			echo "MARK diag end" > "$TR/trace_marker"
 			echo "MARK radio off" > "$TR/trace_marker"
 			nmcli radio wifi off
 			sleep 5
@@ -670,6 +695,30 @@ if [ -n "$capture_radio" ]; then
 		idle
 	done
 	say "RESULT: radio captures done ($(($(date +%s) - t_start)) s)"
+	exit 0
+fi
+
+# --ab24: each configuration loaded, measured and watched on the same 2.4 GHz
+# AP; a configuration that does not load is recorded and the next one goes on
+if [ -n "$ab24" ]; then
+	IFS=';' read -r -a alist <<< "$ab24"
+	for a in "${alist[@]}"; do
+		al=${a%%:*}
+		ap=${a#*:}
+		[ "$ap" = ALLOFF ] && ap=$ALL_OFF
+		say "----- ab24 $al: ${ap:-defaults} -----"
+		busy
+		if swap "$ap" "$al"; then
+			t0=$(date +%s)
+			if measure "$al"; then
+				band24 "$al"
+				[ -n "$fixed_bssid" ] || fixed_bssid=$last24_bssid
+			fi
+			klog_check "$t0" "$al"
+		fi
+		idle
+	done
+	say "RESULT: ab24 done on ${fixed_bssid:-no AP} ($(($(date +%s) - t_start)) s)"
 	exit 0
 fi
 

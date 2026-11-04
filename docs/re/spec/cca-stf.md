@@ -914,6 +914,23 @@ OLPC users of the stf state).
    `SHM(0x5d4)`/`SHM(0x5d6)` words, the chain mask passed to
    `wlc_stf_txchain_set`). Cannot be settled without a capture on the card;
    0 is the defined choice.
+   **Settled by the card (2026-11-04):** it does differ. In the captures of
+   card runs 5, 6 and 7 Broadcom's driver writes the masks 3, 3, 3 (CCK,
+   OFDM, one stream) at 77 of 78 channel sets on 2.4 GHz, the open code
+   (`v` = 0) 1, 1, 1 at all of them. The recording of run 7 replayed through
+   the hybrid core with every switch off (every value read from the card as
+   the card returned it; the interrupt handler's interleaved accesses and
+   the DMA ring addresses skipped) diverges at that mask write with `v` = 0
+   or -1, and runs through `up` without a divergence (28,541 accesses) with
+   `v` = 16, 20, 23 or a stale heap address: on the card the stack held a
+   value that made the ceiling of step 6 small. The ceiling acts as a floor
+   of the transmit power: `c` caps every rate's offset (`sub_172c6c`), so no
+   rate goes below `min_txpower` dBm. With a floor near the maximum the
+   comparison of set_complete step 3 sees the 1- and 2-chain offsets alike
+   and picks two chains; the legacy rate words of step 16 get the capped
+   offsets too. Whether an implementation should reproduce this (a floor
+   instead of 0) is a choice, see `questions/phy-interference.md`, "Card
+   run 7".
 2. Meaning of the CCA counter words (bmac-run R5 words 0..8) and of
    counters A/B (`SHM(0x10e)`, `SHM(0x10c)`): the names of the sample fields
    are proposals from the arithmetic.

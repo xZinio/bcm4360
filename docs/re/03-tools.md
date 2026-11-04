@@ -82,7 +82,17 @@ are provided. `emu.py` runs it under Unicorn:
   board variants; `--interference` makes the glitch counters and the hwaci
   detectors of the model live, for the watchdog's interference engines;
   `--machwcap 0xb0518c05` gives the model the card's MAC capabilities, with
-  the Bluetooth coexistence, `--cc-caps` its ChipCommon capabilities).
+  the Bluetooth coexistence, `--cc-caps` its ChipCommon capabilities;
+  `--min-txpower N` puts N into the int `wlc_update_txppr_offset` reads
+  uninitialised and into the open code's parameter `stf_min_txpower`).
+* `mmiotrace.py replay CAPTURE_DIR`: the object run with every read answered
+  as the card answered it in a recording; strict, so the recordings of the
+  hybrid module diverge early (the interrupt handler's accesses in between,
+  the host's DMA addresses). `--resync N` skips up to N recorded accesses
+  the session does not make, `--hybrid --off LAYERS --on LAYERS` runs the
+  hybrid core with the recorded switches, `--min-txpower N` sets the
+  uninitialised int; this settled the `min_txpower` question
+  (`questions/phy-interference.md`, card run 7).
 * `blackbox.py e3 | restore | tempsense | eci`: checks of a specification
   against the object by running it with chosen inputs (the desense-aci
   engine, the restore of `PHY(0x19e)` in the hwaci engine, the temperature

@@ -27,6 +27,7 @@ SIOCDEVPRIVATE = 0x89f0
 WLC_GET_BSSID = 23
 WLC_GET_CHANNEL = 29
 WLC_GET_RADIO = 37
+WLC_GET_COUNTRY = 83
 WLC_GET_VAR = 262
 
 # iovars of the diagnosis: the chains, the radio and power save, the channel
@@ -100,9 +101,12 @@ def diag(dev):
         except OSError as e:
             lines.append('%-16s error %s' % (name, e.strerror))
     for label, cmd, size in (('radio', WLC_GET_RADIO, 4), ('channel', WLC_GET_CHANNEL, 12),
-                             ('bssid', WLC_GET_BSSID, 6)):
+                             ('bssid', WLC_GET_BSSID, 6), ('country', WLC_GET_COUNTRY, 12)):
         try:
             v = ioctl(dev, cmd, bytes(size))
+            if cmd == WLC_GET_COUNTRY:      # the abbreviation in use (no revision)
+                lines.append('%-16s %s' % (label, v.split(b'\0')[0].decode('ascii', 'replace')))
+                continue
             lines.append('%-16s %s' % (label, v.hex()))
         except OSError as e:
             lines.append('%-16s error %s' % (label, e.strerror))

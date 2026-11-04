@@ -46,6 +46,11 @@ u16 bcm4360_stf_env_chanspec(void *wlc);
 bool bcm4360_stf_env_clk(void *wlc);
 /* the MAC core revision (pub+0x14) */
 u32 bcm4360_stf_env_corerev(void *wlc);
+/* wlc_update_txppr_offset step 1: the minimum transmit power in dBm (the
+ * iovar "min_txpower", which the driver does not have; Broadcom's code reads
+ * an uninitialised int there). 0 = no floor, as the specification says;
+ * module parameter stf_min_txpower (cca-stf.md, open question 1) */
+s32 bcm4360_stf_env_min_txpower(void *wlc);
 /* wlc_phy_txpower_get_target_max/min(pi) of the current band's PHY (s8) */
 s8 bcm4360_stf_env_target_max(void *wlc);
 s8 bcm4360_stf_env_target_min(void *wlc);

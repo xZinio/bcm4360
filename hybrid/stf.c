@@ -7,7 +7,10 @@
  *
  * Broadcom's function reads the "min_txpower" value from a stack word it
  * never writes, so the real driver's ceiling and chain mask there depend on
- * what earlier code left on the stack; the open code uses 0.
+ * what earlier code left on the stack; the open code uses the module
+ * parameter stf_min_txpower, 0 by default. On the card the stack made a floor
+ * near the maximum (card runs 5 to 7: two chains for single-stream frames on
+ * 2.4 GHz, where 0 gives one; docs/re/questions/phy-interference.md).
  *
  * The stf block and the fields of wlc are read at the offsets of the
  * specification; the services call the object's functions by name (taken
@@ -23,12 +26,16 @@
 bool bcm4360_open_stf = true;
 /* the spatial policy, core words and single-stream mode (part 2), separately */
 bool bcm4360_open_stf_policy = true;
+/* the minimum transmit power of wlc_update_txppr_offset step 1, dBm */
+int bcm4360_stf_min_txpower;
 
 #ifdef __KERNEL__
 module_param_named(open_stf, bcm4360_open_stf, bool, 0444);
 MODULE_PARM_DESC(open_stf, "transmit power offsets of the chains (wlc_update_txppr_offset): open code (1, default) or Broadcom's (0)");
 module_param_named(open_stf_policy, bcm4360_open_stf_policy, bool, 0444);
 MODULE_PARM_DESC(open_stf_policy, "spatial policy, core words, single-stream mode (wlc_stf.c part 2): open code (1, default, with open_stf) or Broadcom's (0)");
+module_param_named(stf_min_txpower, bcm4360_stf_min_txpower, int, 0444);
+MODULE_PARM_DESC(stf_min_txpower, "with open_stf: the floor of the per-rate transmit power in dBm (0..31, default 0 = none); Broadcom's code reads an uninitialised value there, on the card about 16");
 #endif
 
 /* cca-stf.md, Data: "Fields of wlc, pub and the band state read here" */
@@ -182,6 +189,14 @@ bool bcm4360_stf_env_clk(void *wlc)
 u32 bcm4360_stf_env_corerev(void *wlc)
 {
 	return FIELD(FIELD(wlc, WLC_PUB, void *), PUB_COREREV, u32);
+}
+
+s32 bcm4360_stf_env_min_txpower(void *wlc)
+{
+	(void)wlc;
+	if (bcm4360_stf_min_txpower < 0 || bcm4360_stf_min_txpower > 31)
+		return 0;
+	return bcm4360_stf_min_txpower;
 }
 
 s8 bcm4360_stf_env_target_max(void *wlc)

@@ -17,7 +17,19 @@ first access that differs ends the replay (a "divergence").  What comes out:
 
     mmiotrace.py info CAPTURE_DIR        what the recording contains
     mmiotrace.py replay CAPTURE_DIR [--trace OUT] [--srom OUT.srom]
+                 [--hybrid [--off LAYERS] [--on LAYERS]] [--resync N]
+                 [--min-txpower V]
     mmiotrace.py selftest                record in the emulator, replay, compare
+
+The card tests record the hybrid module (scripts/card-test.sh): --hybrid
+replays through the hybrid core with the switches of the recording (e.g.
+--off with every layer for the stage "off"). On a real system the interrupt
+handler's accesses come in between and the DMA rings lie at host addresses:
+--resync N skips up to N recorded accesses to find the emulated one, and
+accepts any value written to the DMA engine's registers (BAR0 + 0x200 ..
+0x2ff); each skip is listed. --min-txpower V puts V into the int that
+wlc_update_txppr_offset reads uninitialised (docs/re/spec/cca-stf.md, open
+question 1); without it the stack below its entry is zeroed as usual.
 """
 import argparse
 import os
@@ -127,14 +139,31 @@ class Divergence(EmuError):
 class Replay:
     """Feeds a recording to the chip model, see chip.Chip.mmio_read()."""
 
-    def __init__(self, rec):
+    def __init__(self, rec, resync=0):
         self.rec = rec
         self.pos = 0
         self.mismatch = {}          # (space, address) -> (model value, real value, count)
         self.done = False
+        self.resync = resync        # how far to look ahead for the emulated access
+        self.skipped = []           # (position, [skipped recorded accesses])
+        self.dma_values = 0         # DMA register writes taken with another value
 
     def _next(self, chip, op, bar, off, size, value):
         ev = self.rec.events
+        for k in range(self.resync + 1 if self.resync else 0):
+            if self.pos + k >= len(ev):
+                break
+            e = ev[self.pos + k]
+            dma = op == 'W' and bar == 0 and 0x200 <= off < 0x300
+            if e[:4] == (op, bar, off, size) and (op != 'W' or e[4] == value or dma):
+                if k:
+                    self.skipped.append((self.pos, ev[self.pos:self.pos + k]))
+                self.pos += k
+                if op == 'W' and e[4] != value:
+                    self.dma_values += 1
+                    self.pos += 1
+                    return e[4]
+                break
         if self.pos >= len(ev):
             self.done = True
             raise Divergence('end of the recording after %d accesses' % self.pos)
@@ -162,21 +191,38 @@ class Replay:
         self._next(chip, 'W', bar, off, size, value)
 
 
-def run(directory, trace=None, srom_out=None, quiet=False):
-    """Replay attach and up; returns (driver, replay, error or None)."""
+def run(directory, trace=None, srom_out=None, quiet=False, hybrid_core=None, off=(), on=(),
+        resync=0, min_txpower=None):
+    """Replay attach and up; returns (driver, replay, error or None).
+    hybrid_core: the path of a hybrid core to run instead of the object, with
+    the switches off and on; resync, min_txpower: see the module text."""
     from bcm4360 import Bcm4360
     from chip import cores_from_erom
     from run_attach import Driver
 
     rec = Recording.load(directory)
 
-    def session(layout, permissive):
-        d = Driver(None, echo=not quiet, layout=layout)
+    def session(layout, permissive, core=None):
+        if core:
+            import phy_soak
+            r = phy_soak.SoakRun(core, off=off, on=on, srom=None, layout=layout,
+                                 min_txpower=min_txpower)
+            d = r.d
+        else:
+            d = Driver(None, echo=not quiet, layout=layout)
+            if min_txpower is not None:
+                from unicorn import x86_const as x86
+
+                def slot(mm, *a):
+                    rsp = mm.mu.reg_read(x86.UC_X86_REG_RSP)
+                    mm.write(rsp - 0x2000, bytes(0x2000))
+                    mm.write(rsp - 0x30, struct.pack('<i', min_txpower))
+                d.m.on_call('wlc_update_txppr_offset', slot, 1)
         chip = d.chip
         chip.permissive = permissive
         chip.cfg[:len(rec.cfg)] = rec.cfg
         chip.vendor, chip.device = struct.unpack_from('<HH', rec.cfg, 0)
-        chip.replay = Replay(rec)
+        chip.replay = Replay(rec, resync)
         err = None
         try:
             d.attach()
@@ -199,7 +245,7 @@ def run(directory, trace=None, srom_out=None, quiet=False):
     layout = cores_from_erom(words)
     if not layout:
         return d, d.chip.replay, err or EmuError('no enumeration ROM in the recording')
-    d, err = session(layout, True)
+    d, err = session(layout, True, hybrid_core)
     chip = d.chip
     if trace:
         chip.dump_trace(trace)
@@ -291,6 +337,14 @@ def main():
     ap.add_argument('dir', nargs='?')
     ap.add_argument('--trace')
     ap.add_argument('--srom')
+    ap.add_argument('--hybrid', action='store_true',
+                    help='replay through the hybrid core (the recordings of the card tests)')
+    ap.add_argument('--off', default='', help='with --hybrid: layers switched off (comma list)')
+    ap.add_argument('--on', default='', help='with --hybrid: layers switched on')
+    ap.add_argument('--resync', type=int, default=0,
+                    help='skip up to N recorded accesses the session does not make')
+    ap.add_argument('--min-txpower', type=int, default=None,
+                    help='the uninitialised int of wlc_update_txppr_offset, dBm')
     ns = ap.parse_args()
     if ns.cmd == 'selftest':
         return selftest()
@@ -307,10 +361,21 @@ def main():
             struct.unpack_from('<HH', rec.cfg, 0) + struct.unpack_from('<HH', rec.cfg, 0x2c)
             + (rec.cfg[8],)))
         return 0
-    d, rp, err = run(ns.dir, ns.trace, ns.srom)
+    core = None
+    if ns.hybrid:
+        import hybrid
+        core = hybrid.build(quiet=True)
+    d, rp, err = run(ns.dir, ns.trace, ns.srom, hybrid_core=core,
+                     off=tuple(x for x in ns.off.split(',') if x),
+                     on=tuple(x for x in ns.on.split(',') if x),
+                     resync=ns.resync, min_txpower=ns.min_txpower)
     print('%d of %d recorded accesses replayed' % (rp.pos, len(rp.rec.events)))
     if err is not None:
         print(str(err))
+    for pos, evs in rp.skipped:
+        print('skipped at %d: %s' % (pos, '; '.join('%s BAR%d+%#x/%d = %#x' % e for e in evs)))
+    if rp.dma_values:
+        print('%d DMA register writes with another value than recorded' % rp.dma_values)
     for line in facts(d, rp):
         print(line)
     if rp.mismatch:
