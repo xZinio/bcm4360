@@ -275,22 +275,28 @@ def cmd_take(args):
     items = read_list(args.list)
     req = text.encode()
     t0 = time.time()
-    fd = os.open(proc, os.O_RDWR)
+    # the file has no seek: write the request, then read the result (which
+    # the module keeps until the next request) through a second open
+    chunks = []
     try:
-        n = os.write(fd, req)
+        fd = os.open(proc, os.O_WRONLY)
+        try:
+            n = os.write(fd, req)
+        finally:
+            os.close(fd)
         if n != len(req):
             raise SystemExit('short write to %s: %d of %d' % (proc, n, len(req)))
-        os.lseek(fd, 0, os.SEEK_SET)
-        chunks = []
-        while True:
-            b = os.read(fd, 1 << 16)
-            if not b:
-                break
-            chunks.append(b)
+        fd = os.open(proc, os.O_RDONLY)
+        try:
+            while True:
+                b = os.read(fd, 1 << 16)
+                if not b:
+                    break
+                chunks.append(b)
+        finally:
+            os.close(fd)
     except OSError as e:
         raise SystemExit('%s: %s' % (proc, e.strerror))
-    finally:
-        os.close(fd)
     snap = decode(items, b''.join(chunks))
     snap['meta'] = {'time': time.strftime('%Y-%m-%d %H:%M:%S'), 'seconds': round(time.time() - t0, 3),
                     'proc': proc, 'list': os.path.abspath(args.list), 'module': module_state(),
