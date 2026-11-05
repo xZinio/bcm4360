@@ -1,0 +1,86 @@
+/* SPDX-License-Identifier: ISC */
+/*
+ * bcm4360_open: the open mac80211 driver for the BCM4360
+ * (docs/re/07-open-driver.md). This is the Linux side: PCI, interrupts,
+ * firmware file, mac80211. The hardware work is done by the core
+ * (open/include/bcm4360/core.h) and the open layers below it.
+ */
+#ifndef BCM4360_DRV_H
+#define BCM4360_DRV_H
+
+#include <linux/pci.h>
+#include <linux/firmware.h>
+#include <linux/skbuff.h>
+#include <linux/spinlock.h>
+#include <net/mac80211.h>
+
+#include <bcm4360/core.h>
+
+#define BCM4360_DRV_NAME	"bcm4360_open"
+/* Broadcom's data (microcode, initialisation lists, PHY and radio tables,
+ * regulatory database), cut out of Broadcom's download at install time
+ * (scripts/fwcut, docs/re/07-open-driver.md); never distributed */
+#define BCM4360_FW_NAME		"bcm4360/bcm4360-data.bin"
+
+/* the firmware file: a header, a directory of named entries, the data */
+#define BCM4360_FW_MAGIC	"B4360FW1"
+struct bcm4360_fw_header {
+	char magic[8];
+	__le32 count;		/* entries */
+	__le32 version;		/* Broadcom release: 0x061edf0f = 6.30.223.271 */
+};
+
+struct bcm4360_fw_entry {
+	char name[48];		/* NUL-terminated */
+	__le32 offset;		/* from the start of the file */
+	__le32 size;		/* bytes */
+};
+
+struct bcm4360_dev {
+	/* first: the open code's hardware handle; hw_fw_data() and the core's
+	 * callbacks find the device from it */
+	struct bcm4360_hw hw;
+	struct pci_dev *pdev;
+	void *osh;		/* Broadcom's OS layer (src/shared/linux_osl.c) */
+	struct ieee80211_hw *ieee;
+	struct bcm4360_core *core;
+	struct bcm4360_core_info info;
+
+	const struct firmware *fw;
+	const struct bcm4360_fw_entry *fw_dir;
+	u32 fw_count;
+
+	/* serialises every call into the core but bcm4360_core_isr() */
+	spinlock_t lock;
+	/* frames and transmit status the core reported while the lock was
+	 * held, handed to mac80211 after it is released */
+	struct sk_buff_head rxq;
+	struct sk_buff_head txsq;
+
+	struct ieee80211_vif *vif;	/* the one interface (station) */
+	bool up;
+	u16 chanspec;
+	struct delayed_work watchdog;
+	struct work_struct restart;
+
+	struct ieee80211_supported_band band_2g;
+	struct ieee80211_supported_band band_5g;
+};
+
+static inline struct bcm4360_dev *bcm4360_dev_of(struct bcm4360_hw *hw)
+{
+	return container_of(hw, struct bcm4360_dev, hw);
+}
+
+/* fw.c */
+int bcm4360_fw_load(struct bcm4360_dev *dev);
+void bcm4360_fw_release(struct bcm4360_dev *dev);
+
+/* mac80211.c */
+const struct ieee80211_ops *bcm4360_mac80211_ops_get(void);
+int bcm4360_mac80211_register(struct bcm4360_dev *dev);
+void bcm4360_mac80211_unregister(struct bcm4360_dev *dev);
+void bcm4360_deliver(struct bcm4360_dev *dev);
+u16 bcm4360_chanspec_of(const struct cfg80211_chan_def *def);
+
+#endif
