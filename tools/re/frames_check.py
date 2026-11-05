@@ -4,7 +4,7 @@
 The core's frame path (open/core/frames.c, rx.c, tx.c) against Broadcom's
 object on the same card model (docs/re/tasks/core-frames.md).
 
-    frames_check.py [receive] [transmit] [status] [--show N]
+    frames_check.py [receive] [transmit] [status] [ampdu] [--show N]
 
 Both sessions are brought up (attach, up) and get the DMA channel model of
 dma_scenarios.DmaHw. Then
@@ -24,6 +24,14 @@ dma_scenarios.DmaHw. Then
             for the frames at the head of FIFO 3; compared: the register
             accesses, fatal errors, and the core's decoded status against
             frames.md 4.
+
+  ampdu     (docs/re/tasks/core-ampdu.md) aggregated MPDUs through the core: the
+            header bytes (control bits, cache bytes 0x66..0x6b, RTS/CTS, the
+            epoch bit in the prefix and when it flips) and aggregate status
+            words (bitmap with holes, fallback counts, reason 1 = posted
+            again unchanged) against the values of docs/re/spec/ampdu.md 1.4,
+            1.6, 2.2, 2.3, 2.6. Checked against the spec only: the object has
+            no public entry point that makes it aggregate.
 
 The object is used as a black box through its public entry points and the
 functions frames.md names (wlc_isr, wlc_dpc, wlc_recv, wlc_txfifo).
@@ -75,7 +83,7 @@ class Side:
 
     def trace_from(self, n):
         names = self.s.chip.func_name if self.run else self.s.names
-        return standalone.window_free(ab.logical(self.chip.trace[n:], names))
+        return standalone.comparable(ab.logical(self.chip.trace[n:], names), [])
 
     def dma(self):
         self.chip.bar0_win = self.d11.base
@@ -105,7 +113,7 @@ class FCore(standalone.Core):
 
         def on_txs(m, plat, pkt, ts):
             p = m.os.pkt(pkt)
-            self.txs.append((bytes(m.read(p.data, p.len)), tuple(m.read(ts, 4))))
+            self.txs.append((bytes(m.read(p.data, p.len)), tuple(m.read(ts, 6))))
             return 0
 
         env['bcm4360_plat_rx'] = (3, on_rx)
@@ -394,13 +402,14 @@ TXH = 4                         # the prefix; the header follows
 ENTRY = 0x14
 
 
-def txparams(m, fifo, rates, no_ack=0, rts=0, cts=0, seq_by_hw=0):
+def txparams(m, fifo, rates, no_ack=0, rts=0, cts=0, seq_by_hw=0, ampdu=0, tid=0, peer=0):
     """struct bcm4360_txparams in the machine's memory; rates: (enc, rate, nss, bw, flags)."""
-    raw = bytearray(30)
+    raw = bytearray(36)
     raw[0], raw[1] = fifo, len(rates)
     for i, r in enumerate(rates):
         raw[2 + 6 * i:2 + 6 * i + 6] = bytes(list(r) + [0] * (5 - len(r)) + [1])
     raw[26], raw[27], raw[28], raw[29] = no_ack, rts, cts, seq_by_hw
+    raw[30], raw[31], raw[32] = ampdu, tid, peer
     return m.buf(bytes(raw))
 
 
@@ -633,7 +642,7 @@ def status(a, b, show):
                 print('status %-26s the core reported %d statuses' % (name, len(txs)))
             else:
                 data, st = txs[0]
-                if st != want or data != b.fifo3_frames[k]:
+                if st[:4] != want or data != b.fifo3_frames[k]:
                     bad += 1
                     print('status %-26s core %s, expected %s%s' % (
                         name, st, want, '' if data == b.fifo3_frames[k] else ' (frame bytes differ)'))
@@ -643,10 +652,222 @@ def status(a, b, show):
     return bad
 
 
+# -------------------------------------------------------------------- ampdu
+
+VHT_R = (2, 9, 2, 2, 1)         # VHT 80 MHz 2 ss MCS 9, short GI
+VHT_R2 = (2, 7, 2, 2, 1)
+HT_R = (1, 7, 1, 1, 1)          # HT 40 MHz MCS 7
+HT_R2 = (1, 6, 1, 1, 1)
+LEG_R = (0, 48, 1, 0, 0)
+
+
+def qos_frame(seq, tid, n=100):
+    """A QoS data frame to the access point with the sequence number `seq`."""
+    return (bytes([0x88, 0x01, 0, 0]) + bytes(range(2, 20)) + struct.pack('<H', seq << 4) +
+            bytes([tid, 0]) + bytes(range(n)))
+
+
+def core_call(b, name, *args):
+    return b.core.call(name, b.core.core, *args)
+
+
+def ring_new(b, fifo, start, n):
+    """The n descriptors at ring index `start` of the core's FIFO: the bytes posted."""
+    r = ring(b, txch(fifo), start + n)
+    out = []
+    for i in range(start, start + n):
+        ctrl1, ctrl2, lo, hi = struct.unpack_from('<4I', r, 16 * i)
+        out.append(bytes(b.m.read(lo, ctrl2 & 0x1fff)))
+    return out
+
+
+def ampdu_status(b, fifo, fid, ncons, bitmap, counts=(0, 0, 0, 0), reason=0):
+    """Complete everything posted on `fifo` and run one aggregate status; returns the
+    statuses the core reported and the number of fatal errors."""
+    w0 = 1 | ncons << 8 | reason << 4 | fid << 16
+    w2 = counts[0] | counts[1] << 8 | counts[2] << 16 | counts[3] << 24
+    b.sregs.q.append((w0, 0x1234, w2, 0, 1, bitmap & 0xffffffff, bitmap >> 32, 0))
+    b.hw.set_status(txch(fifo), b.hw.posted(txch(fifo), 1), ST_IDLE)
+    f0, n0 = b.core.fatals, len(b.core.txs)
+    run_irq(b, None, MI_TFS)
+    return b.core.txs[n0:], b.core.fatals - f0
+
+
+def ampdu(a, b, show):
+    ensure_scan(a, b)
+    bad = 0
+
+    def fail(msg):
+        nonlocal bad
+        bad += 1
+        print('ampdu: ' + msg)
+
+    if not hasattr(b, 'sregs'):
+        b.sregs = StatusRegs(b)
+    core_call(b, 'bcm4360_core_intrson')        # a fatal error of the status test leaves them off
+    FIFO = 0
+    if b.posted.get(FIFO):
+        fail('FIFO 0 is not unused, the test needs it')
+        return bad
+    b.posted[FIFO] = []
+    posted = b.posted[FIFO]
+    sent = []                       # (data, expected frame bytes)
+
+    def tx(seq, rates, tid=0, peer=1, ampdu=1, fifo=FIFO, **kw):
+        fr = qos_frame(seq, tid)
+        r, data = post(b, fifo, fr, rates, ampdu=ampdu, tid=tid, peer=peer, **kw)
+        if data is None:
+            fail('frame %#x not taken (%d)' % (seq, r))
+            return None
+        if fifo == FIFO:
+            sent.append((data, fr))
+        return data
+
+    core_call(b, 'bcm4360_core_ampdu_tx_start', 1, 0, 0x123, 48, 6)
+    core_call(b, 'bcm4360_core_ampdu_tx_start', 1, 1, 0x40, 48, 6)
+    # before operational: not aggregated (a session frame sent alone, ampdu.md 1.4)
+    d = tx(0x123, [VHT_R, VHT_R2])
+    h = hdr_fields(d)
+    if h['low'] & 0x40 or not h['high'] & 4 or d[2] & 2:
+        fail('session not yet operational: low %#x high %#x prefix %s' % (h['low'], h['high'], h['prefix']))
+    core_call(b, 'bcm4360_core_ampdu_tx_operational', 1, 0, 64)
+    core_call(b, 'bcm4360_core_ampdu_tx_operational', 1, 1, 32)
+
+    # (name, frames: [(seq, rates, tid, ampdu)], expected prefix epoch bit per frame)
+    # the first is the frame sent alone above; sequence number 0x123 was taken (the check
+    # starts at the session's ssn, so the first aggregatable MPDU 0x124 is in order).
+    steps = [
+        ('6 VHT MPDUs: new station/kind, epoch flips to 1',
+         [(0x124 + i, [VHT_R, VHT_R2], 0, 1) for i in range(6)], [1] * 6),
+        ('non-aggregated frame after an aggregate: epoch flips',
+         [(0x200, [LEG_R], 0, 0)], [0]),
+        ('6 more VHT MPDUs: kind changed, epoch flips',
+         [(0x12a + i, [VHT_R, VHT_R2], 0, 1) for i in range(6)], [1] * 6),
+        ('2 HT MPDUs: kind and rate changed',
+         [(0x130 + i, [HT_R, HT_R2], 0, 1) for i in range(2)], [0, 0]),
+        ('same HT rate again: no flip', [(0x132, [HT_R, HT_R2], 0, 1)], [0]),
+        ('other MCS: flip', [(0x133, [HT_R2, HT_R], 0, 1)], [1]),
+        ('other TID: flip', [(0x40, [HT_R2, HT_R], 1, 1)], [0]),
+        ('same TID, sequence gap: flip', [(0x42, [HT_R2, HT_R], 1, 1)], [1]),
+        ('then in order: no flip', [(0x43, [HT_R2, HT_R], 1, 1)], [1]),
+        ('other station (no session): sent alone, flip', [(0x50, [HT_R2, HT_R], 2, 1)], [0]),
+        ('legacy first rate in a session: sent alone, no flip', [(0x44, [LEG_R], 1, 1)], [0]),
+        ('HT again after it: kind changed', [(0x45, [HT_R2, HT_R], 1, 1)], [1]),
+    ]
+    for name, frames, epochs in steps:
+        for (seq, rates, tid, am), ep in zip(frames, epochs):
+            peer = 2 if name.startswith('other station') else 1
+            d = tx(seq, rates, tid=tid, peer=peer, ampdu=am)
+            if d is None:
+                continue
+            h = hdr_fields(d)
+            agg = am and rates[0][0] >= 1 and not peer == 2
+            e0 = h['e0'][6]
+            want_seq = seq << 4
+            bits = ((d[2] >> 1) & 1)
+            errs = []
+            if agg:
+                if h['low'] != 0x40c0 or h['high'] & 4:
+                    errs.append('control low %#x high %#x' % (h['low'], h['high']))
+                t = bytes.fromhex(h['tail'])
+                win = 0x3f if tid == 0 else 0x1f
+                # tail starts at header offset 0x64: bytes 0x66.. are t[2..]
+                if t[2] != 48 or t[3] != 48 or struct.unpack_from('<H', t, 4)[0] != 0x1526 \
+                        or t[6] != win or t[7] != 0:
+                    errs.append('cache bytes %s' % t[2:8].hex())
+                if (h['e0'][6] & 0xff) != 0x05 or (h['e1'][6] & 0xff) != 0x25:
+                    errs.append('rts/cts words %#x %#x' % (h['e0'][6], h['e1'][6]))
+            else:
+                if h['low'] & 0x40 or (am and not h['high'] & 4) or bytes.fromhex(h['tail'])[2:8] != bytes(6):
+                    errs.append('sent alone: control low %#x high %#x' % (h['low'], h['high']))
+            if bits != ep:
+                errs.append('epoch bit %d, expected %d' % (bits, ep))
+            if h['prefix'] != ('02000%d00' % (2 * ep)):
+                errs.append('prefix %s' % h['prefix'])
+            if h['seq'] != want_seq & 0xffff or struct.unpack_from('<H', d, TXH + 0x7c + 22)[0] != want_seq:
+                errs.append('sequence field %#x' % h['seq'])
+            if h['low'] & 0x800:
+                errs.append('sequence assigned by the microcode')
+            if errs:
+                fail('%s, seq %#x: %s' % (name, seq, '; '.join(errs)))
+    print('ampdu: %d MPDUs posted, headers checked' % len(sent))
+
+    # another FIFO has its own epoch
+    d = tx(0x46, [VHT_R], tid=0, fifo=2)
+    if d is not None and d[2] != 2:
+        fail('FIFO 2: first MPDU prefix %s' % d[:4].hex())
+
+    # aggregate statuses on FIFO 0, in posting order (sent[]: 0 alone, 1..6 VHT, 7 not
+    # aggregated, 8..13 VHT, 14..20 HT (one aggregate each by the epoch), 21, 22 alone, 23 HT)
+    def fid_of(i):
+        return struct.unpack_from('<H', sent[i][0], TXH + 0x0c)[0]
+
+    def complete(i, ncons, bitmap=None, counts=None):
+        bitmap = (1 << ncons) - 1 if bitmap is None else bitmap
+        txs, fat = ampdu_status(b, FIFO, fid_of(i), ncons, bitmap, counts or (ncons, ncons, 0, 0))
+        if fat or len(txs) != ncons or [x[0] for x in txs] != [sent[i + j][1] for j in range(ncons)]:
+            fail('status of %d MPDUs at %d: fatal %d, %d reported' % (ncons, i, fat, len(txs)))
+        return txs
+
+    complete(0, 1)
+    # 6 MPDUs, bitmap 0b111011, w2 = 6 sent, 5 acked, 1 sent at a fallback rate, 0 acked
+    txs = complete(1, 6, 0b111011, (6, 5, 1, 0))
+    got = [x[1] for x in txs]
+    exp = [(1, 1, 2, 1, 6, 5), (1, 0, 0, 1, 0, 0), (0, 0, 0, 1, 0, 0), (1, 0, 0, 1, 0, 0),
+           (1, 0, 0, 1, 0, 0), (1, 0, 0, 1, 0, 0)]
+    if got != exp:
+        fail('aggregate status (hole): got %s, expected %s' % (got, exp))
+    else:
+        print('ampdu: aggregate status of 6 MPDUs, bitmap 0b111011: acked %s, ampdu_len/ack_len %d/%d' %
+              ([x[0] for x in got], got[0][4], got[0][5]))
+    complete(7, 1)
+    # reason 1: MPDUs 8..10 are posted again unchanged and nothing is reported
+    cnt = len(posted)
+    txs, fat = ampdu_status(b, FIFO, fid_of(8), 3, 0, reason=1)
+    again = ring_new(b, FIFO, cnt, 3)
+    if fat or txs or again != [sent[8 + i][0] for i in range(3)]:
+        fail('reason 1: fatal %d, %d statuses, re-posted bytes %s' % (
+            fat, len(txs), 'same' if again == [sent[8 + i][0] for i in range(3)] else 'differ'))
+    else:
+        print('ampdu: reason 1 status of 3 MPDUs: re-posted unchanged, nothing reported')
+    posted.extend(again)
+    # the copies of 8..10 sit behind everything that was posted before the repost
+    complete(11, 3)
+    for i, n in ((14, 7), (21, 1), (22, 1), (23, 1)):
+        complete(i, n)
+    txs = complete(8, 3, 0b111)
+    if [x[1] for x in txs] != [(1, 0, 1, 1, 3, 3), (1, 0, 0, 1, 0, 0), (1, 0, 0, 1, 0, 0)]:
+        fail('after reason 1: %s' % [x[1] for x in txs])
+    # a 40 MPDU status with a hole at MPDU 33: the bitmap's second word
+    fr = [tx(0x500 + i, [VHT_R, VHT_R2]) for i in range(40)]
+    n0 = len(sent) - 40
+    bm = ((1 << 40) - 1) ^ (1 << 33)
+    txs = complete(n0, 40, bm, (40, 39, 0, 0))
+    if [x[1][0] for x in txs] != [0 if i == 33 else 1 for i in range(40)] or txs[0][1][4:6] != (40, 39):
+        fail('40 MPDUs with a hole in the high bitmap word')
+    else:
+        print('ampdu: 40 MPDUs, hole at 33 (v2 bit 1): 39 acknowledged, ampdu_ack_len 39')
+    # a status for more MPDUs than were posted is fatal (ampdu.md 2.3 step 3 reads the ring)
+    tx(0x600, [VHT_R, VHT_R2])
+    txs, fat = ampdu_status(b, FIFO, fid_of(len(sent) - 1), 3, 7)
+    if fat != 1:
+        fail('NCONS beyond the posted MPDUs: fatal %d' % fat)
+    core_call(b, 'bcm4360_core_intrson')
+
+    # tx_stop: a frame with ampdu is sent alone again
+    core_call(b, 'bcm4360_core_ampdu_tx_stop', 1, 0)
+    d = tx(0x700, [VHT_R, VHT_R2], fifo=3)
+    h = hdr_fields(d)
+    if h['low'] & 0x40 or not h['high'] & 4:
+        fail('after tx_stop: low %#x high %#x' % (h['low'], h['high']))
+    print('ampdu: %s' % ('same' if not bad else '%d difference(s)' % bad))
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('what', nargs='*', default=['receive', 'transmit', 'status'])
+    ap.add_argument('what', nargs='*', default=['receive', 'transmit', 'status', 'ampdu'])
     ap.add_argument('--show', type=int, default=10)
     ns = ap.parse_args()
     a, b = bring_up()

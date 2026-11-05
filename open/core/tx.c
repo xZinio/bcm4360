@@ -7,22 +7,6 @@
 #include "core.h"
 #include <bcm4360/dma.h>
 
-/* frames.md 3.2, 3.3 */
-#define TX_PREFIX_LEN		4
-#define TX_HDR_LEN		0x7c
-#define TX_HEADROOM		(TX_PREFIX_LEN + TX_HDR_LEN)
-#define TX_NRATES		4
-#define TX_RATE_ENTRY(i)	(0x14 + 0x14 * (i))
-
-/* header offsets (frames.md 3.3) */
-#define TXH_CTL_LOW		0x02
-#define TXH_CTL_HIGH		0x04
-#define TXH_CHANSPEC		0x06
-#define TXH_IVOFFSET		0x08
-#define TXH_FRAMELEN		0x0a
-#define TXH_FRAMEID		0x0c
-#define TXH_SEQ			0x0e
-
 /* MacTxControlLow */
 #define TXC_ACK			0x0080
 #define TXC_BEACON		0x0200
@@ -223,15 +207,16 @@ static void tx_phyctl(struct bcm4360_core *c, u8 *e, const struct bcm4360_txrate
 }
 
 /* frames.md 3.7: RtsCtsControl of an entry (protection frame at 6 Mb/s OFDM or 1 Mb/s CCK) */
-static u16 tx_rtsctl(const struct bcm4360_txparams *p, const struct bcm4360_txrate *r, bool last)
+static u16 tx_rtsctl(const struct bcm4360_txparams *p, const struct bcm4360_txrate *r, bool last,
+		     bool rts)
 {
 	u16 v = last ? RTS_LAST : 0;
 
-	if (p->rts)
+	if (rts)
 		v |= RTS_RTS;
 	else if (p->cts)
 		v |= RTS_CTS_SELF;
-	if (p->rts || p->cts) {
+	if (rts || p->cts) {
 		if (rate_is_cck(r))
 			v |= 0xa << 8;			/* 1 Mb/s CCK */
 		else
@@ -255,8 +240,12 @@ static u32 tx_hdrlen(const u8 *f, u32 len)
 
 /* frames.md 3.3, 3.4: the header in front of the frame*/
 static void tx_header(struct bcm4360_core *c, u8 *h, const u8 *f, u32 len,
-		      const struct bcm4360_txparams *p, u16 id)
+		      const struct bcm4360_txparams *p, u16 id, bool agg)
 {
+	/* ampdu.md 1.4 step 3: RTS/CTS before every A-MPDU; step 1: the host's sequence number */
+	bool rts = p->rts || agg;
+	bool hwseq = p->seq_by_hw && !p->ampdu;
+
 	u32 type = (f[0] >> 2) & 3, i;
 	u16 low = TXC_FIRST_FRAG, high = 0;
 	bool qos = type == 2 && (f[0] & 0x80);
@@ -268,7 +257,7 @@ static void tx_header(struct bcm4360_core *c, u8 *h, const u8 *f, u32 len,
 		low |= TXC_ACK;
 	if (type == 0 && (f[0] & 0xf0) == 0x80)
 		low |= TXC_BEACON;
-	if (p->seq_by_hw)
+	if (hwseq)
 		low |= TXC_SEQ_BY_UCODE;
 	if (p->nrates == 1)
 		high |= TXC_HI_FIXED_RATE;
@@ -281,7 +270,7 @@ static void tx_header(struct bcm4360_core *c, u8 *h, const u8 *f, u32 len,
 	h[TXH_IVOFFSET] = hdrlen;
 	put16(h, TXH_FRAMELEN, len + 4);
 	put16(h, TXH_FRAMEID, id);
-	if (!p->seq_by_hw && len >= 24)
+	if (!hwseq && len >= 24)
 		put16(h, TXH_SEQ, f[22] | (u16)f[23] << 8);
 	for (i = 0; i < p->nrates; i++) {
 		u8 *e = h + TX_RATE_ENTRY(i);
@@ -290,7 +279,7 @@ static void tx_header(struct bcm4360_core *c, u8 *h, const u8 *f, u32 len,
 		tx_phyctl(c, e, r);
 		tx_plcp(e + 6, r, len + 4, to_ap);
 		put16(e, 0x0e, txrate_500k(r));
-		put16(e, 0x10, tx_rtsctl(p, r, i == p->nrates - 1));
+		put16(e, 0x10, tx_rtsctl(p, r, i == p->nrates - 1, rts));
 	}
 }
 
@@ -332,8 +321,10 @@ int bcm4360_core_tx(struct bcm4360_core *c, void *pkt, const struct bcm4360_txpa
 	f = osl_pktdata(c->osh, pkt);
 	h = osl_pktpush(c->osh, pkt, TX_HEADROOM);
 	id = p->fifo | ((c->fr.txid & 0x3f) << 9);
-	tx_header(c, h + TX_PREFIX_LEN, f, len, p, id);
-	h[0] = 0x02;				/* the prefix, sent unchanged (3.2) */
+	tx_header(c, h + TX_PREFIX_LEN, f, len, p, id, core_ampdu_is_agg(c, p));
+	h[0] = 0x02;				/* the prefix (3.2); byte 2 bit 1 is the A-MPDU epoch */
+	h[1] = h[2] = h[3] = 0;
+	core_ampdu_header(c, h, h + TX_PREFIX_LEN, f, p);	/* ampdu.md 1.4-1.6 */
 	c->fr.txid++;
 	if (bcm4360_dma_txfast(di, pkt, true))
 		return -1;			/* the engine freed the packet */
@@ -345,11 +336,90 @@ int bcm4360_core_tx(struct bcm4360_core *c, void *pkt, const struct bcm4360_txpa
 	return 0;
 }
 
+/* frames.md 4.3 step 10: the packet leaves as the platform gave it to us */
+static void tx_report(struct bcm4360_core *c, u32 fifo, struct bcm4360_dma *di, void *pkt,
+		      const struct bcm4360_txstatus *ts)
+{
+	osl_pktpull(c->osh, pkt, TX_HEADROOM);
+	c->fr.tx_status++;
+	bcm4360_plat_txstatus(c->plat, pkt, ts);
+	if (c->fr.stopped[fifo] &&
+	    ((struct bcm4360_dma_pub *)di)->txavail >= TX_WAKE_FROM) {
+		c->fr.stopped[fifo] = false;
+		bcm4360_plat_tx_wake(c->plat, fifo);
+	}
+}
+
+#define AMPDU_MAX_STATUS	64	/* MPDUs one status completes (the bitmap's width) */
+#define AMPDU_MAX_REPOST	64	/* consecutive re-posts before the MPDUs count as lost */
+
+/*
+ * ampdu.md 2.2, 2.3, 2.6: the status of an aggregate. `pkt` is the head MPDU
+ * (already taken from the ring); the NCONS - 1 after it are taken here. w0, w2:
+ * the status words, bm0, bm1: the Block Ack bitmap (v1, v2). True: fatal.
+ */
+static bool tx_status_ampdu(struct bcm4360_core *c, struct bcm4360_dma *di, u32 fifo, void *pkt,
+			    u32 w0, u32 w2, u32 bm0, u32 bm1)
+{
+	struct core_ampdu *a = &c->fr.ampdu;
+	void *pkts[AMPDU_MAX_STATUS];
+	struct bcm4360_txstatus ts;
+	u32 ncons = (w0 >> 8) & 0x7f, reason = (w0 >> 4) & 0xf, i, nack = 0;
+	bool fb = ((w2 >> 16) & 0xff) != 0;
+
+	if (ncons > AMPDU_MAX_STATUS) {
+		osl_pktfree(c->osh, pkt, true);
+		return true;
+	}
+	pkts[0] = pkt;
+	for (i = 1; i < ncons; i++) {
+		pkts[i] = bcm4360_dma_getnexttxp(di, 2);	/* their ids are not checked (2.3 step 3) */
+		if (!pkts[i])
+			break;
+	}
+	if (i < ncons) {
+		while (i--)
+			osl_pktfree(c->osh, pkts[i], true);
+		return true;
+	}
+	a->nstatus++;
+	if (reason == 1 && a->repost < AMPDU_MAX_REPOST) {
+		/* ampdu.md 2.3 step 2: the receiver was asleep, nothing was sent: post them again */
+		for (i = 0; i < ncons; i++) {
+			if (bcm4360_dma_txfast(di, pkts[i], true))
+				a->nholes++;	/* no room: the engine freed it; lost */
+			else
+				a->nreposts++;
+		}
+		a->repost++;
+		return false;
+	}
+	a->repost = 0;
+	for (i = 0; i < ncons; i++)
+		if (reason == 0 && ((i < 32 ? bm0 >> i : bm1 >> (i - 32)) & 1))
+			nack++;
+	a->nholes += ncons - nack;
+	for (i = 0; i < ncons; i++) {
+		hw_memset(&ts, 0, sizeof(ts));
+		ts.ampdu = 1;
+		ts.acked = reason == 0 && ((i < 32 ? bm0 >> i : bm1 >> (i - 32)) & 1);
+		if (!i) {
+			ts.ampdu_len = ncons;
+			ts.ampdu_ack_len = nack;
+			ts.tries = fb ? 2 : 1;
+			ts.rate_idx = fb ? 1 : 0;
+		}
+		tx_report(c, fifo, di, pkts[i], &ts);
+	}
+	return false;
+}
+
 /*
  * frames.md 4.3: one status for the oldest finished frame of its FIFO.
- * w0..w3: the first package. True: fatal.
+ * w0..w3: the first package, bm0, bm1: v1, v2 of the second (the aggregate's
+ * Block Ack bitmap, ampdu.md 2.2). True: fatal.
  */
-static bool tx_status_one(struct bcm4360_core *c, u32 w0, u32 w1, u32 w2, u32 w3)
+static bool tx_status_one(struct bcm4360_core *c, u32 w0, u32 w1, u32 w2, u32 w3, u32 bm0, u32 bm1)
 {
 	struct bcm4360_txstatus ts;
 	struct bcm4360_dma *di;
@@ -369,20 +439,13 @@ static bool tx_status_one(struct bcm4360_core *c, u32 w0, u32 w1, u32 w2, u32 w3
 		osl_pktfree(c->osh, pkt, true);
 		return true;
 	}
+	if (d[TX_PREFIX_LEN + TXH_CTL_LOW] & 0x40)
+		return tx_status_ampdu(c, di, fifo, pkt, w0, w2, bm0, bm1);
 	hw_memset(&ts, 0, sizeof(ts));
 	ts.acked = ((w0 & 0x8000) || ncons > 1) && !((w0 >> 4) & 0xf) && !((w1 >> 16) & 0xff);
 	ts.tries = (w2 & 0xff) + ((w2 >> 16) & 0xff) + (w3 & 0xff) + ((w3 >> 16) & 0xff);
 	ts.rate_idx = (w3 >> 16) & 0xff ? 3 : (w3 & 0xff) ? 2 : ((w2 >> 16) & 0xff) ? 1 : 0;
-	ts.ampdu = (d[TX_PREFIX_LEN + TXH_CTL_LOW] & 0x40) ? 1 : 0;
-	/* the packet leaves as the platform gave it to us */
-	osl_pktpull(c->osh, pkt, TX_HEADROOM);
-	c->fr.tx_status++;
-	bcm4360_plat_txstatus(c->plat, pkt, &ts);
-	if (c->fr.stopped[fifo] &&
-	    ((struct bcm4360_dma_pub *)di)->txavail >= TX_WAKE_FROM) {
-		c->fr.stopped[fifo] = false;
-		bcm4360_plat_tx_wake(c->plat, fifo);
-	}
+	tx_report(c, fifo, di, pkt, &ts);
 	return false;
 }
 
@@ -392,7 +455,7 @@ static bool tx_status_one(struct bcm4360_core *c, u32 w0, u32 w1, u32 w2, u32 w3
  */
 bool core_txstatus_run(struct bcm4360_core *c, u32 bound, bool *fatal)
 {
-	u32 n = 0, w0, w1, w2, w3, v0;
+	u32 n = 0, w0, w1, w2, w3, v0, v1, v2;
 
 	*fatal = false;
 	(void)d11_read32(c->hw, D11_TSF_LOW);	/* the time stamp of every status of this call */
@@ -406,12 +469,12 @@ bool core_txstatus_run(struct bcm4360_core *c, u32 bound, bool *fatal)
 		w2 = d11_read32(c->hw, D11_TXSTATUS2);
 		w3 = d11_read32(c->hw, D11_TXSTATUS3);
 		v0 = d11_read32(c->hw, D11_TXSTATUS0);
-		(void)d11_read32(c->hw, D11_TXSTATUS1);
-		(void)d11_read32(c->hw, D11_TXSTATUS2);
+		v1 = d11_read32(c->hw, D11_TXSTATUS1);
+		v2 = d11_read32(c->hw, D11_TXSTATUS2);
 		(void)d11_read32(c->hw, D11_TXSTATUS3);
 		if (!(v0 & 1))
 			return false;
-		*fatal = tx_status_one(c, w0, w1, w2, w3);
+		*fatal = tx_status_one(c, w0, w1, w2, w3, v1, v2);
 		n++;
 	}
 	if (*fatal) {

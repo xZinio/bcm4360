@@ -61,6 +61,7 @@ struct bcm4360_dev {
 	struct sk_buff_head txsq;
 
 	struct ieee80211_vif *vif;	/* the one interface (station) */
+	u32 peer_map;		/* A-MPDU peer indices in use (mac80211.c) */
 	bool up;
 	u16 chanspec;
 	struct work_struct restart;

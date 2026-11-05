@@ -78,8 +78,17 @@ struct bcm4360_txparams {
 	u8  no_ack;		/* do not expect an acknowledgement */
 	u8  rts;		/* protect with RTS/CTS */
 	u8  cts;		/* protect with CTS-to-self */
-	u8  seq_by_hw;		/* let the hardware fill in the sequence number */
+	u8  seq_by_hw;		/* let the hardware fill in the sequence number (not for ampdu) */
+	/* A-MPDU (docs/re/spec/ampdu.md 1.4-1.6) */
+	u8  ampdu;		/* the frame is an MPDU of a Block Ack session (mac80211's
+				 * IEEE80211_TX_CTL_AMPDU); it must carry the sequence number
+				 * the platform assigned (in its sequence control field) */
+	u8  tid;		/* the TID of the session; valid with ampdu */
+	u8  peer;		/* the platform's index of the peer (< BCM4360_AMPDU_NPEERS),
+				 * as given to bcm4360_core_ampdu_tx_start(); valid with ampdu */
 };
+
+#define BCM4360_AMPDU_NPEERS	8
 
 /* The transmit status of one frame (frames.md). */
 struct bcm4360_txstatus {
@@ -87,6 +96,14 @@ struct bcm4360_txstatus {
 	u8  rate_idx;		/* index into the frame's rates[] that went out last */
 	u8  tries;		/* attempts in all */
 	u8  ampdu;		/* reported as part of an A-MPDU */
+	/* only with ampdu (ampdu.md 2.6). The aggregate's status is reported once per MPDU, in
+	 * posting order; `acked` is that MPDU's Block Ack bit. The first MPDU of an aggregate
+	 * carries the aggregate: ampdu_len (the MPDUs it completes) and ampdu_ack_len (how many
+	 * were acknowledged), tries and rate_idx (1 try at rate 0, plus 1 at rate_idx 1 when
+	 * MPDUs were also sent at the fallback rates). The others have ampdu_len 0 and tries 0:
+	 * they only carry `acked`. */
+	u8  ampdu_len;
+	u8  ampdu_ack_len;
 };
 
 /* Receive filters (BCM4360_FILTER_*): what the MAC passes up. */
@@ -160,6 +177,24 @@ void bcm4360_core_intrson(struct bcm4360_core *c);
 int bcm4360_core_tx(struct bcm4360_core *c, void *pkt, const struct bcm4360_txparams *p);
 /* headroom the core needs in front of a frame to transmit */
 u32 bcm4360_core_tx_headroom(struct bcm4360_core *c);
+
+/* A-MPDU transmit sessions (docs/re/spec/ampdu.md 1, 3.1). The hardware needs nothing
+ * for a session: these set what the core puts into the headers of the session's MPDUs.
+ * `peer` is the platform's index of a station (< BCM4360_AMPDU_NPEERS).
+ *  tx_start:       a session for (peer, tid) begins; the next MPDU's sequence number is
+ *                  `ssn`; `max_mpdus`: the most MPDUs of the peer in one A-MPDU (ampdu.md
+ *                  1.3: 32/48/64 by its spatial streams); `density`: the peer's minimum
+ *                  MPDU start spacing code (802.11 A-MPDU density, 0..7), raised to the
+ *                  own minimum (5). MPDUs are not aggregated yet.
+ *  tx_operational: the peer has accepted; `buf_size`: its Block Ack window (1..64; 0: 64).
+ *                  From here MPDUs with txparams.ampdu are aggregated (if they go out at
+ *                  an HT or VHT rate).
+ *  tx_stop:        the session is over; MPDUs already posted complete as usual, later
+ *                  ones with txparams.ampdu go out as single frames. */
+void bcm4360_core_ampdu_tx_start(struct bcm4360_core *c, u8 peer, u8 tid, u16 ssn,
+				 u8 max_mpdus, u8 density);
+void bcm4360_core_ampdu_tx_operational(struct bcm4360_core *c, u8 peer, u8 tid, u8 buf_size);
+void bcm4360_core_ampdu_tx_stop(struct bcm4360_core *c, u8 peer, u8 tid);
 
 /* Provided by the platform; `plat` as given to bcm4360_core_attach(). */
 void bcm4360_plat_rx(void *plat, void *pkt, const struct bcm4360_rxstatus *rs);

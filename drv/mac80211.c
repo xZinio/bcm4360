@@ -236,6 +236,44 @@ static bool allow_tx = true;
 module_param(allow_tx, bool, 0644);
 MODULE_PARM_DESC(allow_tx, "transmit frames (1, default) or drop them all (0: receive-only test)");
 
+/* per station: the index the core knows its A-MPDU sessions by */
+struct bcm4360_sta {
+	u8 peer;
+};
+
+static int bcm4360_sta_add(struct ieee80211_hw *ieee, struct ieee80211_vif *vif,
+			   struct ieee80211_sta *sta)
+{
+	struct bcm4360_dev *dev = ieee->priv;
+	struct bcm4360_sta *ps = (struct bcm4360_sta *)sta->drv_priv;
+	int peer;
+
+	spin_lock_bh(&dev->lock);
+	peer = ffz(dev->peer_map);
+	if (peer < BCM4360_AMPDU_NPEERS)
+		dev->peer_map |= BIT(peer);
+	spin_unlock_bh(&dev->lock);
+	if (peer >= BCM4360_AMPDU_NPEERS)
+		return -ENOSPC;
+	ps->peer = peer;
+	return 0;
+}
+
+static int bcm4360_sta_remove(struct ieee80211_hw *ieee, struct ieee80211_vif *vif,
+			      struct ieee80211_sta *sta)
+{
+	struct bcm4360_dev *dev = ieee->priv;
+	struct bcm4360_sta *ps = (struct bcm4360_sta *)sta->drv_priv;
+	int tid;
+
+	spin_lock_bh(&dev->lock);
+	for (tid = 0; tid < IEEE80211_NUM_TIDS; tid++)
+		bcm4360_core_ampdu_tx_stop(dev->core, ps->peer, tid);
+	dev->peer_map &= ~BIT(ps->peer);
+	spin_unlock_bh(&dev->lock);
+	return 0;
+}
+
 static void bcm4360_tx(struct ieee80211_hw *ieee, struct ieee80211_tx_control *control,
 		       struct sk_buff *skb)
 {
@@ -263,6 +301,14 @@ static void bcm4360_tx(struct ieee80211_hw *ieee, struct ieee80211_tx_control *c
 	p.rts = !!(info->control.rates[0].flags & IEEE80211_TX_RC_USE_RTS_CTS);
 	p.cts = !!(info->control.rates[0].flags & IEEE80211_TX_RC_USE_CTS_PROTECT);
 	p.seq_by_hw = !!(info->flags & IEEE80211_TX_CTL_ASSIGN_SEQ);
+	if ((info->flags & IEEE80211_TX_CTL_AMPDU) && control->sta) {
+		/* a frame of a Block Ack session: mac80211 gave it its sequence number
+		 * (docs/re/spec/ampdu.md 1.4) */
+		p.ampdu = 1;
+		p.tid = ieee80211_get_tid((struct ieee80211_hdr *)skb->data);
+		p.peer = ((struct bcm4360_sta *)control->sta->drv_priv)->peer;
+		p.seq_by_hw = 0;
+	}
 
 	spin_lock_bh(&dev->lock);
 	err = dev->up ? bcm4360_core_tx(dev->core, skb, &p) : -1;
@@ -308,6 +354,18 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 		for (i = 0; i < IEEE80211_TX_MAX_RATES; i++) {
 			struct ieee80211_tx_rate *r = &info->status.rates[i];
 
+			if (ts.ampdu) {
+				/* ampdu.md 2.6: the aggregate's tries are on its first MPDU
+				 * (one per rate used); the others only say acked or not */
+				if (ts.ampdu_len && r->idx >= 0 && i <= ts.rate_idx &&
+				    (i == 0 || i == ts.rate_idx))
+					r->count = 1;
+				else {
+					r->idx = -1;
+					r->count = 0;
+				}
+				continue;
+			}
 			if (i > ts.rate_idx || r->idx < 0 || left <= 0) {
 				r->idx = -1;
 				r->count = 0;
@@ -317,6 +375,11 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 				left -= r->count;
 			else
 				r->count = left;
+		}
+		if (ts.ampdu) {
+			info->flags |= IEEE80211_TX_STAT_AMPDU;
+			info->status.ampdu_len = ts.ampdu_len;
+			info->status.ampdu_ack_len = ts.ampdu_ack_len;
 		}
 		if (ts.acked && !(info->flags & IEEE80211_TX_CTL_NO_ACK))
 			info->flags |= IEEE80211_TX_STAT_ACK;
@@ -496,6 +559,68 @@ static u64 bcm4360_get_tsf(struct ieee80211_hw *ieee, struct ieee80211_vif *vif)
 	return tsf;
 }
 
+/* ampdu.md 1.3: the most MPDUs in an A-MPDU to this peer, by its spatial streams */
+static u8 bcm4360_ampdu_max_mpdus(struct ieee80211_sta *sta)
+{
+	if (sta->deflink.vht_cap.vht_supported) {
+		u16 map = le16_to_cpu(sta->deflink.vht_cap.vht_mcs.rx_mcs_map);
+
+		if (((map >> 4) & 3) != IEEE80211_VHT_MCS_NOT_SUPPORTED)
+			return 64;
+		if (((map >> 2) & 3) == IEEE80211_VHT_MCS_NOT_SUPPORTED)
+			return 32;
+		return 48;
+	}
+	if (sta->deflink.ht_cap.mcs.rx_mask[2])
+		return 64;
+	if (!sta->deflink.ht_cap.mcs.rx_mask[1])
+		return 32;
+	return 48;
+}
+
+/* ampdu.md 3.1: Block Ack sessions. Neither side touches the hardware: the session
+ * decides what the core puts into the headers of the MPDUs. Receive: the microcode
+ * acknowledges and mac80211 reorders (ampdu.md 3.3), nothing to do. */
+static int bcm4360_ampdu_action(struct ieee80211_hw *ieee, struct ieee80211_vif *vif,
+				struct ieee80211_ampdu_params *params)
+{
+	struct bcm4360_dev *dev = ieee->priv;
+	struct ieee80211_sta *sta = params->sta;
+	struct bcm4360_sta *ps = (struct bcm4360_sta *)sta->drv_priv;
+	u8 tid = params->tid;
+
+	switch (params->action) {
+	case IEEE80211_AMPDU_RX_START:
+	case IEEE80211_AMPDU_RX_STOP:
+		return 0;
+	case IEEE80211_AMPDU_TX_START:
+		spin_lock_bh(&dev->lock);
+		bcm4360_core_ampdu_tx_start(dev->core, ps->peer, tid, params->ssn,
+					    bcm4360_ampdu_max_mpdus(sta),
+					    sta->deflink.ht_cap.ampdu_density);
+		spin_unlock_bh(&dev->lock);
+		ieee80211_start_tx_ba_cb_irqsafe(vif, sta->addr, tid);
+		return 0;
+	case IEEE80211_AMPDU_TX_OPERATIONAL:
+		spin_lock_bh(&dev->lock);
+		bcm4360_core_ampdu_tx_operational(dev->core, ps->peer, tid,
+						  min_t(u16, params->buf_size, 64));
+		spin_unlock_bh(&dev->lock);
+		return 0;
+	case IEEE80211_AMPDU_TX_STOP_CONT:
+	case IEEE80211_AMPDU_TX_STOP_FLUSH:
+	case IEEE80211_AMPDU_TX_STOP_FLUSH_CONT:
+		spin_lock_bh(&dev->lock);
+		bcm4360_core_ampdu_tx_stop(dev->core, ps->peer, tid);
+		spin_unlock_bh(&dev->lock);
+		/* MPDUs already posted complete with their statuses (ampdu.md 3.2) */
+		if (params->action == IEEE80211_AMPDU_TX_STOP_CONT)
+			ieee80211_stop_tx_ba_cb_irqsafe(vif, sta->addr, tid);
+		return 0;
+	}
+	return -EOPNOTSUPP;
+}
+
 static const struct ieee80211_ops bcm4360_ops = {
 	.tx = bcm4360_tx,
 	.wake_tx_queue = ieee80211_handle_wake_tx_queue,
@@ -510,6 +635,9 @@ static const struct ieee80211_ops bcm4360_ops = {
 	.sw_scan_complete = bcm4360_sw_scan_complete,
 	.conf_tx = bcm4360_conf_tx,
 	.get_tsf = bcm4360_get_tsf,
+	.sta_add = bcm4360_sta_add,
+	.sta_remove = bcm4360_sta_remove,
+	.ampdu_action = bcm4360_ampdu_action,
 	.add_chanctx = ieee80211_emulate_add_chanctx,
 	.remove_chanctx = ieee80211_emulate_remove_chanctx,
 	.change_chanctx = ieee80211_emulate_change_chanctx,
@@ -539,6 +667,8 @@ int bcm4360_mac80211_register(struct bcm4360_dev *dev)
 	ieee80211_hw_set(ieee, RX_INCLUDES_FCS);	/* frames.md 1.8: the FCS stays on the frame */
 	ieee80211_hw_set(ieee, REPORTS_TX_ACK_STATUS);
 	ieee80211_hw_set(ieee, MFP_CAPABLE);	/* crypto in software */
+	ieee80211_hw_set(ieee, AMPDU_AGGREGATION);	/* ampdu.md: the microcode builds the A-MPDUs */
+	ieee->sta_data_size = sizeof(struct bcm4360_sta);
 	ieee->queues = IEEE80211_NUM_ACS;
 	ieee->max_rates = 4;
 	ieee->max_rate_tries = 11;
