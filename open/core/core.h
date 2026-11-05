@@ -34,6 +34,8 @@
 #include <bcm4360/clm.h>
 #include <bcm4360/cca.h>
 
+#include "frames.h"
+
 #define FIELD(p, off, type)	(*(type *)((u8 *)(p) + (off)))
 
 /* The public part of Broadcom's si_t (docs/re/spec/chip-attach.md, A1). */
@@ -220,6 +222,9 @@ struct bcm4360_core {
 	char ccode[4];
 	void *wd_timer;		/* the periodic timer, 1 s */
 	struct bcm4360_core_info info;
+
+	/* the frame path (frames.c, frames.h; docs/re/spec/frames.md) */
+	struct core_frames fr;
 };
 
 /* the MAC layer's block, made by its attach */
