@@ -87,7 +87,7 @@ class Core:
         if 'bcm4360_tbl_write' in [n for o in self.s.objs for n in o.symbols]:
             ab.open_tables(self.s)
         self.osh = self.s.d.osh
-        self.hw = m.buf(64)
+        self.hw = m.buf(128)                            # struct bcm4360_hw (72 bytes with owner)
         m.w64(self.hw + 0, BAR0_VA)                     # bar0
         m.w64(self.hw + 24, self.osh)                   # pdev: the OS layer's handle
         m.w64(self.hw + 32, BAR0_VA)                    # d11

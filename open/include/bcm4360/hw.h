@@ -32,6 +32,7 @@ struct bcm4360_hw {
 	void *cc;		/* fixed window of ChipCommon: bar0 + 0x3000 */
 	void *pcie;		/* fixed window of the PCIe core: bar0 + 0x2000 */
 	void *wrap;		/* second movable window: bar0 + 0x1000 */
+	void *owner;		/* the core that owns this card (open/core/); the hybrid ignores it */
 };
 
 #if defined(BCM4360_EMU) || defined(BCM4360_OSL)
