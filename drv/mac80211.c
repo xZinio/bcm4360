@@ -526,6 +526,7 @@ int bcm4360_mac80211_register(struct bcm4360_dev *dev)
 	wiphy->available_antennas_tx = dev->info.txchain;
 	wiphy->available_antennas_rx = dev->info.rxchain;
 	ieee80211_hw_set(ieee, SIGNAL_DBM);
+	ieee80211_hw_set(ieee, RX_INCLUDES_FCS);	/* frames.md 1.8: the FCS stays on the frame */
 	ieee80211_hw_set(ieee, REPORTS_TX_ACK_STATUS);
 	ieee80211_hw_set(ieee, MFP_CAPABLE);	/* crypto in software */
 	ieee->queues = IEEE80211_NUM_ACS;

@@ -83,6 +83,7 @@ void *osl_pktnext(void *osh, void *pkt);
 void osl_pktsetnext(void *pkt, void *next);
 void osl_pktsetlen(void *osh, void *pkt, unsigned int len);
 u8 *osl_pktpull(void *osh, void *pkt, int bytes);
+u8 *osl_pktpush(void *osh, void *pkt, int bytes);
 void *osl_dma_alloc_consistent(void *osh, unsigned int size, u16 align_bits,
 			       unsigned int *alloced, unsigned long *pap);
 void osl_dma_free_consistent(void *osh, void *va, unsigned int size, unsigned long pa);
