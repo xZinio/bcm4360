@@ -1,279 +1,196 @@
-# bcm4360 — Broadcom BCM4360 Wi‑Fi for Linux on the MacBook Air
+# bcm4360: Wi‑Fi driver for the Broadcom BCM4360
 
-A Linux driver for the Broadcom **BCM4360** 802.11ac chip (PCI `14e4:43a0`) in the
-2013–2017 MacBook Air, packaged for DKMS. It is Broadcom's hybrid `wl` driver
-with its Linux side repaired for current kernels (tested on 7.2).
+A Linux driver for the Broadcom **BCM4360** 802.11ac Wi‑Fi chip, found in the
+2013–2017 MacBook Air. It started as Broadcom's `wl` driver, repaired for
+current kernels, and is being replaced piece by piece with open code. It
+installs through DKMS, so it is rebuilt automatically for every new kernel.
 
-## What is open, what is not
+## What's new
 
-| Part | License | Where |
-|---|---|---|
-| Linux/cfg80211 driver code, build system, scripts | ISC (open source) | this folder |
-| Open hardware layer written from specifications, and the adapters that let it take over parts of Broadcom's core inside the module | ISC (open source) | `open/`, `hybrid/` |
-| Broadcom's 802.11 core `wlc_hybrid.o_shipped` (2015, binary) | Broadcom's proprietary license | **not included**; downloaded from Broadcom at install time, checksum-verified; its code is linked in unmodified, only the binding of the symbols the open code takes over changes |
+- **Open code instead of Broadcom's.** Since 1.1.0 most of Broadcom's code
+  for this chip runs as open code, written from specifications. This
+  includes the radio and PHY (AC‑PHY): the part no open driver had working,
+  since the in‑kernel `b43` driver marks its BCM4360 support as broken. The
+  MAC hardware layer, DMA, clocks and power, board configuration and
+  regulatory lookup are open too. In a bring‑up with channel changes,
+  measured in an emulator, only 37 % of the Broadcom code that used to run
+  still runs. Counting how often each piece runs, 99 % of what the driver
+  executes is open code. Each open layer has a switch to fall back to
+  Broadcom's code (see [hybrid/README.md](hybrid/README.md)).
+- **Fewer problems than Broadcom's `wl`.** Connections and roams are
+  reported to the kernel correctly. eduroam works through NetworkManager.
+  Wi‑Fi no longer dies until a reboot after a failed roam, and scans no
+  longer get stuck after a dropped link. The memory-safety warning at every
+  boot is gone, `iw` shows correct values, and normal users can query the
+  interface. Full list: [docs/fixes.md](docs/fixes.md).
+- **Recovers by itself.** A watchdog reloads the driver if Wi‑Fi stays dead.
+  A fallback service loads `wl` if the driver failed to build for a new kernel.
+  On networks with both bands, the driver prefers 5 GHz access points, which
+  are more reliable with this chip.
 
-Why not 100 % open? The only open driver for this chip, the kernel's `b43`,
-has its BCM4360 radio support (AC‑PHY) marked **BROKEN** – it crashes. No open
-implementation of this radio existed, so Broadcom's core still does most of
-the actual 802.11 work. This project is replacing it piece by piece: the open
-hardware layer in `open/` reproduces Broadcom's AC‑PHY, radio and PMU code
-access for access in an emulator (`docs/re/`), and since 1.1.0 parts of it run
-inside the module in place of Broadcom's code (see below and
-[hybrid/README.md](hybrid/README.md)).
+Still Broadcom's: the upper 802.11 layer (joining networks, scanning,
+aggregation, rate selection, keys) and the chip's microcode and data tables.
+Replacing the upper layer is the next step; see
+[docs/re/07-open-driver.md](docs/re/07-open-driver.md).
 
-### Open code inside the driver (since 1.1.0)
+## Will it work on my machine?
 
-Functions of Broadcom's core are taken over by open code at link time; each
-layer has a module parameter that switches it back to Broadcom's code:
+Check for the chip:
 
-| Layer | Module parameter | Default |
-|---|---|---|
-| PMU and clocks (16 functions of `hndpmu.c`) | `open_pmu` | on |
-| Register access: PHY, radio, PHY tables, shared memory (15 functions) | `open_access` | on |
-| MAC control, suspend/enable, microcode host flags (6 functions of `wlc_bmac.c`) | `open_mac` | on |
-| Board variables, number parsing, CRC-8 (7 functions of `bcmutils.c`) | `open_utils` | on |
-| Regulatory database lookup (16 functions of `wlc_clm.c`; the database itself stays Broadcom's data) | `open_clm` | on |
-| **PHY and radio** (all 79 entry points of the PHY: bring-up, channels, transmit power, calibrations, watchdog, receive measurements) | `open_phy` | **off** |
+```sh
+lspci -nn | grep -i '14e4:43a'
+```
 
-`open_phy=1` replaces Broadcom's whole AC-PHY with the open one: in the
-emulator the full session (bring-up, nine channel changes in both bands and
-all bandwidths, watchdog, down/up, detach) is identical to Broadcom's, and
-the Broadcom code that runs falls to about 61 % of what it was. It has not
-run on a card yet, so it is off by default. To try it (Wi-Fi goes down for a
-moment; `scripts/swap-test.sh` can do this with automatic rollback):
-
-    echo "options bcm4360 open_phy=1" | sudo tee /etc/modprobe.d/bcm4360-phy.conf
-    sudo rmmod bcm4360; sudo modprobe bcm4360
-
-and remove the file to go back.
-
-With the default switches, about two thirds (64.7 %) of everything the driver executes during
-bring-up and channel changes is open code (measured in the emulator,
-`tools/re/hybrid.py share`). Not yet confirmed on the card for the last three:
-if Wi-Fi misbehaves, switch a layer off, e.g.
-`echo "options bcm4360 open_utils=0" | sudo tee /etc/modprobe.d/bcm4360-open.conf`,
-then reload the module.
-
-`make HYBRID=0` builds the module exactly as 1.0.3 (Broadcom's core alone).
-
-## Status
-
-Tested on the target machine: MacBookAir7,2, BCM4360 `14e4:43a0` rev 03 (Apple
-subsystem `106b:0117`), Arch Linux, kernel 7.2.7‑arch1‑1, GCC 16.2.1,
-NetworkManager 1.58.1, wpa_supplicant 2.12, WPA2‑PSK on 5 GHz (channel 36), and
-eduroam (WPA2‑Enterprise, PEAP/MSCHAPv2) at DTU.
-
-| Test | Result |
-|---|---|
-| Build against 7.2.7 (plain `make` and DKMS) | builds; no new warnings (7 pre-existing ones in Broadcom's code) |
-| Load next to the stock `wl` without binding the card | loads and unloads cleanly |
-| Live driver swap (`wl` → bcm4360, then 3 upgrades in place) | 4/4, reconnected within 5 s each time |
-| Disconnect/reconnect cycles | 8/8, no `bss_not_found` |
-| `verify.sh` (link, DHCP, gateway/internet/DNS, scan, queries as non-root, throughput, kernel log) | 13/13 |
-| Boot-time driver selection (udev replay) | udev picks bcm4360 over `bcma` and `wl` |
-| Real reboot | bcm4360 loads by itself, Wi‑Fi up 10.8 s after kernel start, 13/13 |
-| Suspend to RAM through logind (3×) | Wi‑Fi back 4 s after resume |
-| Throughput vs stock `wl`, same minute, 3 × 30 MB each | `wl` 72.0–74.1 Mbit/s, bcm4360 75.7–80.7 Mbit/s (both at the internet line's limit) |
-| Link rate | up to 866.5 Mbit/s (VHT80, 2 streams) |
-| eduroam through NetworkManager (APs also offer 802.1X‑SHA256) | connects: associates with classic 802.1X, EAP and 4-way handshake complete, 22 s from `nmcli con up` (the stock `wl` and bcm4360 1.0.0 never got past association) |
-| 1.0.2 installed, eduroam at DTU (many APs), 5 min with a scan every 30 s | 1 link drop, online again after 47 s without help from the watchdog; kernel log clean |
-| Forced joins while connected (`wpa_cli reassociate` ×3, `roam` to a weak 2.4 GHz AP) | online again after 0–3 s; 32 s once (EAP restarted by a duplicate roam event, see limitations) |
-| Disconnect/reconnect, eduroam → hotspot → eduroam, Wi‑Fi off/on | online again after 0–8 s |
-| Real reboot with 1.0.2 | bcm4360 loads by itself, eduroam up 4 s after NetworkManager started; the fallback service leaves `wl` alone |
-
-## What is fixed
-
-Compared with Broadcom's `wl` as packaged by Arch (`broadcom-wl-dkms 6.30.223.271-50`),
-which was already running on the test machine:
-
-| Symptom with the stock driver | Cause | Fix |
-|---|---|---|
-| `WARNING … net/wireless/sme.c:845 … bss_not_found`; cfg80211 then **discards the connection result** | The driver's own AP lookup passed capability bits where `cfg80211_get_bss()` has taken enums since Linux 4.1 (it searched for a 60 GHz PBSS) and never matched, leaving the lookup to cfg80211, whose scan entries expire after 30 s | Correct lookup, fresh entry from the firmware, BSSID-only fallback for hidden networks, and the referenced entry handed to `cfg80211_connect_bss()` |
-| **Roaming between access points was never reported** to the kernel or wpa_supplicant, on every roam since Linux 4.1 | The same failing lookup made the roam handler return before calling `cfg80211_roamed()` | Roams are always reported, with the new AP's entry (not exercised in testing: the test network has a single access point) |
-| `memcpy: detected field-spanning write … wl_cfg80211_hybrid.c:3139` at every boot | Scan results were copied into a fake beacon through a zero-length array | IEs passed straight to `cfg80211_inform_bss()`; this also removes a 1 KiB IE limit, and one bad scan entry no longer hides every network after it |
-| `ERROR @wl_cfg80211_get_tx_power: error (-1)` whenever a normal user runs `iw dev` | Every firmware call re-checked `CAP_NET_ADMIN`, although nl80211 already allows read-only queries for everyone | cfg80211 ops rely on nl80211's permission checks; the raw firmware ioctl (`SIOCDEVPRIVATE`) stays root-only |
-| **NetworkManager could not connect to eduroam** and other WPA2/WPA3 transition-mode networks (a hand-written wpa_supplicant config could) | NetworkManager's profiles allow the SHA-256 variants of 802.1X/PSK, wpa_supplicant prefers them when the AP offers them, and the driver rejected them because the 2015 core lacks them | Associate with classic 802.1X/PSK instead; wpa_supplicant adopts the AKM from the association request, as it does for all drivers that associate on their own (tested on eduroam) |
-| `iw` showed milliwatts as dBm; `iw … set txpower` took mBm as milliwatts | Wrong unit conversions | Quarter-dBm conversion, as in the in-kernel `brcmfmac` driver |
-| `WLC_SCAN error (-22)` while joining a network | Firmware "busy" came back as `-EINVAL` | `-EBUSY`, so NetworkManager simply retries; a scan whose results can't be fetched is reported as aborted (quietly when it was just cut short, e.g. before suspend) |
-| Every roam leaked the association IEs | Old IEs never freed before fetching new ones (and `roam_info` was filled before the fetch) | Old IEs freed, `roam_info` filled after fetching, firmware-reported lengths clamped |
-| `iw dev wlan0 station dump` showed nothing | `dump_station` not implemented | Added; `get_station` no longer reports the AP's figures under other addresses |
-| Every driver message split over two log lines; blank line after the banner | Two `printk()` calls per message | One record per message, proper log levels |
-| Module loaded for any vendor's "network, other" PCI device | Catch-all PCI ID table | BCM4360 IDs only; module named `bcm4360`, so it coexists with the distro's `wl` |
-| **All Wi‑Fi dead until a reboot** after a failed roam between access points: every connection refused (`Association request to the driver failed`), nothing in the kernel log | A join that failed while connected was reported only as "connect failed", so cfg80211 stayed connected to the old AP, refused every new connection with `-EALREADY` and never passed a disconnect down | cfg80211 is told about every change exactly once, as in brcmfmac: a failed join while connected also reports the old link lost, the disconnect op reports the disconnection itself, a lost link is never taken as a new join's result, every failed join status counts (but not the ABORT of a join a newer one replaced). wpa_supplicant leaves roaming to the core (`WIPHY_FLAG_SUPPORTS_FW_ROAM`), which roams by itself |
-| After a link loss, no network found for a minute or more (`CTRL-EVENT-SCAN-FAILED ret=-16`, NetworkManager: `ssid-not-found`) | The core drops a scan in progress with the link and never completes it; cfg80211 refused every further scan with `-EBUSY` | The scan is reported aborted on link loss, and after 15 s in any case |
-| `WARNING … net/wireless/sme.c:1094 … __cfg80211_roamed` (`!wdev->connected`) | The core also "roams" on its own after a link loss that was already reported | As in brcmfmac, such a roam completes a join in progress; with none, the core is taken off the AP again |
-| wpa_supplicant blocked the working AP and kept retrying the failing one | A failed join was reported with the previous AP's BSSID | The AP that was tried is reported, and the core's failure status is logged |
+The driver handles PCI IDs `14e4:43a0` (all MacBook Airs with this chip),
+`14e4:43a1`, `14e4:43a2` and `14e4:4360`. It is tested on a MacBookAir7,2
+with Arch Linux and kernel 7.2. Other distributions should work but are
+untested. It needs a 64‑bit x86 CPU without Intel CET/IBT (10th generation
+or older, as in every MacBook Air with this chip), because Broadcom's
+code does not support CET.
 
 ## Install
 
-Needs kernel headers, a compiler, `make`, `dkms` and `curl`. On Arch:
+**1. Have an internet connection.** The install downloads Broadcom's code
+(2.9 MB, checksum‑verified) from broadcom.com. If Wi‑Fi doesn't work yet, use
+USB tethering from a phone or an Ethernet adapter.
+
+**2. Install the build tools** (kernel headers, compiler, DKMS, curl):
 
 ```sh
-sudo pacman -S --needed base-devel linux-headers dkms curl
+sudo pacman -S --needed base-devel linux-headers dkms curl git           # Arch
+sudo apt install build-essential linux-headers-$(uname -r) dkms curl git # Debian, Ubuntu
+sudo dnf install kernel-devel make gcc dkms curl git                     # Fedora
 ```
 
-Copy this folder to the MacBook, then:
+Recommended: also install your distribution's `wl` driver (`broadcom-wl-dkms`
+on Arch, `broadcom-sta-dkms` on Debian/Ubuntu). The fallback service loads it
+if this driver is ever missing.
+
+**3. Download and install:**
 
 ```sh
-cd driver
-sudo sh scripts/install.sh   # downloads + verifies Broadcom's core, builds via DKMS,
-                             # installs, blacklists b43/bcma/ssb/brcm*/wl
-sudo reboot                  # bcm4360 takes over at boot
+git clone https://github.com/xZinio/bcm4360.git
+cd bcm4360
+sudo sh scripts/install.sh
 ```
 
-To switch without rebooting (Wi‑Fi drops for about 10 s; rolls back to `wl`
-automatically if the new driver doesn't reconnect):
+This builds the module (half a minute), installs it, and blocks the
+other Broadcom drivers that would grab the card (`b43`, `bcma`, `ssb`,
+`brcm*`, `wl`). It also sets up the watchdog and the fallback service.
+
+**4. Reboot.** Or switch without rebooting. Wi‑Fi drops for about 10
+seconds, and if the new driver doesn't reconnect, the old one comes back:
 
 ```sh
 sudo systemd-run --unit=bcm4360-swap --collect /bin/bash "$PWD/scripts/swap-test.sh" bcm4360
-sudo cat /var/log/bcm4360-swap-test.log
+sudo cat /var/log/bcm4360-swap-test.log     # ends with RESULT: PASS
 ```
 
-Check the result at any time (as root it also runs a scan and the non-root queries):
+**5. Check it:**
 
 ```sh
-sudo bash scripts/verify.sh
+sudo bash scripts/verify.sh     # link, DHCP, internet, DNS, scan, kernel log
 ```
 
-DKMS rebuilds the module automatically for new kernels. To upgrade, run
-`install.sh` from the newer version: it replaces the installed one once the
-new one has built.
-
-`install.sh` also sets up two safety nets:
-
-- `bcm4360-fallback.service` loads the stock `wl` at boot if bcm4360 is not
-  built for the running kernel (e.g. its DKMS build failed after a kernel
-  update), since the blacklist would otherwise leave the card without a driver.
-  Keep `broadcom-wl-dkms` (or `broadcom-wl`) installed for this.
-- `bcm4360-watchdog.timer` checks every 30 s and reloads bcm4360 once Wi‑Fi has
-  been without a connection for 150 s after having had one in the last 30
-  minutes: the last resort for core states the driver cannot get out of. It
-  does nothing while connected, with the radio off, after a deliberate
-  disconnect or right after suspend, and reloads at most once every 10 minutes.
-  It reloads with `rmmod` and then restarts wpa_supplicant (see below why).
-  `sh scripts/test-watchdog.sh` checks its decisions on simulated timelines.
-
-To see how the driver does in daily use, `scripts/wifi-daily.py` logs the
-connection as the normal user (no root, it only watches) and reports
-availability, outages and their causes, per network and band:
+### Update
 
 ```sh
-python3 scripts/wifi-daily.py enable    # logs now and at every login
-python3 scripts/wifi-daily.py report --days 7
-python3 scripts/wifi-daily.py disable
+cd bcm4360 && git pull && sudo sh scripts/install.sh
 ```
 
-If Wi‑Fi is ever unusable anyway, in this order (each step needs no network):
-
-```sh
-# 1. Nothing connects any more (NetworkManager: "couldn't grab this interface"):
-sudo systemctl restart wpa_supplicant NetworkManager
-# 2. Suspect the 5 GHz preference: turn it off for good (APs are then picked
-#    by signal only, as up to 1.0.2) and reload the driver:
-echo "options bcm4360 prefer_5ghz=0" | sudo tee -a /etc/modprobe.d/bcm4360-local.conf
-sudo rmmod bcm4360; sudo modprobe bcm4360; sudo systemctl restart wpa_supplicant
-# 3. Back to Broadcom's stock driver at once:
-sudo rmmod bcm4360; sudo modprobe wl; sudo systemctl restart wpa_supplicant
-# 4. Still nothing: reboot.
-```
-
-To try without the preference first, `echo 0 | sudo tee
-/sys/module/bcm4360/parameters/prefer_5ghz` turns it off from the next
-connection on, without a reload. Not in 1.0.3: there the core kept the last
-bonus until the driver was reloaded.
-
-Never use `modprobe -r` for this: it also unloads cfg80211, and the running
-wpa_supplicant cannot use any Wi‑Fi interface after cfg80211 comes back (it
-keeps nl80211's old netlink id) until it is restarted. That is how a driver
-reload by the watchdog of 1.0.2 left Wi‑Fi off until a reboot.
+Then reboot, or switch with the `swap-test.sh` command from step 4.
 
 ### Uninstall
 
 ```sh
-sudo sh scripts/uninstall.sh   # removes the DKMS module, the blacklist, the fallback service and the watchdog
-sudo reboot                    # the distro's wl (if installed) takes over again
+sudo sh scripts/uninstall.sh && sudo reboot
 ```
 
-## Layout
+This removes the driver, the blocklist, the watchdog and the fallback
+service. Your distribution's `wl` driver, if installed, takes over again.
 
-```
-Makefile                  Kbuild + `make`, `make fetch`, `make install`
-dkms.conf                 DKMS package bcm4360 1.1.0
-src/                      Linux/cfg80211 driver code (ISC)
-open/                     open hardware layer (AC-PHY, radio, PMU, MAC control), from docs/re/spec
-hybrid/                   adapters: open code takes over functions of Broadcom's core
-docs/re/                  reverse engineering: specifications, status, method
-tools/re/                 emulator, A/B comparison, hybrid check (tools/re/hybrid.py)
-scripts/mkhybrid.sh       makes the functions taken over weak in the copy of the core that is linked
-modprobe.d/bcm4360.conf   blacklist of drivers that would grab the card first
-patches/                  our changes as one patch against the provenance baseline
-scripts/fetch-blob.sh     download + verify Broadcom's core into lib/
-scripts/install.sh        DKMS build/install, blacklist, fallback service, watchdog
-scripts/uninstall.sh      removes all of it
-scripts/swap-test.sh      live driver swap with end-to-end checks and rollback
-scripts/verify.sh         health check
-scripts/test-watchdog.sh  checks the watchdog's decisions on simulated timelines
-systemd/                  bcm4360-fallback.service, bcm4360-watchdog (+ .service, .timer)
+## If Wi‑Fi stops working
+
+Try these in order. None of them needs a network.
+
+```sh
+# 1. Nothing connects:
+sudo systemctl restart wpa_supplicant NetworkManager
+# 2. Put one open layer back to Broadcom's code, e.g. the PHY, then reboot:
+echo "options bcm4360 open_phy=0" | sudo tee /etc/modprobe.d/bcm4360-local.conf
+# 3. Back to Broadcom's stock driver right now:
+sudo rmmod bcm4360; sudo modprobe wl; sudo systemctl restart wpa_supplicant
 ```
 
-## Provenance
+Don't use `modprobe -r` to reload the driver. It also unloads `cfg80211`,
+and wpa_supplicant then can't use Wi‑Fi until it is restarted.
 
-`src/` is reproducible from public sources:
+To see how the driver is doing over days, `scripts/wifi-daily.py` logs the
+connection as your normal user and reports outages per network and band:
 
-1. Broadcom's `hybrid-v35_64-nodebug-pcoem-6_30_223_271.tar.gz`
-   (SHA-256 `5f79774d5beec8f7636b59c0fb07a03108eef1e3fd3245638b20858c714144be`)
-2. plus Arch Linux's `broadcom-wl-dkms` patches 001–023
-   (gitlab.archlinux.org/archlinux/packaging/packages/broadcom-wl-dkms, commit `281691a`)
-   and its PKGBUILD's `eth%d` → `wlan%d` edit,
-3. plus `patches/0001-bcm4360-fixes.patch` (this project).
+```sh
+python3 scripts/wifi-daily.py enable          # starts logging, also at every login
+python3 scripts/wifi-daily.py report --days 7
+```
 
-Steps 1 and 2 reproduce Arch's installed driver byte for byte; step 3 then
-yields exactly `src/`. Both were checked on the test machine.
+## Settings
+
+Module parameters go in a file in `/etc/modprobe.d/` (as in step 2 above)
+and take effect after a reboot.
+
+| Parameter | Default | What it does |
+|---|---|---|
+| `prefer_5ghz` | 15 | Bonus in dB for 5 GHz access points when joining; 0 picks by signal only. Can also be changed at runtime in `/sys/module/bcm4360/parameters/`. |
+| `open_phy`, `open_mac`, `open_dma`, … | 1 | One switch per open layer; 0 runs Broadcom's code for that layer. The full list is in [hybrid/README.md](hybrid/README.md). |
 
 ## Known limitations
 
-- **Proprietary core.** Bugs inside Broadcom's 2015 core can't be fixed here,
-  and it was built without today's kernel hardening. The kernel is tainted
-  (`P`, `O`, `E`) and logs one `Unpatched return thunk in use` warning per boot
-  when the module loads. The stock `wl` does exactly the same: `objtool` can't
-  process the core, so it is skipped for the final link, as distributions do.
-- **CPUs with Intel CET/IBT** (11th gen and later) are not supported by the core,
-  same as the stock `wl`. The MacBook Air's Haswell/Broadwell CPUs don't have it.
-- **Modes:** client (managed) and IBSS only; no access point, monitor or P2P.
-- **Security:** open, WPA/WPA2-Personal and WPA/WPA2-Enterprise (802.1X, as
-  used by eduroam); both are tested. The core only
-  does classic 802.1X and PSK key management: where an access point also
-  offers the SHA-256 variants (WPA2/WPA3 transition mode) the driver uses the
-  classic one, and wpa_supplicant leaves out WPA3 (SAE) and 802.11r (fast
-  transition) for this driver by itself. Networks that accept *only* WPA3 or
-  that *require* management frame protection (PMF) do not work.
-- **Roaming** is done by the core; wpa_supplicant only picks the network. The
-  core reports some joins twice (as a connection and then as a roam to the same
-  AP), which restarts EAP once; the retry succeeds (the 32 s above).
-- **2.4 GHz at a busy enterprise network:** on DTU's eduroam every link to a
-  2.4 GHz AP dropped within about a minute, while 5 GHz links held for half an
-  hour (the chip shares 2.4 GHz with Bluetooth). In October 2026 other Cisco
-  and Meraki networks showed the same on 2.4 GHz as 20–60 s stalls with the
-  link up, with no Bluetooth device connected. The drops recover by themselves,
-  but the core picks the AP by signal strength, which often favours 2.4 GHz.
-  Since 1.0.3 the driver therefore gives 5 GHz APs a bonus of `prefer_5ghz` dB
-  (module parameter, default 15, writable at runtime) through the core's
-  `join_pref` setting, which the core has although the headers of this release
-  do not define it. The core accepts it, and in a test 4 of 5 joins went to
-  5 GHz; whether it also steers the core's own roaming is not yet known
-  (`wifi-daily.py report` shows the bands in use).
-- **Future kernels** can change cfg80211 interfaces; DKMS rebuilds on every
-  kernel update, but a major kernel release may need a source update, as for
-  any out-of-tree driver.
+- **Broadcom's code is still linked in**, so the kernel is marked as tainted,
+  and logs one `Unpatched return thunk` warning per boot. The stock `wl` does
+  the same.
+- **Client mode only** (and ad‑hoc/IBSS): no access point, monitor mode or
+  Wi‑Fi Direct.
+- **Security:** open networks, WPA/WPA2‑Personal and WPA/WPA2‑Enterprise
+  (802.1X, e.g. eduroam). Networks that accept only WPA3, or that require
+  management frame protection, don't work.
+- **Roaming** between access points is done by Broadcom's core.
+  wpa_supplicant only picks the network.
+- **2.4 GHz on busy enterprise networks** (seen on Cisco and Meraki) can stall
+  for 20–60 seconds. It recovers by itself, and the 5 GHz preference avoids
+  most of it.
+- The blocklist also blocks `bcma` and `ssb`. Don't install on a machine that
+  needs them for another Broadcom device.
 
-## License
+## How it is made
 
-Everything in this folder is under the ISC license (see `LICENSE`). Broadcom's
-core is under Broadcom's own license, which `scripts/fetch-blob.sh` saves as
-`lib/LICENSE.txt` and `install.sh` installs to `/usr/share/licenses/bcm4360/`.
+```
+src/       Linux side (cfg80211): Broadcom's wl source with this project's fixes
+open/      open hardware layer: PHY and radio, MAC, DMA, backplane, power, SROM, ...
+hybrid/    adapters that let open/ take over functions of Broadcom's code at link time
+docs/re/   specifications, method and status of the reverse engineering
+tools/re/  emulator that runs Broadcom's code and the open code side by side
+scripts/   install, uninstall, swap-test, verify, card tests, logging
+```
 
-## Credits
+Analysts (AI agents) studied Broadcom's code and wrote specifications that
+describe its behaviour, never its code. The open code was written from those
+specifications alone, by agents that never saw Broadcom's code. Every open
+layer then had to do exactly what Broadcom's does in an emulator, compared
+register access by register access, before it was tested on the card. The
+method is in [docs/re/](docs/re/README.md).
 
-Broadcom (original hybrid driver), the broadcom-wl contributors and Arch Linux
-maintainers (kernel-compatibility patches), and the Linux wireless developers
-whose cfg80211 documentation and `brcmfmac` driver served as reference.
+`src/` can be rebuilt from public sources: Broadcom's
+`hybrid-v35_64-nodebug-pcoem-6_30_223_271.tar.gz` (SHA‑256 `5f79774d…144be`),
+Arch Linux's `broadcom-wl-dkms` patches 001–023 (commit `281691a`), and
+`patches/0001-bcm4360-fixes.patch`.
+
+## License and credits
+
+Everything in this repository is under the ISC license (`LICENSE`).
+Broadcom's code is not included. It is downloaded at install time, stays under
+Broadcom's own license, and that license is installed to
+`/usr/share/licenses/bcm4360/`.
+
+Thanks to Broadcom (the original driver), the broadcom‑wl and Arch Linux
+maintainers (kernel compatibility patches), and the Linux wireless developers
+(cfg80211, and the `brcmfmac` driver used as a reference).

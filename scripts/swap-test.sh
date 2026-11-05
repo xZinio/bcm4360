@@ -12,8 +12,9 @@
 # previous module is reloaded, or --fallback (default: wl) when the previous
 # one cannot be reloaded by name. --params are module parameters for NEW, for
 # instance the switches of the hybrid build ("open_phy=1", "open_dma=0",
-# hybrid/README.md); with --params a running module of the same name is
-# reloaded instead of tested in place. Needs root.
+# hybrid/README.md); with --params, or when the installed build of the
+# running module is not the one running (after install.sh), it is reloaded
+# instead of tested in place. Needs root.
 # The Wi-Fi link goes down while it runs, so start it detached, e.g.
 #
 #   systemd-run --unit=bcm4360-swap --collect \
@@ -179,6 +180,15 @@ say "current driver: $old (${old_ko:-loaded from a file}), interface: ${iface:-n
 
 in_place=0
 case $new in *.ko|*.ko.*) ;; *) [ "$old" = "$new_mod" ] && in_place=1 ;; esac
+# a newer build of the running module is installed (install.sh, DKMS): load it
+if [ "$in_place" -eq 1 ]; then
+	disk=$(modinfo -F srcversion "$new_mod" 2>/dev/null)
+	live=$(cat "/sys/module/$new_mod/srcversion" 2>/dev/null)
+	if [ -n "$disk" ] && [ -n "$live" ] && [ "$disk" != "$live" ]; then
+		say "the installed $new_mod ($(modinfo -F version "$new_mod" 2>/dev/null)) is not the running one ($(cat "/sys/module/$new_mod/version" 2>/dev/null)): reloading"
+		in_place=0
+	fi
+fi
 # module parameters only take effect on a fresh load
 [ -n "$params" ] && in_place=0
 # Go back to the old module if modprobe can find it and it is not the one
