@@ -317,3 +317,49 @@ depends on the calls before it, and two chains for single-stream frames on
 2.4 GHz gave nothing measurable on either AP. The parameter stays, for
 comparisons with captures of Broadcom's driver (16 reproduces its mask
 writes).
+
+## Card run 9: both PHYs interleaved, with hardware snapshots (2026-11-05 02:16, `/var/log/bcm4360-card-test-20261105-021653`)
+
+Build 1.1.0 `FE92A2D485A6826B3D4AFC4` (commit 1d3435c: `/proc/bcm4360_snap`,
+`scripts/phy-snap.py`). `card-test.sh --ab24 'def1:;phy1:open_phy=1;def2:;
+phy2:open_phy=1;def3:;phy3:open_phy=1' --watch24 300`: Broadcom's PHY and the
+open PHY in turn, three loads each, each watched 300 s on the same 2.4 GHz AP
+as run 8 (B-DTU Wireless `a8:46:9d:29:65:d7`, channel 11, -67 to -72 dBm),
+with a hardware snapshot (10,383 words: PHY and radio registers, PHY tables,
+shared memory) after the join and two, 2 s apart, at the end of each watch.
+Every load passed; the kernel log stayed clean but for one "join failed
+(status 1)" of `phy1` when the harness switched to the BSSID-locked profile
+(joined 7 s later). The first snapshot (`def1` after the join) was lost to
+an lseek in `phy-snap.py` (fixed in 0d7d036); all 17 others took 0.08 s.
+
+| per 300 s | def1 | phy1 | def2 | phy2 | def3 | phy3 |
+|---|---|---|---|---|---|---|
+| watch start | 02:19 | 02:29 | 02:39 | 02:49 | 02:58 | 03:08 |
+| pings lost / longest outage | 26 / 24 s | 49 / 31 s | 62 / 35 s | 0 | 0 | 0 |
+| frames sent | 3,051 | 2,905 | 5,335 | 861 | 764 | 771 |
+| retransmissions per frame | 0.25 | 0.30 | 0.35 | 0.01 | 0.00 | 0.00 |
+| transmit failures | 0.2 % | 0.1 % | 0.5 % | 0 | 0 | 0 |
+| RTS from the AP to us | 20,896 | 23,936 | 43,462 | 825 | 705 | 694 |
+
+The AP's RTS loop of run 8 was on until about 02:50 and then stopped; the
+three loads before it and the three after it show no difference between the
+PHYs (Broadcom's PHY 88 pings lost in all, the open PHY 49).
+
+**The hardware state is the same.** `phy-snap.py` snapshots compared over
+the three loads of each PHY (values that move within two seconds left out:
+254 - counters, IQ estimates, power-loop indices): no value is the same in
+all loads of one PHY and different in the other's. 274 values vary from
+load to load in both groups alike: the desense (on or off, as the glitches
+of the moment had it), the calibration results (RC calibration
+`RADIO(0x414)`/`(0x415)`, the analog filter trims of `TBL(0x07)` derived
+from it, the coefficients of `TBL(0x0c)` and `TBL(0x10)`), and words the
+microcode writes itself (`SHM(0xae8)`..`(0xb28)`: no host access in the
+captures). With two loads each, ten values had looked systematic (the RC
+calibration 1-2 counts lower, three coefficients of `TBL(0x0c)` 0 instead of
+-1, five of those microcode words); the third pair dissolved them all.
+
+With runs 6 to 8 the open PHY has now run every stage of `card-test.sh` on
+the card (load, both bands, reconnects, radio switch, down/up, suspend, the
+20-minute soak) and shows neither a different hardware state nor a
+difference in the link beyond the channel's drift. `open_phy` is on by
+default since this run.

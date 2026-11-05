@@ -53,7 +53,7 @@
 #   peek     tools/re/peek-on-target.py: the identity of the card (read only)
 #   off      KO with every switch off (Broadcom's code everywhere): swap-test
 #            + measurements
-#   def      KO with its defaults (open layers, Broadcom's PHY): swap-test,
+#   def      KO with the open layers and Broadcom's PHY (open_phy=0): swap-test,
 #            measurements, a join to a 2.4 GHz AP, a short soak
 #   phy      KO with the open PHY (open_phy=1): the same, then reconnects,
 #            interface down/up, radio off/on, (--suspend) suspend to RAM, and
@@ -786,9 +786,9 @@ if [ -n "$confirm" ]; then
 	if swap "$confirm" confirm; then measure confirm; fi
 fi
 
-say "----- def: the defaults (Broadcom's PHY)${extra:+ + $extra} -----"
+say "----- def: the open layers, Broadcom's PHY (open_phy=0)${extra:+ + $extra} -----"
 ok_def=0
-if swap "$extra" def; then
+if swap "open_phy=0${extra:+ $extra}" def; then
 	ok_def=1
 	t0=$(date +%s)
 	measure def
@@ -799,7 +799,7 @@ fi
 # further loads of the same configuration: how often does it connect?
 def_pass=$ok_def
 for k in $(seq 2 "$def_repeat"); do
-	if swap "$extra" "def-load-$k"; then
+	if swap "open_phy=0${extra:+ $extra}" "def-load-$k"; then
 		def_pass=$((def_pass + 1))
 		measure "def-load-$k"
 	fi

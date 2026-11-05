@@ -22,9 +22,8 @@ traces have to be the same.
 --on and --off set the switches of layers of the hybrid core (bcm4360_open_<layer>,
 hybrid/hybrid.h), whatever their defaults; switched off, a layer falls back to
 Broadcom's own functions, which is tested too. The layers: pmu (default on),
-phy (default off; the PHY layer of hybrid/objects.mk is linked for the emulator
-even while the module leaves it out, so that an open PHY function that is still
-missing stops the session with its name).
+phy (default on since 2026-11-05: `check` alone runs the open PHY, `--off phy`
+Broadcom's).
 
 The session: attach, up, channel changes in both bands and all bandwidths,
 periodic work, down, up again, down, detach.

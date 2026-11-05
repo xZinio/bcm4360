@@ -37,11 +37,11 @@ hybrid-objs := hybrid/card.o hybrid/snap.o \
 # tools/re/hybrid.py for the emulator once ALL its sources exist, not yet in
 # the module.
 
-# The PHY layer (hybrid/phy.c, switch open_phy, default off): the adapter and
+# The PHY layer (hybrid/phy.c, switch open_phy, default on): the adapter and
 # the open PHY (its register access, open/hw/access.o, is in the list above).
 # All 79 entry points exist (docs/re/spec/acphy-api*.md) and the whole session
-# of tools/re/hybrid.py is identical to the object with open_phy on. It is in
-# the module with the switch off until it has run on a card.
+# of tools/re/hybrid.py is identical to the object with open_phy on. It was in
+# the module with the switch off until card run 9 (2026-11-05).
 hybrid-phy-objs := hybrid/phy.o \
                    open/phy/phy_api.o open/phy/phy_attach.o open/phy/phy_cal.o open/phy/phy_chanspec.o \
                    open/phy/phy_desense.o open/phy/phy_init.o open/phy/phy_rxgain.o \

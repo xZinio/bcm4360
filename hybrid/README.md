@@ -55,7 +55,7 @@ was compared there.
 | rate sets | `open_rate` | on | 10 helpers of `wlc_rate.c`: `wlc_rateset_default`, `wlc_rateset_filter`, `wlc_rate_hwrs_filter_sort_validate`, `wlc_rateset_ofdm_fixup`, the MCS and VHT map updates, `wlc_rateset_copy`, `wlc_rate_rspec_reference_rate` | `rate.c` -> `open/lib/rate.c` | [rate](../docs/re/spec/rate.md) |
 | channel statistics | `open_cca` | on | the whole of `wlc_cca.c`: attach and detach, the module's watchdog, down function and iovar `cca_get_stats`, `cca_stats_upd`, `cca_stats_tsf_upd`, `cca_query_stats`, `wlc_cca_get_chanspec` (read when the module is attached) | `cca.c` -> `open/lib/cca.c` | [cca-stf](../docs/re/spec/cca-stf.md) part 1 |
 | transmit power offsets of the chains | `open_stf` | on | `wlc_update_txppr_offset` (wlc_stf.c: after every computation of the PHY's power targets: the per-rate offsets into the driver's container, the chains that cannot reach the minimum, the spatial policy of the band, the legacy rates' offsets in the microcode's table), with its callback and the band's spatial policy; Broadcom's reads the minimum power from a stack word it never writes, the open code uses 0 | `stf.c` -> `open/lib/stf.c` | [cca-stf](../docs/re/spec/cca-stf.md) part 2 |
-| PHY and radio | `open_phy` | **off** | all 79 entry points of the MAC into the PHY (takeover.txt) | `phy.c` -> `open/phy/*` (+ `open/hw/access.c`) | [acphy-api](../docs/re/spec/acphy-api.md) and the `acphy-*` specs |
+| PHY and radio | `open_phy` | on | all 79 entry points of the MAC into the PHY (takeover.txt) | `phy.c` -> `open/phy/*` (+ `open/hw/access.c`) | [acphy-api](../docs/re/spec/acphy-api.md) and the `acphy-*` specs |
 | regulatory database | `open_clm` | on | 16 `clm_*` entry points of `wlc_clm.c` (the database stays Broadcom's data) | `clm.c` -> `open/lib/clm.c` | [clm](../docs/re/spec/clm.md) |
 | utilities | `open_utils` | on | 8: `getvar`, `getintvar`, `getintvararray`, `getintvararraysize`, `bcm_strtoul`, `bcm_bitcount`, `hndcrc8`, and Broadcom's PHY's own lookup `phy_getvar` (the global NVRAM, `nvram_get`, stays Broadcom's) | `utils.c` -> `open/lib/utils.c` | [utils](../docs/re/spec/utils.md) |
 
@@ -86,8 +86,8 @@ to the previous driver if anything fails):
 
 1. every switch off (`open_pmu=0 ... open_iovar=0`): the hybrid build running
    Broadcom's own functions - tests the build mechanism itself;
-2. the defaults: every layer open except the PHY;
-3. the defaults with the open PHY (`open_phy=1`).
+2. every layer open except the PHY (`open_phy=0`);
+3. the defaults: every layer open, the PHY too.
 
 ```sh
 sudo systemd-run --unit=bcm4360-layers --collect \
@@ -180,8 +180,10 @@ With the open PHY switched on, the whole session is identical to the object
 bandwidths, watchdog, down, up, down, detach), also with each of the other
 layers switched off. All 79 entry points exist; the receive measurements
 (RSSI per frame, noise interrupt) are not reached by the session and are
-written from their specification, not compared. The PHY layer is in the
-module with `open_phy` off by default until it has run on a card. The
+written from their specification, not compared. The PHY layer was in the
+module with `open_phy` off by default until card run 9 (2026-11-05,
+`docs/re/questions/phy-interference.md`) found its hardware state on the card
+the same as with Broadcom's PHY; it is on since. The
 (much larger) static share falls because the whole AC-PHY of Broadcom's
 object stops running. (Earlier, the share of execution counting repetitions
 was dominated by Broadcom's regulatory database lookup, `wlc_clm.c`, about

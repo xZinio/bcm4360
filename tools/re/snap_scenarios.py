@@ -4,7 +4,7 @@
 The hardware snapshot of hybrid/snap.c (the module's /proc/bcm4360_snap<unit>,
 scripts/phy-snap.py) in the emulator, on the hybrid core:
 
-    hybrid.py snap [--on phy] [--off LAYERS]
+    hybrid.py snap [--on LAYERS] [--off LAYERS]   (the PHY is run both ways)
 
 1. Requests: a malformed one is refused, the list scripts/phy-snap.list is
    parsed into the items phy-snap.py makes of it.
@@ -156,10 +156,10 @@ def snap_check(off=(), show=20, on=()):
 
     # 3, 4: up on channel 11
     runs = {}
-    for name, sw_on in (('default', tuple(on)), ('open phy', tuple(set(on) | {'phy'}))):
-        if name == 'open phy' and 'phy' in on:
-            continue
-        run = hybrid.Run(core, off=off, on=sw_on).session(PRE)
+    configs = {"Broadcom's PHY": (tuple(set(on) - {'phy'}), tuple(set(off) | {'phy'})),
+               'open PHY': (tuple(set(on) | {'phy'}), tuple(set(off) - {'phy'}))}
+    for name, (sw_on, sw_off) in configs.items():
+        run = hybrid.Run(core, off=sw_off, on=sw_on).session(PRE)
         s = Snap(run)
         t0 = len(run.s.chip.trace)
         words = s.read(items)
@@ -192,8 +192,8 @@ def snap_check(off=(), show=20, on=()):
 
     # 5: nothing changes for the session going on
     for name, (run, words, t0, n_own) in runs.items():
-        sw_on = tuple(on) if name == 'default' else tuple(set(on) | {'phy'})
-        ref = hybrid.Run(core, off=off, on=sw_on).session(PRE)
+        sw_on, sw_off = configs[name]
+        ref = hybrid.Run(core, off=sw_off, on=sw_on).session(PRE)
         mark = len(ref.s.chip.trace)
         ref.session(POST)
         run.session(POST)
@@ -210,7 +210,7 @@ def snap_check(off=(), show=20, on=()):
 
     # 6: Broadcom's PHY and the open PHY
     if len(runs) == 2:
-        a, b = runs['default'][1], runs['open phy'][1]
+        a, b = runs["Broadcom's PHY"][1], runs['open PHY'][1]
         d = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
         if d:
             bad += 1

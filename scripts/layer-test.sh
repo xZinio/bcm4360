@@ -11,8 +11,8 @@
 # path of a freshly built bcm4360.ko). The steps:
 #   1  every switch off: the hybrid build running Broadcom's own functions
 #      (tests the build mechanism itself)
-#   2  the defaults: every layer open except the PHY
-#   3  the defaults and the open PHY (open_phy=1)
+#   2  every layer open except the PHY (open_phy=0)
+#   3  the defaults: every layer open, the PHY too
 # The run stops at the first failing step and prints how to find the layer at
 # fault. Needs root. The Wi-Fi link goes down while it runs: start it
 # detached, e.g.
@@ -46,8 +46,8 @@ layers="pmu access mac utils clm ppr srom si dma chan iovar nvram rate cca stf s
 all_off=
 for l in $layers; do all_off="$all_off open_$l=0"; done
 
-steps=("$all_off" "" "open_phy=1")
-names=("all switches off (Broadcom's code everywhere)" "defaults (all layers open but the PHY)" "defaults + open PHY")
+steps=("$all_off" "open_phy=0" "")
+names=("all switches off (Broadcom's code everywhere)" "all layers open but the PHY" "defaults (the open PHY too)")
 
 log=/var/log/bcm4360-swap-test.log
 for i in 1 2 3; do
@@ -63,7 +63,7 @@ for i in 1 2 3; do
 			else
 				echo "  To find the layer at fault, repeat with one layer off at a time, e.g."
 				echo "    swap-test.sh $module --params \"open_dma=0\""
-				echo "  for each of: $layers (open_phy=0 is the default)."
+				echo "  for each of: $layers."
 			fi
 		} >>"$log"
 		echo "step $i failed; see $log"

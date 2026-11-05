@@ -26,11 +26,11 @@
 #include <linux/module.h>
 #endif
 
-bool bcm4360_open_phy;
+bool bcm4360_open_phy = true;
 
 #ifdef __KERNEL__
 module_param_named(open_phy, bcm4360_open_phy, bool, 0444);
-MODULE_PARM_DESC(open_phy, "PHY and radio: open code (1) or Broadcom's (0, default)");
+MODULE_PARM_DESC(open_phy, "PHY and radio: open code (1, default) or Broadcom's (0)");
 #endif
 
 /* ------------------------------------------------------------ the object's side */
