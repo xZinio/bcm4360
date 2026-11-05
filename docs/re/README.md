@@ -14,6 +14,8 @@ it can be replaced by open code.
 | [03-tools.md](03-tools.md) | the tools in `tools/re/`: loader, disassembler, index, decompiler script, emulator, traces, replay of recordings |
 | [04-method.md](04-method.md) | how the work is organised: specifications, independent implementation, comparison by register trace; legal frame |
 | [05-status.md](05-status.md) | what is known, what is verified and how, what is missing, what to do next |
+| [06-roadmap.md](06-roadmap.md) | from the emulator-validated `open/` to open code in the module (done in 1.1.0) |
+| [07-open-driver.md](07-open-driver.md) | the last step: a mac80211 driver with no Broadcom code linked |
 | [spec/](spec/) | the specifications, one per area |
 
 ## In one paragraph

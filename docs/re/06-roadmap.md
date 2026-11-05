@@ -1,5 +1,11 @@
 # From emulator-validated open/ to an open bcm4360.ko
 
+> **State 2026-11-05 (1.1.0):** Gate 0 is passed. The open PHY ran on the
+> card in nine card runs and has been on by default since 1.1.0, together
+> with every other open layer. The numbers below are the history up to then.
+> The next stage, a mac80211 driver with no Broadcom code linked, is planned in
+> [07-open-driver.md](07-open-driver.md).
+
 This document fixes an achievable definition of "done" and lays out the path to
 it, with the gates that actually block progress. It is a coordinator document
 (see [04-method.md](04-method.md)); it contains no object code.
