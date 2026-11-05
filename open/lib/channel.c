@@ -439,7 +439,7 @@ static bool chan_clm_has_limits(const struct bcm4360_chan *c, u16 cs)
 	if (bcm4360_chan_env_clm_limits_params_init(&p) != 0)
 		return false;
 	/* step 3 */
-	if (bcm4360_chan_env_clm_country_def(country, &loc) != 0)
+	if (bcm4360_chan_env_clm_country_def(c, country, &loc) != 0)
 		return false;
 
 	/* step 4 */
@@ -452,7 +452,7 @@ static bool chan_clm_has_limits(const struct bcm4360_chan *c, u16 cs)
 
 	/* step 5 */
 	band = (cs & CS_BAND_MASK) == CS_BAND_5G ? BAND_5G : BAND_2G;
-	return bcm4360_chan_env_clm_limits(&loc, band, cs & CS_CHAN_MASK, CLM_ANT_GAIN,
+	return bcm4360_chan_env_clm_limits(c, &loc, band, cs & CS_CHAN_MASK, CLM_ANT_GAIN,
 					   CLM_LIMITS_TYPE, &p, limits) == 0;
 }
 

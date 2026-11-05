@@ -47,6 +47,7 @@ struct bcm4360_chan {
 	u16 vht_features;
 	u32 country;		/* country of the regulatory database */
 	struct bcm4360_chan_band band[2];
+	void *env;		/* the caller's handle for its bcm4360_chan_env_* services */
 };
 
 /* channel.md, V1-V6; results 0 or 1 */
@@ -60,8 +61,10 @@ bool bcm4360_chan_valid_chanspec(const struct bcm4360_chan *c, u16 cs, bool dual
 
 /* services of the caller: the regulatory database, as clm_* (clm.md) */
 int bcm4360_chan_env_clm_limits_params_init(struct bcm4360_clm_limits_params *p);
-int bcm4360_chan_env_clm_country_def(u32 country, struct bcm4360_clm_country_locales *loc);
-int bcm4360_chan_env_clm_limits(const struct bcm4360_clm_country_locales *loc, u32 band,
+int bcm4360_chan_env_clm_country_def(const struct bcm4360_chan *c, u32 country,
+				     struct bcm4360_clm_country_locales *loc);
+int bcm4360_chan_env_clm_limits(const struct bcm4360_chan *c,
+				const struct bcm4360_clm_country_locales *loc, u32 band,
 				u32 channel, s32 ant_gain, u32 limits_type,
 				const struct bcm4360_clm_limits_params *p, s8 *limits);
 

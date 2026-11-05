@@ -230,19 +230,27 @@ int bcm4360_chan_env_clm_limits_params_init(struct bcm4360_clm_limits_params *p)
 	return bcm4360_clm_limits_params_init(p);
 }
 
-int bcm4360_chan_env_clm_country_def(u32 country, struct bcm4360_clm_country_locales *loc)
+int bcm4360_chan_env_clm_country_def(const struct bcm4360_chan *c, u32 country,
+				     struct bcm4360_clm_country_locales *loc)
 {
-	(void)country; (void)loc;
-	return -1;
+	struct bcm4360_core *core = c->env;
+
+	if (!core || !core->clm_ok)
+		return -1;
+	return bcm4360_clm_country_def(&core->clm, country, loc);
 }
 
-int bcm4360_chan_env_clm_limits(const struct bcm4360_clm_country_locales *loc, u32 band,
+int bcm4360_chan_env_clm_limits(const struct bcm4360_chan *c,
+				const struct bcm4360_clm_country_locales *loc, u32 band,
 				u32 channel, s32 ant_gain, u32 limits_type,
 				const struct bcm4360_clm_limits_params *p, s8 *limits)
 {
-	(void)loc; (void)band; (void)channel; (void)ant_gain; (void)limits_type; (void)p;
-	(void)limits;
-	return -1;
+	struct bcm4360_core *core = c->env;
+
+	if (!core || !core->clm_ok)
+		return -1;
+	return bcm4360_clm_limits(&core->clm, loc, band, channel, ant_gain, limits_type, p,
+				  limits);
 }
 
 /* --- srom.h (hybrid/srom.c); ctx is the core's sihp --- */

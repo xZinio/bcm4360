@@ -78,6 +78,7 @@ static void hyb_chan_view(const void *cm, struct bcm4360_chan *c)
 	const u8 *pub = hyb_ptr(wlc, WLC_PUB);
 	u32 b;
 
+	c->env = NULL;	/* the object's database functions need no handle */
 	c->bandunit = *(const u32 *)(hyb_ptr(wlc, WLC_BAND) + BAND_UNIT);
 	c->bandlocked = wlc[WLC_BANDLOCKED] != 0;
 	c->bw40_capable = pub[PUB_BW40_CAPABLE] != 0;
@@ -212,12 +213,14 @@ int bcm4360_chan_env_clm_limits_params_init(struct bcm4360_clm_limits_params *p)
 	return clm_limits_params_init(p);
 }
 
-int bcm4360_chan_env_clm_country_def(u32 country, struct bcm4360_clm_country_locales *loc)
+int bcm4360_chan_env_clm_country_def(const struct bcm4360_chan *c, u32 country,
+				     struct bcm4360_clm_country_locales *loc)
 {
 	return clm_country_def(country, loc);
 }
 
-int bcm4360_chan_env_clm_limits(const struct bcm4360_clm_country_locales *loc, u32 band,
+int bcm4360_chan_env_clm_limits(const struct bcm4360_chan *c,
+				const struct bcm4360_clm_country_locales *loc, u32 band,
 				u32 channel, s32 ant_gain, u32 limits_type,
 				const struct bcm4360_clm_limits_params *p, s8 *limits)
 {
