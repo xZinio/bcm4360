@@ -72,22 +72,16 @@ bool bcm4360_plat_timer_del(void *plat, void *timer)
 	return was;
 }
 
-/* called with the device lock held, from the core's detach: the work item
- * must not run any more once freed */
+/* called from the core's detach, without the device lock (the platform
+ * detaches the core after mac80211 has stopped it and the interrupt is
+ * freed): a callback still running finishes first */
 void bcm4360_plat_timer_free(void *plat, void *timer)
 {
 	struct bcm4360_timer *t = timer;
-	struct bcm4360_dev *dev = plat;
 
 	if (!t)
 		return;
-	t->armed = false;
-	if (!cancel_delayed_work(&t->work) && delayed_work_pending(&t->work))
-		dev_warn(&dev->pdev->dev, "timer freed while pending\n");
-	/* a callback already running waits on the lock we hold and then finds
-	 * the timer disarmed; free it only after that */
-	spin_unlock_bh(&dev->lock);
+	WRITE_ONCE(t->armed, false);
 	cancel_delayed_work_sync(&t->work);
-	spin_lock_bh(&dev->lock);
 	kfree(t);
 }
