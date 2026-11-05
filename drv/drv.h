@@ -19,7 +19,7 @@
 #define BCM4360_DRV_NAME	"bcm4360_open"
 /* Broadcom's data (microcode, initialisation lists, PHY and radio tables,
  * regulatory database), cut out of Broadcom's download at install time
- * (scripts/fwcut, docs/re/07-open-driver.md); never distributed */
+ * (scripts/bcm4360-fwcut.py, docs/re/07-open-driver.md); never distributed */
 #define BCM4360_FW_NAME		"bcm4360/bcm4360-data.bin"
 
 /* the firmware file: a header, a directory of named entries, the data */
@@ -49,6 +49,9 @@ struct bcm4360_dev {
 	const struct firmware *fw;
 	const struct bcm4360_fw_entry *fw_dir;
 	u32 fw_count;
+	/* bcm4360_fw_clm(): the regulatory database, copied and relocated */
+	u8 *clm;
+	u32 clm_header;		/* offset of clm_header in it */
 
 	/* serialises every call into the core but bcm4360_core_isr() */
 	spinlock_t lock;
@@ -74,6 +77,8 @@ static inline struct bcm4360_dev *bcm4360_dev_of(struct bcm4360_hw *hw)
 /* fw.c */
 int bcm4360_fw_load(struct bcm4360_dev *dev);
 void bcm4360_fw_release(struct bcm4360_dev *dev);
+/* the regulatory database for clm_init() (its clm_header); NULL if missing */
+const void *bcm4360_fw_clm(struct bcm4360_dev *dev);
 
 /* mac80211.c */
 const struct ieee80211_ops *bcm4360_mac80211_ops_get(void);
