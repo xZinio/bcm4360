@@ -76,21 +76,37 @@ activate() {
 	say "nmcli con up '$1' ifname $dev"
 	nmcli --wait 60 con up "$1" ifname "$dev" || true
 }
-# rmmod that cannot block this script: a driver stuck in the kernel leaves
-# rmmod unkillable, and then only a reboot helps
-try_rmmod() {
-	local p t=0
-	rmmod "$1" &
+# a module command that cannot block this script: a driver stuck in the
+# kernel (in probe or remove) leaves it unkillable, and then only a reboot
+# helps. Gives up waiting after $1 seconds.
+bounded() {
+	local s=$1 p t=0
+	shift
+	"$@" &
 	p=$!
 	while kill -0 "$p" 2>/dev/null; do
-		[ "$t" -ge 60 ] && { say "rmmod $1 hangs: reboot to recover"; return 1; }
+		[ "$t" -ge "$s" ] && { say "$* hangs: reboot to recover"; return 124; }
 		sleep 1
 		t=$((t + 1))
 	done
 	wait "$p"
 }
+try_rmmod() { bounded 60 rmmod "$1"; }
+# a desktop notification for the owner (no network: they may not see the log)
+notify_owner() {
+	local uid
+	[ -n "$owner" ] && uid=$(id -u "$owner" 2>/dev/null) || return 0
+	timeout 10 runuser -u "$owner" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+		notify-send -u critical -a bcm4360 "$1" "$2" >/dev/null 2>&1 || true
+}
+wedged=0
 finish() {
-	systemctl start bcm4360-watchdog.timer 2>/dev/null && say "watchdog timer started"
+	if [ "$wedged" -eq 0 ]; then
+		systemctl start bcm4360-watchdog.timer 2>/dev/null && say "watchdog timer started"
+	else
+		# its reload would block on the held card as well
+		say "watchdog timer left stopped: the card is held until a reboot"
+	fi
 	[ -n "$owner" ] && chown -R "$owner": "$out" 2>/dev/null
 	say "done: driver $(lsmod | awk '$1 == "wl" || $1 == "bcm4360" { print $1 }' | head -n 1)" \
 	    "$(cat /sys/module/bcm4360/version 2>/dev/null)," \
@@ -134,6 +150,20 @@ if lsmod | grep -q '^bcm4360_open '; then
 fi
 systemctl is-active -q wpa_supplicant || { systemctl start wpa_supplicant && say "wpa_supplicant started"; }
 systemctl is-active -q NetworkManager || { systemctl start NetworkManager && say "NetworkManager started"; }
+# Still loaded: it crashed in the kernel (an oops in its probe leaves it
+# "coming" with the card's device lock held) or its remove hangs. No driver
+# can have the card until a reboot; loading one would block as well.
+if lsmod | grep -q '^bcm4360_open '; then
+	wedged=1
+	say "bcm4360_open cannot be removed (state $(cat /sys/module/bcm4360_open/initstate 2>/dev/null)):" \
+	    "it holds the card until a reboot"
+	journalctl -k -b --no-pager -o cat 2>/dev/null | grep -E -m 3 -A 1 'BUG:|Oops|general protection' |
+		sed 's/^/    /'
+	notify_owner "Wi-Fi: reboot needed" \
+		"The open driver test crashed in the kernel and holds the Wi-Fi card. Reboot to get Wi-Fi back (the installed driver loads at boot). Log: $out"
+	say "NOT connected; reboot to recover"
+	finish
+fi
 
 # The test loads other builds and parameters; it marks that in this file.
 DIRTY=/run/bcm4360-card-test.dirty
@@ -149,7 +179,7 @@ elif [ -z "$loaded" ] || [ "$loaded" != "$installed" ] || [ -e "$DIRTY" ]; then
 		try_rmmod bcm4360 || say "rmmod bcm4360 failed"
 	fi
 	say "modprobe bcm4360"
-	if modprobe bcm4360; then rm -f "$DIRTY"; else say "modprobe bcm4360 failed"; fi
+	if bounded 120 modprobe bcm4360; then rm -f "$DIRTY"; else say "modprobe bcm4360 failed"; fi
 	# give NetworkManager its own autoconnect first
 	sleep 5
 fi
@@ -168,7 +198,7 @@ if wait_connected 90; then finish; fi
 
 say "falling back to Broadcom's wl"
 try_rmmod bcm4360 2>/dev/null
-modprobe wl || say "modprobe wl failed"
+bounded 120 modprobe wl || say "modprobe wl failed"
 systemctl restart wpa_supplicant
 sleep 10
 activate "$conn"
@@ -179,4 +209,5 @@ if [ -n "$hotspot" ]; then
 	if wait_connected 60; then finish; fi
 fi
 say "NOT connected; reboot to recover (the installed bcm4360 loads at boot)"
+notify_owner "Wi-Fi: not connected" "The card test could not reconnect. Reboot to recover. Log: $out"
 finish

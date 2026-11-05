@@ -65,7 +65,9 @@ fail() { say "FAIL: $*"; failed=1; }
 
 on_exit() {
 	say "----- restore: the installed driver -----"
-	ifname=$(open_iface) && ip link set "$ifname" down 2>/dev/null
+	# the kernel log first: the restore may find the card held until a reboot
+	journalctl -k --since "@$t_start" --no-pager -o short-monotonic > "$out/kernel.txt" 2>/dev/null
+	ifname=$(open_iface) && timeout 20 ip link set "$ifname" down 2>/dev/null
 	bash "$here/card-test-restore.sh" "${restore_args[@]}"
 	journalctl -k --since "@$t_start" --no-pager -o short-monotonic > "$out/kernel.txt" 2>/dev/null
 	say "after restore: $(lsmod | awk '$1 == "bcm4360" || $1 == "wl" { print $1 }' | head -n 1)" \

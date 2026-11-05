@@ -82,15 +82,18 @@ static void bcm4360_init_bands(struct bcm4360_dev *dev)
 	b->band = NL80211_BAND_2GHZ;
 	b->channels = kmemdup(bcm4360_channels_2g, sizeof(bcm4360_channels_2g), GFP_KERNEL);
 	b->n_channels = b->channels ? ARRAY_SIZE(bcm4360_channels_2g) : 0;
-	b->bitrates = (struct ieee80211_rate *)bcm4360_rates;
-	b->n_bitrates = ARRAY_SIZE(bcm4360_rates);
+	/* cfg80211 writes flags into the bitrates at registration: per band copies */
+	b->bitrates = kmemdup(bcm4360_rates, sizeof(bcm4360_rates), GFP_KERNEL);
+	b->n_bitrates = b->bitrates ? ARRAY_SIZE(bcm4360_rates) : 0;
 
 	b = &dev->band_5g;
 	b->band = NL80211_BAND_5GHZ;
 	b->channels = kmemdup(bcm4360_channels_5g, sizeof(bcm4360_channels_5g), GFP_KERNEL);
 	b->n_channels = b->channels ? ARRAY_SIZE(bcm4360_channels_5g) : 0;
-	b->bitrates = (struct ieee80211_rate *)bcm4360_rates + BCM4360_RATES_OFDM;
-	b->n_bitrates = ARRAY_SIZE(bcm4360_rates) - BCM4360_RATES_OFDM;
+	b->bitrates = kmemdup(bcm4360_rates + BCM4360_RATES_OFDM,
+			      sizeof(bcm4360_rates) - BCM4360_RATES_OFDM * sizeof(bcm4360_rates[0]),
+			      GFP_KERNEL);
+	b->n_bitrates = b->bitrates ? ARRAY_SIZE(bcm4360_rates) - BCM4360_RATES_OFDM : 0;
 
 	for (b = &dev->band_2g; b; b = b == &dev->band_2g ? &dev->band_5g : NULL) {
 		struct ieee80211_sta_ht_cap *ht = &b->ht_cap;
@@ -114,6 +117,14 @@ static void bcm4360_init_bands(struct bcm4360_dev *dev)
 			vht->vht_mcs.tx_mcs_map = cpu_to_le16(vht_map);
 		}
 	}
+}
+
+static void bcm4360_free_bands(struct bcm4360_dev *dev)
+{
+	kfree(dev->band_2g.channels);
+	kfree(dev->band_2g.bitrates);
+	kfree(dev->band_5g.channels);
+	kfree(dev->band_5g.bitrates);
 }
 
 /* --------------------------------------------------------------- receive */
@@ -346,14 +357,19 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 	while ((skb = __skb_dequeue(&txsq))) {
 		struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
 		struct bcm4360_txstatus ts;
+		u8 asked[IEEE80211_TX_MAX_RATES];
 		int i, left;
 
 		memcpy(&ts, info->status.status_driver_data, sizeof(ts));
 		left = ts.tries;
+		/* clear_status zeroes the try counts asked for: keep them */
+		for (i = 0; i < IEEE80211_TX_MAX_RATES; i++)
+			asked[i] = info->status.rates[i].count;
 		ieee80211_tx_info_clear_status(info);
 		for (i = 0; i < IEEE80211_TX_MAX_RATES; i++) {
 			struct ieee80211_tx_rate *r = &info->status.rates[i];
 
+			r->count = asked[i];
 			if (ts.ampdu) {
 				/* ampdu.md 2.6: the aggregate's tries are on its first MPDU
 				 * (one per rate used); the others only say acked or not */
@@ -675,16 +691,13 @@ int bcm4360_mac80211_register(struct bcm4360_dev *dev)
 	ieee->extra_tx_headroom = bcm4360_core_tx_headroom(dev->core);
 	SET_IEEE80211_PERM_ADDR(ieee, dev->info.etheraddr);
 	err = ieee80211_register_hw(ieee);
-	if (err) {
-		kfree(dev->band_2g.channels);
-		kfree(dev->band_5g.channels);
-	}
+	if (err)
+		bcm4360_free_bands(dev);
 	return err;
 }
 
 void bcm4360_mac80211_unregister(struct bcm4360_dev *dev)
 {
 	ieee80211_unregister_hw(dev->ieee);
-	kfree(dev->band_2g.channels);
-	kfree(dev->band_5g.channels);
+	bcm4360_free_bands(dev);
 }
