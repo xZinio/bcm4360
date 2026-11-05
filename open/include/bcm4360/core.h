@@ -167,6 +167,10 @@ void bcm4360_plat_txstatus(void *plat, void *pkt, const struct bcm4360_txstatus 
 void bcm4360_plat_tx_wake(void *plat, u8 fifo);
 /* a fatal error of the hardware: the platform restarts the device */
 void bcm4360_plat_fatal(void *plat);
+/* Broadcom's regulatory database as clm_init() takes it (its clm_header,
+ * spec clm.md), loaded from the firmware file; NULL if there is none. It
+ * stays valid until bcm4360_core_detach() has returned. */
+const void *bcm4360_plat_clm(void *plat);
 /* Timers of the open layers (phy_env.h, bcm4360_timer_*): fn(arg) runs with
  * the platform's lock held, as every call into the core. */
 void *bcm4360_plat_timer_init(void *plat, void (*fn)(void *arg), void *arg, const char *name);

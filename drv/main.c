@@ -62,6 +62,11 @@ void bcm4360_plat_fatal(void *plat)
 	schedule_work(&dev->restart);
 }
 
+const void *bcm4360_plat_clm(void *plat)
+{
+	return bcm4360_fw_clm(plat);
+}
+
 static irqreturn_t bcm4360_isr(int irq, void *data)
 {
 	struct bcm4360_dev *dev = data;
