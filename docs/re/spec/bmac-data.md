@@ -13,6 +13,8 @@ corrected the transmit `range` numbering (D3) and added the rest. Section 1
 is written first, because the hybrid build takes the engine over at
 `dma_attach`. Names of stripped functions marked "(assigned)" were proposed
 by the analysts (Broadcom style).
+(2026-11-05: FIFO use, interrupts, receive and transmit headers and transmit
+status are in [frames.md](frames.md).)
 
 ## Scope
 
