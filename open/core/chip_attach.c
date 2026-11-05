@@ -540,7 +540,7 @@ static u16 otp_word(struct bcm4360_core *c, void *cc, struct otpinfo *oi, u32 wn
 }
 
 /* srom-otp.md ipxotp_init, the parts that decide the word reads (chip 0x4360) */
-static bool otp_init(struct bcm4360_core *c, struct otpinfo *oi)
+static bool ipxotp_init(struct bcm4360_core *c, struct otpinfo *oi)
 {
 	struct bcm4360_si *si = &c->si;
 	u32 orig, z, l, rows = 0, cols = 0, n;
@@ -613,6 +613,20 @@ static bool otp_init(struct bcm4360_core *c, struct otpinfo *oi)
 		(void)otp_word(c, cc, oi, oi->otpgu_base + 1);
 	bcm4360_si_setcoreidx(si, orig);
 	return true;
+}
+
+/* srom-otp.md otp_init steps 4-6: the power check around ipxotp_init */
+static bool otp_init(struct bcm4360_core *c, struct otpinfo *oi)
+{
+	bool was_on = otp_powered(c);
+	bool r;
+
+	if (!was_on)
+		otp_power(c, true);
+	r = ipxotp_init(c, oi);
+	if (!was_on)
+		otp_power(c, false);
+	return r;
 }
 
 /* srom-otp.md otp_read_word; phy_env.h bcm4360_otp_read_word */

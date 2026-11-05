@@ -62,7 +62,8 @@ def build(quiet=False):
         src = os.path.join(ROOT, rel)
         if (not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(src)
                 or any(os.path.getmtime(h) > os.path.getmtime(out)
-                       for h in glob.glob(os.path.join(ROOT, 'open', 'include', 'bcm4360', '*.h')))):
+                       for h in glob.glob(os.path.join(ROOT, 'open', 'include', 'bcm4360', '*.h'))
+                       + glob.glob(os.path.join(ROOT, 'open', 'core', '*.h')))):
             r = subprocess.run([zig, 'cc'] + ab.CFLAGS +
                                ['-I', os.path.join(ROOT, 'open', 'include'), '-o', out, src],
                                capture_output=True, text=True)
@@ -170,8 +171,42 @@ class Core:
         return s32(self.call('bcm4360_core_set_chanspec', self.core, chanspec))
 
 
-def window_free(accesses):
-    return [a for a in accesses if not (a[1] == 'pcicfg' and a[2] in hybrid.WINDOW_REGS)]
+def track_dma(m):
+    """Record the DMA-coherent blocks (the descriptor rings) a machine
+    allocates: their addresses depend on the allocator, not on the code
+    (Broadcom's upper layer allocates three more blocks than the core)."""
+    rings = []
+    inner = m.handlers['osl_dma_alloc_consistent']
+
+    def alloc(m, osh, size, align_bits, tot, pap):
+        a = inner(m, osh, size, align_bits, tot, pap)
+        rings.append((m.r64(pap) & 0xffffffff, size & 0xffffffff))
+        return a
+
+    m.handlers['osl_dma_alloc_consistent'] = alloc
+    return rings
+
+
+def comparable(accesses, rings):
+    """The accesses without the moves of the BAR0 windows, with the bits the
+    object writes undefined masked (hybrid.UNDEFINED_TBL) and DMA ring
+    addresses as offsets into their ring."""
+    out = []
+    for a in accesses:
+        if a[1] == 'pcicfg' and a[2] in hybrid.WINDOW_REGS:
+            continue
+        if (a[0], a[1], a[2], a[3]) in hybrid.UNDEFINED_TBL and isinstance(a[4], int):
+            a = a[:4] + (a[4] & hybrid.UNDEFINED_TBL[(a[0], a[1], a[2], a[3])],) + a[5:]
+        # the registers of the DMA channels (bmac-data.md D2): a value inside
+        # a ring is that ring's address plus an offset; the register says
+        # which ring it is, so only the offset is compared (shown 0xd0<offset>)
+        if (a[0] == 'W' and a[1] == 'd11' and 0x200 <= a[2] < 0x300 and isinstance(a[4], int)):
+            for base, size in rings:
+                if base <= a[4] < base + size:
+                    a = a[:4] + (0xd0000000 | (a[4] - base),) + a[5:]
+                    break
+        out.append(a)
+    return out
 
 
 def check(show=20, steps=STEPS, stop=True):
@@ -179,6 +214,8 @@ def check(show=20, steps=STEPS, stop=True):
     objs = build(quiet=True)
     ref = hybrid.Run()
     core = Core(objs)
+    ref_rings = track_dma(ref.m)
+    core_rings = track_dma(core.m)
     bad = 0
     cs_up = None
     for what in steps:
@@ -191,7 +228,7 @@ def check(show=20, steps=STEPS, stop=True):
         except EmuError as e:
             print('%-8s the object fails: %s' % (what, str(e).splitlines()[0]))
             return bad + 1
-        want = window_free(ab.logical(ref.s.chip.trace[n0:], ref.s.chip.func_name))
+        want = comparable(ab.logical(ref.s.chip.trace[n0:], ref.s.chip.func_name), ref_rings)
         cs = None
         if what == 'up':
             cs = ref.d.iovar_getint('chanspec')[1] & 0xffff
@@ -204,7 +241,7 @@ def check(show=20, steps=STEPS, stop=True):
             err = None
         except EmuError as e:
             r_core, err = None, str(e).splitlines()[0]
-        got = window_free(ab.logical(core.chip.trace[n1:], core.s.names))
+        got = comparable(ab.logical(core.chip.trace[n1:], core.s.names), core_rings)
         same = got == want and err is None
         print('%-8s object %5d accesses, core %5d%s  %s' % (
             what, len(want), len(got), '' if cs is None else ' (chanspec %#06x)' % cs,
