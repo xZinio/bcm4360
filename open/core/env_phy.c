@@ -57,12 +57,10 @@ u32 bcm4360_mac_btc_mode(struct bcm4360_hw *hw)
 	return r;
 }
 
-/* acphy-api-watchdog.md "New services": TODO wlc-hw (no spec for wlc_bmac_btc_period_get) */
+/* acphy-api-watchdog.md "New services", wlc-hw.md 3 step 7 (wlchw.c) */
 void bcm4360_mac_btc_period_get(struct bcm4360_hw *hw, u16 *period, u8 *state)
 {
-	(void)hw;
-	*period = 0;
-	*state = 0;
+	core_w_btc_period_get(core_of_hw(hw), period, state);
 }
 
 /* bmac-init.md A18, wlapi_is_eci_coex_enabled */

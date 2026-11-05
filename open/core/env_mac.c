@@ -437,6 +437,8 @@ u32 core_intrsoff(struct bcm4360_core *c)
 	if (!hw || !FIELD(hw, 0x186, u8))	/* the core's clock is off */
 		return 0;
 	old = FIELD(hw, HW_INTMASK, u32);
+	if (!old)	/* observed (wlc-hw.md 1.2): no access when the mask is 0 already */
+		return 0;
 	d11_write32(c->hw, D11_MACINTMASK, 0);
 	(void)d11_read32(c->hw, D11_MACINTMASK);
 	FIELD(hw, HW_INTMASK, u32) = 0;
@@ -483,7 +485,8 @@ u32 bcm4360_bmac_env_wl_reset(struct bcm4360_mac *mac)
 	core_mac_flush(mac);
 	m = core_intrsoff(c);
 	CORE_MAC_CALL(c, bcm4360_bmac_reset(m));
-	core_intrsrestore(c, m);
+	if (m)	/* observed (wlc-hw.md 4.1 step 9): no write when the mask was 0 */
+		core_intrsrestore(c, m);
 	core_mac_reload(mac);
 	return 0;
 }

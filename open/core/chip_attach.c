@@ -91,6 +91,12 @@ static u32 find_capability(struct bcm4360_core *c, u32 capid)
 	return 0;
 }
 
+/* the same for the upper layer (wlc_ol_attach looks for the power-management capability) */
+u32 core_si_find_capability(struct bcm4360_core *c, u32 capid)
+{
+	return find_capability(c, capid);
+}
+
 /* --- the public part of the handle and the views of the layers --- */
 
 /* copy what the open layers read of the handle into their views */

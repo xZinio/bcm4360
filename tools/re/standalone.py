@@ -131,7 +131,13 @@ class Core:
         def timer_free(m, plat, t):
             return m.handlers['wl_free_timer'](m, 0, t)
 
+        def plat_clm(m, plat):
+            n = 'clm_header'
+            hits = [x for x in m.blob.byname.get(n, []) if x.kind == 'O']
+            return hits[0].addr if hits else 0
+
         return {'hw_fw_data': (3, fw_data),
+                'bcm4360_plat_clm': (1, plat_clm),
                 'bcm4360_plat_rx': (3, record('rx')),
                 'bcm4360_plat_txstatus': (3, record('txstatus')),
                 'bcm4360_plat_tx_wake': (2, record('tx_wake')),

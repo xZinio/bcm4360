@@ -10,6 +10,7 @@
 #include "core.h"
 #include <bcm4360/bmac_attach.h>
 #include <bcm4360/phy_api.h>
+#include <bcm4360/clm.h>
 
 #define TICK_MS		1000
 
@@ -111,14 +112,10 @@ static void fill_info(struct bcm4360_core *c)
 	}
 }
 
-/* Broadcom's watchdog (wlc_watchdog), once a second while up; wlc-hw: the rest of it */
+/* wlc_watchdog, once a second while up (wlchw.c) */
 static void core_watchdog(void *arg)
 {
-	struct bcm4360_core *c = arg;
-
-	if (!c->up || !c->phy)
-		return;
-	bcm4360_phy_watchdog(c->phy);
+	core_w_watchdog(arg);
 }
 
 struct bcm4360_core *bcm4360_core_attach(struct bcm4360_hw *hw, void *osh, u16 vendor,
@@ -156,6 +153,12 @@ struct bcm4360_core *bcm4360_core_attach(struct bcm4360_hw *hw, void *osh, u16 v
 	FIELD(c->pub, PUB_VARS, void *) = c->vars;
 	FIELD(c->pub, PUB_VARS_SIZE, u32) = c->varsz;
 
+	/* the regulatory database (clm.md, "Loading"), given by the platform */
+	{
+		const void *hdr = bcm4360_plat_clm(plat);
+
+		c->clm_ok = hdr && !bcm4360_clm_init(&c->clm, hdr);
+	}
 	/* wlc-hw: the rest of wlc_attach (modules, stf and channel manager defaults, country) */
 	e = bcm4360_bmac_attach(c->wlc, vendor, device, 0, 0, osh, hw->bar0, 1, NULL);
 	if (e) {
@@ -165,8 +168,7 @@ struct bcm4360_core *bcm4360_core_attach(struct bcm4360_hw *hw, void *osh, u16 v
 		return NULL;
 	}
 	hw_memcpy((u8 *)c->pub + PUB_ETHERADDR, (u8 *)CORE_WLC_HW(c) + 0x178, 6);
-	c->cca = bcm4360_cca_attach(c->wlc, osh, 0, FIELD(c->pub, PUB_COREREV, u32));
-	FIELD(c->wlc, WLC_CCA, void *) = c->cca;
+	core_w_attach(c);
 	c->wd_timer = bcm4360_plat_timer_init(plat, core_watchdog, c, "watchdog");
 	c->attached = true;
 	c->chanspec = 0x1001;
@@ -179,6 +181,7 @@ void bcm4360_core_detach(struct bcm4360_core *c)
 {
 	if (!c)
 		return;
+	core_w_detach(c);
 	if (c->wd_timer) {
 		bcm4360_plat_timer_del(c->plat, c->wd_timer);
 		bcm4360_plat_timer_free(c->plat, c->wd_timer);
@@ -197,98 +200,31 @@ void bcm4360_core_get_info(struct bcm4360_core *c, struct bcm4360_core_info *inf
 	*info = c->info;
 }
 
-/* wl_init: wl_reset (wl_intrsoff, wlc_reset, wl_intrsrestore), then wlc_init (C1) */
-static void core_init(struct bcm4360_core *c, u16 chanspec)
-{
-	u32 m = core_intrsoff(c);
-	u8 ea[6];
-
-	CORE_MAC_CALL(c, bcm4360_bmac_reset(m));
-	core_intrsrestore(c, m);
-
-	/* wlc_init: wlc-hw: choice of the channel, SHM reads, keys, BSSID, rate sets */
-	CORE_MAC_CALL(c, bcm4360_bmac_init(m, chanspec, false));
-	hw_memcpy(ea, (u8 *)c->pub + PUB_ETHERADDR, 6);
-	CORE_MAC_CALL(c, bcm4360_bmac_set_hw_etheraddr(m, ea));
-	/* wlc-hw: wlc_set_phy_chanspec: the power limits of the channel (channel-power) */
-	CORE_MAC_CALL(c, bcm4360_bmac_set_chanspec(m, chanspec, false, NULL));
-	FIELD(c->wlc, WLC_CHANSPEC, u16) = chanspec;
-	CORE_MAC_CALL(c, bcm4360_bmac_enable(m));
-	/* wlc-hw: sub_03a14c (MAC control bits for the operating mode) */
-	d11_write32(c->hw, 0x3dc, 10000000);
-}
-
-/* wlc_up (bmac-init.md C1) */
+/* wlc_up (wlchw.c) */
 int bcm4360_core_up(struct bcm4360_core *c, u16 chanspec)
 {
-	s32 r = 0;
-	bool gone = false;
+	int r;
 
 	if (!c->attached)
 		return -19;
-	CORE_MAC_CALL(c, gone = bcm4360_bmac_deviceremoved(m));
-	if (gone)
-		return -9;
-	if (!FIELD(c->pub, PUB_HW_UP, u8)) {
-		/* wlc-hw: wlc_led_init */
-		CORE_MAC_CALL(c, bcm4360_bmac_hw_up(m));
-		FIELD(c->pub, PUB_HW_UP, u8) = 1;
-	}
-	/* wlc_bmac_4331_epa_init: nothing for the 4360 */
-	CORE_MAC_CALL(c, bcm4360_bmac_mhf(m, 4, 0x0080, FIELD(c->stf_state, 0x59, u8) ? 0x0080 : 0,
-					  3));
-	CORE_MAC_CALL(c, r = bcm4360_bmac_up_prep(m));
-	if (r)
-		return r;
-	/* wlc_bmac_set_ctrl_ePA: nothing for the 4360 */
-	if (FIELD(CORE_WLC_HW(c), 0x1bc, u8) == 0xff) {
-		CORE_MAC_CALL(c, bcm4360_bmac_set_ctrl_bt_shd0(m, true));
-	} else {
-		CORE_MAC_CALL(c, bcm4360_bmac_set_btswitch(m, FIELD(CORE_WLC_HW(c), 0x1bc, s8)));
-	}
-	/* wlc-hw: WME is enabled by default (pub+0x54) */
-	CORE_MAC_CALL(c, bcm4360_bmac_mhf(m, 0, 0x0100, 0x0100, 3));
-	if (FIELD(c->wlc, 0x60, u8))
-		CORE_MAC_CALL(c, bcm4360_bmac_mhf(m, 1, 0x0008, 0x0008, 3));
-	CORE_MAC_CALL(c, bcm4360_bmac_seci_upd(m));
-	core_init(c, chanspec);
-	FIELD(c->pub, PUB_UP, u8) = 1;
-	/* wlc-hw: wlc_enable_probe_req, wlc_rfaware_lifetime_set */
-	CORE_MAC_CALL(c, r = bcm4360_bmac_up_finish(m));
-	c->up = true;
-	c->chanspec = chanspec;
-	if (c->wd_timer)
-		bcm4360_plat_timer_add(c->plat, c->wd_timer, TICK_MS, true);
-	/* wlc-hw: LEDs */
+	r = core_w_up(c, chanspec);
+	if (!r && c->up)
+		c->chanspec = chanspec;
 	return r;
 }
 
-/* wlc_down (bmac-init.md C1) */
+/* wlc_down (wlchw.c) */
 void bcm4360_core_down(struct bcm4360_core *c)
 {
 	if (!c->attached || !c->up)
 		return;
-	CORE_MAC_CALL(c, bcm4360_bmac_down_prep(m));
-	/* wlc-hw: scan and association aborted, the modules' down functions */
-	if (c->wd_timer)
-		bcm4360_plat_timer_del(c->plat, c->wd_timer);
-	FIELD(c->pub, PUB_UP, u8) = 0;
-	c->up = false;
-	if (c->phy)
-		bcm4360_phy_mute_upd(c->phy, false, 0xffffffff);
-	/* wlc-hw: LEDs, queues flushed */
-	CORE_MAC_CALL(c, bcm4360_bmac_down_finish(m));
+	core_w_down(c);
 }
 
-/* wlc_set_chanspec; wlc-hw / channel-power: the power limits of the channel */
+/* the iovar `chanspec` (wlchw.c) */
 int bcm4360_core_set_chanspec(struct bcm4360_core *c, u16 chanspec)
 {
-	if (!c->up)
-		return -19;
-	CORE_MAC_CALL(c, bcm4360_bmac_set_chanspec(m, chanspec, false, NULL));
-	FIELD(c->wlc, WLC_CHANSPEC, u16) = chanspec;
-	c->chanspec = chanspec;
-	return 0;
+	return core_w_set_chanspec(c, chanspec);
 }
 
 void bcm4360_core_set_txpower(struct bcm4360_core *c, u32 qdbm)
@@ -301,36 +237,7 @@ int bcm4360_core_set_country(struct bcm4360_core *c, const char *ccode)
 	c->ccode[0] = ccode[0];
 	c->ccode[1] = ccode[0] ? ccode[1] : 0;
 	c->ccode[2] = 0;
-	return 0;	/* channel-power: the regulatory limits */
-}
-
-void bcm4360_core_set_macaddr(struct bcm4360_core *c, const u8 *addr)
-{
-	hw_memcpy((u8 *)c->pub + PUB_ETHERADDR, addr, 6);
-	if (c->up)
-		CORE_MAC_CALL(c, bcm4360_bmac_set_hw_etheraddr(m, addr));
-}
-
-/* wlc-hw ("Joining"): BSSID, beacon interval, TSF, power save, filters, EDCA */
-void bcm4360_core_set_bss(struct bcm4360_core *c, const struct bcm4360_bss *bss)
-{
-	(void)c; (void)bss;
-}
-
-void bcm4360_core_set_filter(struct bcm4360_core *c, u32 filter)
-{
-	(void)c; (void)filter;
-}
-
-void bcm4360_core_set_edca(struct bcm4360_core *c, u8 fifo, u16 cwmin, u16 cwmax, u8 aifs,
-			   u16 txop)
-{
-	(void)c; (void)fifo; (void)cwmin; (void)cwmax; (void)aifs; (void)txop;
-}
-
-void bcm4360_core_set_scanning(struct bcm4360_core *c, bool on)
-{
-	(void)c; (void)on;
+	return core_cp_set_country(c, ccode);	/* channel-power.md 1.3 */
 }
 
 u64 bcm4360_core_get_tsf(struct bcm4360_core *c)

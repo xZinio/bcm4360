@@ -35,6 +35,7 @@
 #include <bcm4360/cca.h>
 
 #include "frames.h"
+#include "wlchw.h"
 
 #define FIELD(p, off, type)	(*(type *)((u8 *)(p) + (off)))
 
@@ -223,6 +224,9 @@ struct bcm4360_core {
 	void *wd_timer;		/* the periodic timer, 1 s */
 	struct bcm4360_core_info info;
 
+	/* what the upper layer adds (wlchw.c, wlchw.h; docs/re/spec/wlc-hw.md) */
+	struct core_wlchw w;
+
 	/* the frame path (frames.c, frames.h; docs/re/spec/frames.md) */
 	struct core_frames fr;
 };
@@ -303,6 +307,7 @@ void *core_si_attach(struct bcm4360_core *c, u32 device, void *osh, void *regs, 
 void core_si_detach(struct bcm4360_core *c);
 void core_si_sync(struct bcm4360_core *c);
 s32 core_si_pci_fixcfg(struct bcm4360_core *c);
+u32 core_si_find_capability(struct bcm4360_core *c, u32 capid);
 void core_si_pci_setup(struct bcm4360_core *c, u32 coremask);
 void core_si_pci_up(struct bcm4360_core *c);
 void core_si_pci_down(struct bcm4360_core *c);
@@ -325,5 +330,21 @@ void core_intrsrestore(struct bcm4360_core *c, u32 mask);
 
 /* core.c */
 void *core_alloc(struct bcm4360_core *c, u32 size);
+
+/* wlchw.c: the upper layer's steps (docs/re/spec/wlc-hw.md) */
+void core_w_attach(struct bcm4360_core *c);
+int core_w_up(struct bcm4360_core *c, u16 chanspec);
+void core_w_down(struct bcm4360_core *c);
+void core_w_detach(struct bcm4360_core *c);
+int core_w_set_chanspec(struct bcm4360_core *c, u16 chanspec);
+void core_w_watchdog(struct bcm4360_core *c);
+void core_w_btc_period_get(struct bcm4360_core *c, u16 *period, u8 *state);
+/* chanpow.c: channel-power.md */
+void core_cp_attach(struct bcm4360_core *c);
+int core_cp_set_country(struct bcm4360_core *c, const char *code);
+void *core_cp_limits(struct bcm4360_core *c, u16 cs);	/* a ratepwr container, to delete */
+void core_cp_free(struct bcm4360_core *c, void *p);
+bool core_cp_quiet(struct bcm4360_core *c, u16 cs);
+void core_w_stf_txchain_set(struct bcm4360_core *c, u8 mask);
 
 #endif

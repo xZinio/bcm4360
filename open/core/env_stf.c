@@ -51,10 +51,10 @@ void bcm4360_stf_env_ol_curpwr_upd(void *wlc, s32 tmax, u16 cs)
 	(void)wlc; (void)tmax; (void)cs;
 }
 
-/* wlc_stf_txchain_set(wlc, mask, force 1, id 3): TODO wlc-hw (no specification yet) */
+/* wlc_stf_txchain_set(wlc, mask, force 1, id 3) (wlchw.c; wlc-hw.md 3 step 16) */
 void bcm4360_stf_env_txchain_set(void *wlc, s32 mask)
 {
-	(void)wlc; (void)mask;
+	core_w_stf_txchain_set(WLCC(wlc), (u8)mask);
 }
 
 void bcm4360_stf_env_spatial_policy_set(void *wlc, s32 policy)
@@ -135,7 +135,11 @@ u32 bcm4360_stf_env_beacon_rate(void *wlc) { return FIELD(wlc, WLC_BCN_RATE, u32
 
 /* wlc_bmac_txant_set, wlc_valid_rate, the beacon template and the transmit
  * descriptor cache belong to the frame code: TODO wlc-hw / frames */
-void bcm4360_stf_env_txant_set(void *wlc, u16 phytxant) { (void)wlc; (void)phytxant; }
+void bcm4360_stf_env_txant_set(void *wlc, u16 phytxant)
+{
+	/* bmac-run.md R8: txant (wlc_hw+0x100); the microcode copy only below rev 40 */
+	FIELD(FIELD(wlc, WLC_HW, void *), 0x100, u16) = phytxant;
+}
 
 bool bcm4360_stf_env_valid_rate(void *wlc, u32 rspec, u32 band)
 {
