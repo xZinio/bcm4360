@@ -121,6 +121,20 @@ done
 nmcli -t -f NAME con show | grep -qx "$TEST_PROFILE" &&
 	nmcli con delete "$TEST_PROFILE" && say "removed the profile $TEST_PROFILE"
 
+# The open driver (scripts/open-test.sh) has the card: remove it first; the
+# installed bcm4360 is then loaded below. NetworkManager and wpa_supplicant,
+# which that test stops, are started again in step 3.
+if lsmod | grep -q '^bcm4360_open '; then
+	for d in /sys/class/net/*; do
+		[ "$(basename "$(readlink -f "$d/device/driver" 2>/dev/null)")" = bcm4360_open ] &&
+			ip link set "$(basename "$d")" down 2>/dev/null
+	done
+	say "rmmod bcm4360_open"
+	try_rmmod bcm4360_open || say "rmmod bcm4360_open failed"
+fi
+systemctl is-active -q wpa_supplicant || { systemctl start wpa_supplicant && say "wpa_supplicant started"; }
+systemctl is-active -q NetworkManager || { systemctl start NetworkManager && say "NetworkManager started"; }
+
 # The test loads other builds and parameters; it marks that in this file.
 DIRTY=/run/bcm4360-card-test.dirty
 installed=$(modinfo -F srcversion bcm4360 2>/dev/null)

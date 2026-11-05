@@ -230,6 +230,12 @@ static const u8 bcm4360_ac_fifo[IEEE80211_NUM_ACS] = {
 	[IEEE80211_AC_BE] = 1, [IEEE80211_AC_BK] = 0,
 };
 
+/* 0: drop every frame instead of transmitting it (scripts/open-test.sh,
+ * stage rx: the first tests on a card receive only) */
+static bool allow_tx = true;
+module_param(allow_tx, bool, 0644);
+MODULE_PARM_DESC(allow_tx, "transmit frames (1, default) or drop them all (0: receive-only test)");
+
 static void bcm4360_tx(struct ieee80211_hw *ieee, struct ieee80211_tx_control *control,
 		       struct sk_buff *skb)
 {
@@ -239,6 +245,10 @@ static void bcm4360_tx(struct ieee80211_hw *ieee, struct ieee80211_tx_control *c
 	enum nl80211_band band = info->band;
 	int i, err;
 
+	if (!READ_ONCE(allow_tx)) {
+		ieee80211_free_txskb(ieee, skb);
+		return;
+	}
 	memset(&p, 0, sizeof(p));
 	p.fifo = bcm4360_ac_fifo[skb_get_queue_mapping(skb)];
 	for (i = 0; i < IEEE80211_TX_MAX_RATES && info->control.rates[i].idx >= 0 &&
