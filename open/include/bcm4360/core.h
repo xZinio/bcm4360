@@ -128,8 +128,9 @@ int bcm4360_core_set_chanspec(struct bcm4360_core *c, u16 chanspec);
 void bcm4360_core_set_txpower(struct bcm4360_core *c, u32 qdbm);
 /* the country for the regulatory power limits (CLM), e.g. "DE" */
 int bcm4360_core_set_country(struct bcm4360_core *c, const char *ccode);
-/* once a second while up (the PHY's calibrations, interference mitigation) */
-void bcm4360_core_watchdog(struct bcm4360_core *c);
+/* The periodic work (the PHY's calibrations, interference mitigation,
+ * counters) runs once a second while up, on a timer the core arms itself
+ * through bcm4360_plat_timer_*(), as Broadcom's upper layer did. */
 
 void bcm4360_core_set_macaddr(struct bcm4360_core *c, const u8 *addr);
 void bcm4360_core_set_bss(struct bcm4360_core *c, const struct bcm4360_bss *bss);
@@ -166,5 +167,11 @@ void bcm4360_plat_txstatus(void *plat, void *pkt, const struct bcm4360_txstatus 
 void bcm4360_plat_tx_wake(void *plat, u8 fifo);
 /* a fatal error of the hardware: the platform restarts the device */
 void bcm4360_plat_fatal(void *plat);
+/* Timers of the open layers (phy_env.h, bcm4360_timer_*): fn(arg) runs with
+ * the platform's lock held, as every call into the core. */
+void *bcm4360_plat_timer_init(void *plat, void (*fn)(void *arg), void *arg, const char *name);
+void bcm4360_plat_timer_add(void *plat, void *timer, u32 ms, bool periodic);
+bool bcm4360_plat_timer_del(void *plat, void *timer);	/* true: it was pending */
+void bcm4360_plat_timer_free(void *plat, void *timer);
 
 #endif

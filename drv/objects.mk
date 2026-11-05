@@ -5,7 +5,7 @@
 # on Broadcom's ISC-licensed OS layer (src/shared/linux_osl.c). No object of
 # Broadcom's is linked. Included by the Makefile.
 
-open-drv-objs := drv/main.o drv/mac80211.o drv/fw.o \
+open-drv-objs := drv/main.o drv/mac80211.o drv/fw.o drv/timer.o \
                  src/shared/linux_osl.o \
                  $(patsubst $(src)/%.c,%.o,$(wildcard $(src)/open/core/*.c)) \
                  open/chip/nvram.o open/chip/pmu.o open/chip/si.o open/chip/si_pcie.o \

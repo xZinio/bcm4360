@@ -316,19 +316,6 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 
 /* ------------------------------------------------------------ operations */
 
-static void bcm4360_watchdog_work(struct work_struct *work)
-{
-	struct bcm4360_dev *dev = container_of(work, struct bcm4360_dev, watchdog.work);
-
-	spin_lock_bh(&dev->lock);
-	if (dev->up)
-		bcm4360_core_watchdog(dev->core);
-	spin_unlock_bh(&dev->lock);
-	bcm4360_deliver(dev);
-	if (READ_ONCE(dev->up))
-		ieee80211_queue_delayed_work(dev->ieee, &dev->watchdog, HZ);
-}
-
 static int bcm4360_start(struct ieee80211_hw *ieee)
 {
 	struct bcm4360_dev *dev = ieee->priv;
@@ -343,10 +330,7 @@ static int bcm4360_start(struct ieee80211_hw *ieee)
 		bcm4360_core_intrson(dev->core);
 	}
 	spin_unlock_bh(&dev->lock);
-	if (err)
-		return -EIO;
-	ieee80211_queue_delayed_work(ieee, &dev->watchdog, HZ);
-	return 0;
+	return err ? -EIO : 0;
 }
 
 static void bcm4360_stop(struct ieee80211_hw *ieee, bool suspend)
@@ -358,7 +342,6 @@ static void bcm4360_stop(struct ieee80211_hw *ieee, bool suspend)
 	bcm4360_core_intrsoff(dev->core);
 	spin_unlock_bh(&dev->lock);
 	synchronize_irq(dev->pdev->irq);
-	cancel_delayed_work_sync(&dev->watchdog);
 	spin_lock_bh(&dev->lock);
 	bcm4360_core_down(dev->core);
 	spin_unlock_bh(&dev->lock);
@@ -534,7 +517,6 @@ int bcm4360_mac80211_register(struct bcm4360_dev *dev)
 	struct wiphy *wiphy = ieee->wiphy;
 	int err;
 
-	INIT_DELAYED_WORK(&dev->watchdog, bcm4360_watchdog_work);
 	bcm4360_init_bands(dev);
 	if (dev->info.bands & 1)
 		wiphy->bands[NL80211_BAND_2GHZ] = &dev->band_2g;

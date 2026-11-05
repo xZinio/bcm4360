@@ -60,7 +60,6 @@ struct bcm4360_dev {
 	struct ieee80211_vif *vif;	/* the one interface (station) */
 	bool up;
 	u16 chanspec;
-	struct delayed_work watchdog;
 	struct work_struct restart;
 
 	struct ieee80211_supported_band band_2g;
