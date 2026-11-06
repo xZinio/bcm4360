@@ -99,23 +99,30 @@ static void bcm4360_restart_work(struct work_struct *work)
 	ieee80211_restart_hw(dev->ieee);
 }
 
+/* the retry timeout of PCI configuration register 0x40 must be 0, as
+ * Broadcom's glue sets it (src/wl/sys/wl_linux.c); pci_restore_state() does
+ * not cover it, so the resume sets it again (as brcmsmac does) */
+static void bcm4360_pci_retry_timeout(struct pci_dev *pdev)
+{
+	u32 val;
+
+	pci_read_config_dword(pdev, 0x40, &val);
+	if (val & 0xff00)
+		pci_write_config_dword(pdev, 0x40, val & ~0xff00);
+}
+
 static int bcm4360_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct bcm4360_dev *dev;
 	struct ieee80211_hw *ieee;
 	void __iomem *bar0;
-	u32 val;
 	int err;
 
 	err = pcim_enable_device(pdev);
 	if (err)
 		return err;
 	pci_set_master(pdev);
-	/* the retry timeout of PCI configuration register 0x40 must be 0, as
-	 * Broadcom's glue sets it (src/wl/sys/wl_linux.c) */
-	pci_read_config_dword(pdev, 0x40, &val);
-	if (val & 0xff00)
-		pci_write_config_dword(pdev, 0x40, val & ~0xff00);
+	bcm4360_pci_retry_timeout(pdev);
 	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
 	if (err)
 		err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
@@ -201,11 +208,48 @@ static void bcm4360_remove(struct pci_dev *pdev)
 	ieee80211_free_hw(dev->ieee);
 }
 
+/*
+ * System sleep. mac80211 has stopped the device already (no WoWLAN: its
+ * suspend calls .stop -> bcm4360_core_down) and starts it again after the
+ * resume (.start -> bcm4360_core_up), so these only do what Broadcom's
+ * wl_suspend/wl_resume add around wl_down/wl_up: the core powers the
+ * hardware up again at the next up. The PCI core saves and restores the
+ * configuration space and the power state.
+ */
+static int bcm4360_suspend(struct device *d)
+{
+	struct bcm4360_dev *dev = dev_get_drvdata(d);
+
+	spin_lock_bh(&dev->lock);
+	if (dev->up) {
+		/* mac80211 did not stop it (not expected): down here */
+		WRITE_ONCE(dev->up, false);
+		bcm4360_core_intrsoff(dev->core);
+		spin_unlock_bh(&dev->lock);
+		synchronize_irq(dev->pdev->irq);
+		spin_lock_bh(&dev->lock);
+		bcm4360_core_down(dev->core);
+	}
+	bcm4360_core_suspend(dev->core);
+	spin_unlock_bh(&dev->lock);
+	bcm4360_deliver(dev);
+	return 0;
+}
+
+static int bcm4360_resume(struct device *d)
+{
+	bcm4360_pci_retry_timeout(to_pci_dev(d));
+	return 0;
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(bcm4360_pm_ops, bcm4360_suspend, bcm4360_resume);
+
 static struct pci_driver bcm4360_driver = {
 	.name = BCM4360_DRV_NAME,
 	.id_table = bcm4360_ids,
 	.probe = bcm4360_probe,
 	.remove = bcm4360_remove,
+	.driver.pm = pm_sleep_ptr(&bcm4360_pm_ops),
 };
 module_pci_driver(bcm4360_driver);
 

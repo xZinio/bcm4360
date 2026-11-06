@@ -151,6 +151,9 @@ void bcm4360_core_get_info(struct bcm4360_core *c, struct bcm4360_core_info *inf
  * the MAC and the interrupts. Down: the reverse. */
 int bcm4360_core_up(struct bcm4360_core *c, u16 chanspec);
 void bcm4360_core_down(struct bcm4360_core *c);
+/* system suspend, after bcm4360_core_down: the next bcm4360_core_up powers
+ * the hardware up again as after attach (open/core/pm.c) */
+void bcm4360_core_suspend(struct bcm4360_core *c);
 
 int bcm4360_core_set_chanspec(struct bcm4360_core *c, u16 chanspec);
 /* the transmit power the platform allows, quarter dBm; 0: no limit of its own */
