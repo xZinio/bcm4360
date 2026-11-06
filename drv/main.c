@@ -91,11 +91,32 @@ static irqreturn_t bcm4360_dpc(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+/*
+ * A fatal error of the core (bcm4360_plat_fatal). ieee80211_restart_hw()
+ * wants the hardware stopped and the driver's state reset: mac80211 then
+ * calls .start and adds the interface, stations and keys again.
+ */
 static void bcm4360_restart_work(struct work_struct *work)
 {
 	struct bcm4360_dev *dev = container_of(work, struct bcm4360_dev, restart);
 
 	dev_warn(&dev->pdev->dev, "hardware error: restarting\n");
+	spin_lock_bh(&dev->lock);
+	if (dev->up) {
+		WRITE_ONCE(dev->up, false);
+		bcm4360_core_intrsoff(dev->core);
+		spin_unlock_bh(&dev->lock);
+		synchronize_irq(dev->pdev->irq);
+		spin_lock_bh(&dev->lock);
+		bcm4360_core_down(dev->core);
+	}
+	dev->vif = NULL;
+	dev->peer_map = 0;
+	memset(dev->hwkey, 0, sizeof(dev->hwkey));
+	dev->wpa_seen = false;
+	dev->group_seen = false;
+	spin_unlock_bh(&dev->lock);
+	bcm4360_deliver(dev);
 	ieee80211_restart_hw(dev->ieee);
 }
 
