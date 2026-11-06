@@ -67,11 +67,11 @@ AC-PHY.
 | Rests of the lower layers: backplane enumeration (`si_attach`), OTP reading, PCIe bridge setup | open (`open/core/chip_attach.c`, spec [chip-attach](spec/chip-attach.md)) |
 | **Interrupts**: status bits, mask, order of handling | open (`open/core/frames.c`, spec [frames](spec/frames.md)) |
 | **Receive**: FIFO 0, the receive header of MAC revision 42, mac80211 receive status | open (`open/core/rx.c`, frames.md) |
-| **Transmit**: FIFO per access category, the transmit header of revision 42, transmit status | open (`open/core/tx.c`, frames.md); per-rate power field (coverage.md G1) in progress |
-| **What the upper layer writes to the hardware** (attach, init, up, join, channel change) | open (`open/core/wlchw.c`, spec [wlc-hw](spec/wlc-hw.md), [channel-power](spec/channel-power.md)); join start (coverage.md G7) in progress |
+| **Transmit**: FIFO per access category, the transmit header of revision 42, transmit status | open (`open/core/tx.c`, frames.md, per-rate power coverage.md G1) |
+| **What the upper layer writes to the hardware** (attach, init, up, join, channel change) | open (`open/core/wlchw.c`, spec [wlc-hw](spec/wlc-hw.md), [channel-power](spec/channel-power.md), join start coverage.md G7) |
 | Hardware keys, power save | open (`open/core/keys.c`, `ps.c`, spec [ps-keys](spec/ps-keys.md)); spec-checked only; power save opt-in (`powersave=1`), `nohwcrypt=1` for software crypto |
 | Aggregation (A-MPDU through the microcode), BlockAckReq | open (`open/core/ampdu.c`, spec [ampdu](spec/ampdu.md)); spec-checked only |
-| LEDs, Bluetooth coexistence policy, radio switch / rfkill / MPC, chain changes | specified ([coverage](spec/coverage.md) G2-G5), being implemented |
+| LEDs, Bluetooth coexistence policy, radio switch / rfkill / MPC, chain changes, per-rate transmit power, join start | open (`open/core/ctl.c`, `chains.c`, `txpwr.c`, `wlchw.c`; [coverage](spec/coverage.md) G1-G5, G7); MPC opt-in (`mpc=1`) |
 | Linux side: PCI probe, interrupts, firmware loading, mac80211 callbacks, suspend/resume, restart after a fatal error | open (`drv/`) |
 | Firmware file | `scripts/bcm4360-fwcut.py`; made by `open-test.sh` on first use |
 
@@ -89,6 +89,11 @@ because the driver does not advertise it.
   then the kernel oopsed in `wiphy_register` (a const bitrate table; fixed in
   `2d2ccd6`). The restore now detects a module that holds the card and says
   that a reboot is needed instead of hanging.
+- 2026-11-06: every gap of coverage.md implemented except G8 (beamforming,
+  not advertised). Emulator: standard session identical; with MPC off
+  (the driver's default) ifdown/ifup, suspend/resume, channel change,
+  watchdog and 30 s of timers identical to the object; keys, power save,
+  aggregation, power field, chains checked by `frames_check.py`.
 - Next on the card: `scripts/open-test.sh KO --stage all` (receive only,
   then joins with software and hardware crypto).
 
