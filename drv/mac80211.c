@@ -259,6 +259,13 @@ static bool nohwcrypt;
 module_param(nohwcrypt, bool, 0444);
 MODULE_PARM_DESC(nohwcrypt, "all encryption in software (1) instead of the core's engine (0, default)");
 
+/* G4: MPC. Off by default: the core goes down while mac80211 reports the device idle and
+ * comes up again (a full bring-up with microcode download) when a scan or join needs it. It
+ * saves power, but it is untested on the card and every scan from idle waits for the bring-up. */
+static bool mpc;
+module_param(mpc, bool, 0444);
+MODULE_PARM_DESC(mpc, "power the radio down while mac80211 is idle (default 0: not card-tested)");
+
 /* per station: the index the core knows its A-MPDU sessions by */
 struct bcm4360_sta {
 	u8 peer;
@@ -353,6 +360,8 @@ static void bcm4360_tx(struct ieee80211_hw *ieee, struct ieee80211_tx_control *c
 
 	spin_lock_bh(&dev->lock);
 	err = dev->up ? bcm4360_core_tx(dev->core, skb, &p) : -1;
+	if (dev->up)
+		bcm4360_core_led_activity(dev->core);		/* G2 */
 	if (err > 0)
 		ieee80211_stop_queues(ieee);	/* taken, and the FIFO is full now */
 	spin_unlock_bh(&dev->lock);
@@ -402,6 +411,8 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 	u16 agg_left = 0, agg_seq = 0;	/* MPDUs of the aggregate still to come; last sequence number */
 	bool agg_nack = false;
 	u8 agg_tid = 0, agg_ra[ETH_ALEN] = {};
+	bool got_rx = false, got_rssi = false;
+	s8 rssi = 0;
 
 	__skb_queue_head_init(&rxq);
 	__skb_queue_head_init(&txsq);
@@ -424,7 +435,28 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 			dev_kfree_skb(skb);
 			continue;
 		}
+		{
+			struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+
+			/* the coexistence policy wants the associated AP's signal (coverage.md G3) */
+			if (skb->len >= 24 && ieee80211_is_beacon(hdr->frame_control) &&
+			    ether_addr_equal(hdr->addr3, dev->bssid)) {
+				rssi = rs.rssi;
+				got_rssi = true;
+			}
+		}
+		got_rx = true;
 		ieee80211_rx_ni(dev->ieee, skb);
+	}
+	if (got_rx || got_rssi) {
+		spin_lock_bh(&dev->lock);
+		if (dev->up) {
+			if (got_rx)
+				bcm4360_core_led_activity(dev->core);	/* G2 */
+			if (got_rssi)
+				bcm4360_core_set_rssi(dev->core, rssi);
+		}
+		spin_unlock_bh(&dev->lock);
 	}
 	while ((skb = __skb_dequeue(&txsq))) {
 		struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
@@ -574,6 +606,9 @@ static int bcm4360_config(struct ieee80211_hw *ieee, int radio_idx, u32 changed)
 				dev->chanspec = cs;
 		}
 	}
+	if ((changed & IEEE80211_CONF_CHANGE_IDLE) && mpc && dev->up && !err)	/* G4: MPC */
+		err = bcm4360_core_mpc(dev->core, !!(conf->flags & IEEE80211_CONF_IDLE),
+				       dev->chanspec);
 	if (changed & IEEE80211_CONF_CHANGE_PS)		/* ps-keys.md 1.9 */
 		bcm4360_core_set_ps(dev->core, !!(conf->flags & IEEE80211_CONF_PS));
 	if (changed & IEEE80211_CONF_CHANGE_POWER)
@@ -603,6 +638,7 @@ static void bcm4360_bss_info_changed(struct ieee80211_hw *ieee, struct ieee80211
 	memset(&bss, 0, sizeof(bss));
 	if (info->bssid)
 		memcpy(bss.bssid, info->bssid, ETH_ALEN);
+	memcpy(dev->bssid, bss.bssid, ETH_ALEN);
 	bss.associated = vif->cfg.assoc;
 	bss.aid = vif->cfg.aid;
 	bss.beacon_int = info->beacon_int;
@@ -842,6 +878,74 @@ static void bcm4360_update_tkip_key(struct ieee80211_hw *ieee, struct ieee80211_
 	spin_unlock_bh(&dev->lock);
 }
 
+/*
+ * G7 (docs/re/spec/coverage.md): the start of a join. mac80211 calls this before each
+ * authentication and association frame, in process context and may sleep; the first call of a
+ * join does the channel check, the calibration and the BSSID filter, the others find it done.
+ */
+static void bcm4360_mgd_prepare_tx(struct ieee80211_hw *ieee, struct ieee80211_vif *vif,
+				   struct ieee80211_prep_tx_info *info)
+{
+	struct bcm4360_dev *dev = ieee->priv;
+	const u8 *bssid = vif->bss_conf.bssid;
+	bool reassoc;
+
+	if (!bssid || (info->subtype != IEEE80211_STYPE_AUTH &&
+		       info->subtype != IEEE80211_STYPE_ASSOC_REQ &&
+		       info->subtype != IEEE80211_STYPE_REASSOC_REQ))
+		return;
+	reassoc = vif->cfg.assoc && info->subtype == IEEE80211_STYPE_REASSOC_REQ;
+	spin_lock_bh(&dev->lock);
+	if (dev->up)
+		(void)bcm4360_core_join_start(dev->core, dev->chanspec, bssid,
+					      vif->bss_conf.basic_rates, reassoc);
+	spin_unlock_bh(&dev->lock);
+}
+
+/* G7: a failed exchange, or the end of the association request, releases the PHY hold (an
+ * association that succeeded released it at BSS_CHANGED_ASSOC already) */
+static void bcm4360_mgd_complete_tx(struct ieee80211_hw *ieee, struct ieee80211_vif *vif,
+				    struct ieee80211_prep_tx_info *info)
+{
+	struct bcm4360_dev *dev = ieee->priv;
+
+	if (info->success && info->subtype == IEEE80211_STYPE_AUTH)
+		return;
+	if (info->subtype != IEEE80211_STYPE_AUTH && info->subtype != IEEE80211_STYPE_ASSOC_REQ &&
+	    info->subtype != IEEE80211_STYPE_REASSOC_REQ)
+		return;
+	spin_lock_bh(&dev->lock);
+	if (dev->up)
+		bcm4360_core_join_end(dev->core, info->success);
+	spin_unlock_bh(&dev->lock);
+}
+
+/*
+ * G4: the core calls this from its timers with the device lock held (it may be any context:
+ * only a work is queued); the work tells cfg80211, which may sleep.
+ */
+void bcm4360_plat_rfkill(void *plat, bool hw_disabled)
+{
+	struct bcm4360_dev *dev = plat;
+
+	WRITE_ONCE(dev->rfkill_hw, hw_disabled);
+	if (!READ_ONCE(dev->rfkill_dead))
+		schedule_work(&dev->rfkill_work);
+}
+
+static void bcm4360_rfkill_work(struct work_struct *work)
+{
+	struct bcm4360_dev *dev = container_of(work, struct bcm4360_dev, rfkill_work);
+
+	if (!READ_ONCE(dev->rfkill_dead))
+		wiphy_rfkill_set_hw_state(dev->ieee->wiphy, READ_ONCE(dev->rfkill_hw));
+}
+
+/* No .rfkill_poll: the rfkill core would call it every second, and with the core down a
+ * read of the switch takes the MAC core out of reset and back (as the radio monitor does
+ * every 2 s only while the radio is disabled). The core reports changes itself instead:
+ * from the watchdog while up, from the radio monitor while the switch holds it down. */
+
 static const struct ieee80211_ops bcm4360_ops = {
 	.tx = bcm4360_tx,
 	.wake_tx_queue = ieee80211_handle_wake_tx_queue,
@@ -861,6 +965,8 @@ static const struct ieee80211_ops bcm4360_ops = {
 	.ampdu_action = bcm4360_ampdu_action,
 	.set_key = bcm4360_set_key,
 	.update_tkip_key = bcm4360_update_tkip_key,
+	.mgd_prepare_tx = bcm4360_mgd_prepare_tx,
+	.mgd_complete_tx = bcm4360_mgd_complete_tx,
 	.add_chanctx = ieee80211_emulate_add_chanctx,
 	.remove_chanctx = ieee80211_emulate_remove_chanctx,
 	.change_chanctx = ieee80211_emulate_change_chanctx,
@@ -878,6 +984,7 @@ int bcm4360_mac80211_register(struct bcm4360_dev *dev)
 	struct wiphy *wiphy = ieee->wiphy;
 	int err;
 
+	INIT_WORK(&dev->rfkill_work, bcm4360_rfkill_work);
 	bcm4360_init_bands(dev);
 	if (dev->info.bands & 1)
 		wiphy->bands[NL80211_BAND_2GHZ] = &dev->band_2g;
@@ -912,6 +1019,9 @@ int bcm4360_mac80211_register(struct bcm4360_dev *dev)
 
 void bcm4360_mac80211_unregister(struct bcm4360_dev *dev)
 {
+	/* no rfkill report after the wiphy is gone */
+	WRITE_ONCE(dev->rfkill_dead, true);
+	cancel_work_sync(&dev->rfkill_work);
 	ieee80211_unregister_hw(dev->ieee);
 	bcm4360_free_bands(dev);
 }

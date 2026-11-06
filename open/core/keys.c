@@ -221,3 +221,16 @@ int core_keys_tx(struct bcm4360_core *c, u32 entry, u8 *cipher, u8 *icvlen)
 	*icvlen = icv_len(k->cipher);
 	return 0;
 }
+
+/* ps-keys.md 2.1: host flag 1 bit 14 as the group keys want it (wlc_key_defkeyflag; a join) */
+void core_keys_hostflag(struct bcm4360_core *c)
+{
+	wep_hostflag(c);
+}
+
+/* the platform sets its keys again after a restart: forget the table (no hardware access;
+ * the next up clears the hardware table itself) */
+void core_keys_forget(struct bcm4360_core *c)
+{
+	hw_memset(c->pk.key, 0, sizeof(c->pk.key));
+}

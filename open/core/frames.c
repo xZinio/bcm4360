@@ -14,6 +14,7 @@
 #define MI_TXSTOP	0x00010000
 #define MI_BG_NOISE	0x00040000
 #define MI_RFDISABLE	0x10000000
+#define MI_BT_PRED	0x00800000	/* the Bluetooth predictor (frames.md 2.2, coverage.md G3) */
 #define MI_TFS		0x20000000
 
 #define D11_MACCONTROL		0x120
@@ -136,11 +137,16 @@ static bool dpc_bits(struct bcm4360_core *c, u32 s, u32 bound)
 	/* MI_TXSTOP: wlc-hw: the scan's and quiet period's "FIFOs suspended" callbacks */
 	if ((s & MI_BG_NOISE) && c->phy)
 		bcm4360_phy_noise_sample_intr(c->phy);
-	/* MI_CCA, MI_TBTT, MI_DTIM_TBTT, MI_TO, the Bluetooth predictor: no user here */
+	/* MI_CCA, MI_TBTT, MI_DTIM_TBTT, MI_TO: no user here */
+	if (s & MI_BT_PRED)
+		core_btc_predictor(c);		/* coverage.md G3 */
 	if (s & MI_GP0)
 		bcm4360_plat_fatal(c->plat);
+	/* coverage.md G4 (wlc_rfd_intr): D11(0x158) bit 16 at once; a change goes to the
+	 * platform (rfkill), which drops the association, and the next watchdog takes the
+	 * core down */
 	if (s & MI_RFDISABLE)
-		(void)d11_read32(c->hw, D11_PHYCTL_STATUS);	/* wlc-hw: rfkill from bit 16 */
+		(void)core_radio_poll_hw(c);
 	return true;
 }
 

@@ -252,7 +252,36 @@ void bcm4360_core_set_ps(struct bcm4360_core *c, bool ps);
  * (set_antenna: both masks). 0: done; -29: refused (empty or outside the hardware's chains). */
 int bcm4360_core_set_chains(struct bcm4360_core *c, u8 txmask, u8 rxmask);
 
+/* The start of a join (docs/re/spec/coverage.md G7; mac80211 mgd_prepare_tx): the channel,
+ * the response-rate map from the basic rates (bit i: legacy rate i of the band; 0: the mandatory
+ * ones), a full calibration when channel or BSS are new, AMT[62] = BSSID (0x8002), the PHY held
+ * and the MAC kept awake. Held until the association (bcm4360_core_set_bss with associated), or
+ * bcm4360_core_join_end(), or 15 s. -19 if the core is not up. */
+int bcm4360_core_join_start(struct bcm4360_core *c, u16 chanspec, const u8 *bssid,
+			    u16 basic_rates, bool reassoc);
+void bcm4360_core_join_end(struct bcm4360_core *c, bool success);
+
+/* LEDs (G2): a frame was transmitted or delivered; GPIO 0 blinks 80/20 ms while they pass. */
+void bcm4360_core_led_activity(struct bcm4360_core *c);
+
+/* Radio switch, rfkill and MPC (G4). rfkill_poll: the state of the hardware switch (true: radio
+ * disabled); reads the card when it is down and powered; the platform reports it with
+ * wiphy_rfkill_set_hw_state(). The core calls bcm4360_plat_rfkill() (from its timers, in the
+ * lock; it must not sleep) when the watchdog or the radio monitor sees the switch change.
+ * radio_set: the software switch of Broadcom's glue (down with the radio monitor / up again
+ * at once); mac80211's start/stop is that switch in the Linux driver, which does not call it.
+ * mpc: the platform is idle (no association, no scan): the core goes down; not idle: it comes
+ * up on `chanspec`. The caller (re)enables the interrupts after a down/up pair by
+ * itself: the core does it. set_rssi: the RSSI of the associated AP for the coexistence
+ * policy. */
+bool bcm4360_core_rfkill_poll(struct bcm4360_core *c);
+int bcm4360_core_radio_set(struct bcm4360_core *c, bool off);
+int bcm4360_core_mpc(struct bcm4360_core *c, bool idle, u16 chanspec);
+void bcm4360_core_set_rssi(struct bcm4360_core *c, s8 dbm);
+
 /* Provided by the platform; `plat` as given to bcm4360_core_attach(). */
+/* the hardware radio switch changed: true = radio disabled (WLC_E_RADIO); called with the lock */
+void bcm4360_plat_rfkill(void *plat, bool hw_disabled);
 void bcm4360_plat_rx(void *plat, void *pkt, const struct bcm4360_rxstatus *rs);
 void bcm4360_plat_txstatus(void *plat, void *pkt, const struct bcm4360_txstatus *ts);
 void bcm4360_plat_tx_wake(void *plat, u8 fifo);

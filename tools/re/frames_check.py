@@ -1262,10 +1262,8 @@ def chains(a, b, show):
             ro = s32(om.call('wlc_stf_rxchain_set', wo, mask))
             rc = s32(b.core.call('core_stf_rxchain_set', b.core.core, mask))
         ta, tb = a.trace_from(na), b.trace_from(nb)
-        # not compared: the MAC suspend / enable around the beacon update (env_stf.c's wlc_valid_rate
-        # is true, the object's false: questions, 5) and the core's re-read of the beamforming base
-        ta, tb = ([x for x in t if not (x[1] == 'd11' and x[2] in (288, 296)) and
-                   x[:3] not in (('R', 'shm', 64), ('R', 'shm', 176))] for t in (ta, tb))
+        # not compared: the core's re-read of the beamforming base (SHM 0xb0)
+        ta, tb = ([x for x in t if x[:3] != ('R', 'shm', 176)] for t in (ta, tb))
         if os.environ.get("CHAINS_DUMP") and k == int(os.environ["CHAINS_DUMP"]):
             for x in ta:
                 print('  object', x)

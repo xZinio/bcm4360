@@ -143,8 +143,9 @@ void bcm4360_stf_env_txant_set(void *wlc, u16 phytxant)
 
 bool bcm4360_stf_env_valid_rate(void *wlc, u32 rspec, u32 band)
 {
-	(void)wlc; (void)rspec; (void)band;
-	return true;
+	(void)rspec; (void)band;
+	/* the object's wlc_valid_rate is false while the beacon rate (wlc+0x584) is not set */
+	return FIELD(wlc, WLC_BCN_RATE, u32) != 0;
 }
 
 void bcm4360_stf_env_suspend_mac_and_wait(void *wlc) { MAC_CALL(wlc, bcm4360_bmac_suspend(m)); }

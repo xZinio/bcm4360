@@ -69,6 +69,12 @@ struct bcm4360_dev {
 	bool up;
 	u16 chanspec;
 	struct work_struct restart;
+	/* rfkill (mac80211.c): the core reports the hardware switch from a timer, in the lock;
+	 * the work calls cfg80211, which may sleep */
+	struct work_struct rfkill_work;
+	bool rfkill_hw;
+	bool rfkill_dead;	/* set before unregistering: the work does nothing more */
+	u8 bssid[ETH_ALEN];	/* the BSS being joined or joined, for the receive-signal tracking */
 
 	struct ieee80211_supported_band band_2g;
 	struct ieee80211_supported_band band_5g;

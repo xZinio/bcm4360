@@ -7,7 +7,7 @@ code, run through the same session as Broadcom's object alone, on the same
 model of the card; the accesses of every step are compared.
 
     standalone.py build                 compile open/ and open/core/ (zig)
-    standalone.py check [--show N] [--steps a,b,..]
+    standalone.py check [--show N] [--steps a,b,..|real]
                                         the session on both, compared step by step
     standalone.py undefined             what the open code still needs that nothing defines
 
@@ -19,6 +19,9 @@ The session (hybrid.py's, without what only Broadcom's upper layer has):
 attach, up, channel changes in both bands and all bandwidths, the periodic
 work, down, up, down, detach. "mpc 0" of the object's session has no
 counterpart: the core never powers the radio down by itself.
+
+`--steps real` runs hybrid.REAL (scan, radio off/on, ifdown/ifup, suspend/resume, MPC): scans and the
+glue are not compared (see NOT_COMPARABLE); the MPC idle report of mac80211 plays the object's MPC.
 """
 import argparse
 import glob
@@ -143,6 +146,7 @@ class Core:
                 'bcm4360_plat_txstatus': (3, record('txstatus')),
                 'bcm4360_plat_tx_wake': (2, record('tx_wake')),
                 'bcm4360_plat_fatal': (1, record('fatal')),
+                'bcm4360_plat_rfkill': (2, record('rfkill')),
                 'bcm4360_plat_timer_init': (4, timer_init),
                 'bcm4360_plat_timer_add': (4, timer_add),
                 'bcm4360_plat_timer_del': (2, timer_del),
@@ -157,10 +161,24 @@ class Core:
             self.core = self.call('bcm4360_core_attach', self.hw, self.osh, PCI_VENDOR_BROADCOM,
                                   self.chip.device, self.plat, self.perr)
             return 0 if self.core else s32(m.r32(self.perr)) or -1
-        if what == 'up':
+        word, _, arg = what.partition(' ')
+        if what in ('up', 'ifup', 'resume'):
             return s32(self.call('bcm4360_core_up', self.core, chanspec))
-        if what == 'down':
+        if what in ('down', 'ifdown'):
             self.call('bcm4360_core_down', self.core)
+            return 0
+        if what == 'suspend':
+            # wl_suspend of the glue: the core down, then the part after it (open/core/pm.c)
+            self.call('bcm4360_core_down', self.core)
+            self.call('bcm4360_core_suspend', self.core)
+            return 0
+        if word == 'radio':
+            return s32(self.call('bcm4360_core_radio_set', self.core, 1 if arg == 'off' else 0))
+        if word == 'mpc':
+            # MPC on: the platform is idle (the radio goes down); off: not idle, back up
+            return s32(self.call('bcm4360_core_mpc', self.core, 1 if arg == '1' else 0, chanspec))
+        if word == 'wait':
+            m.os.run_timers(m, m.os.now_us // 1000 + int(float(arg) * 1000))
             return 0
         if what == 'detach':
             self.call('bcm4360_core_detach', self.core)
@@ -209,6 +227,15 @@ def comparable(accesses, rings):
     return out
 
 
+# Steps of hybrid.REAL that run on the object only: Broadcom's scan engine (the open driver
+# scans with mac80211's software scan, which hops the channels itself) and the glue's settings
+# after attach (ioctls of the Linux glue). The core's clock follows the object's through them,
+# so that the periodic work stays in step; their accesses are not compared.
+NOT_COMPARABLE = ('scan', 'glue')
+# steps after which the object's channel is read for the core to come up on
+UP_LIKE = ('up', 'ifup', 'resume', 'radio on')
+
+
 def check(show=20, steps=STEPS, stop=True):
     from run_chan import chanspec
     objs = build(quiet=True)
@@ -216,25 +243,52 @@ def check(show=20, steps=STEPS, stop=True):
     core = Core(objs)
     ref_rings = track_dma(ref.m)
     core_rings = track_dma(core.m)
+    real = 'glue' in steps
     bad = 0
     cs_up = None
     for what in steps:
+        word = what.split(' ')[0]
         n0 = len(ref.s.chip.trace)
-        if what == 'up':
+        if what == 'up' and not real:
             ref.step('mpc 0')
             n0 = len(ref.s.chip.trace)
         try:
             r_ref = ref.step(what)
         except EmuError as e:
-            print('%-8s the object fails: %s' % (what, str(e).splitlines()[0]))
+            print('%-10s the object fails: %s' % (what, str(e).splitlines()[0]))
             return bad + 1
         want = comparable(ab.logical(ref.s.chip.trace[n0:], ref.s.chip.func_name), ref_rings)
+        if word == 'mpc' and want and want[0][1] == 'pcicfg':
+            want = want[1:]             # the same device check at the entry of the iovar
+        if word == 'radio' and want and want[0][1] == 'pcicfg':
+            # the ioctl entry of Broadcom's glue wakes the D11 core around the call while the
+            # driver is down (a core reset and a MACCONTROL write): no counterpart without ioctls
+            k = next((i for i, x in enumerate(want) if x[1] == 'chipcommon'), 0)
+            want = want[k:]
         cs = None
-        if what == 'up':
+        if what in UP_LIKE:
             cs = ref.d.iovar_getint('chanspec')[1] & 0xffff
             cs_up = cs
-        elif what not in ('attach', 'down', 'detach', 'watchdog'):
+        elif word == 'mpc':
+            cs = cs_up
+        elif word not in ('attach', 'down', 'detach', 'watchdog', 'wait', 'glue', 'scan', 'radio',
+                          'ifdown', 'suspend', 'mpc'):
             cs = chanspec(ref.m, what)
+            cs_up = cs
+        if word in NOT_COMPARABLE:
+            if word == 'scan':
+                # mac80211 takes the device out of idle for a scan and idles it afterwards; the
+                # object's MPC does the same: the core ends the scan in the state the object did
+                core.step('mpc 0', cs_up)
+                core.m.os.run_timers(core.m, ref.m.os.now_us // 1000)
+                if not ref.m.r8(ref.m.r64(ref.d.wlc) + 0x34):
+                    core.step('mpc 1', cs_up)
+                    core.call('core_radio_upd', core.core)    # the watchdog's radio update
+            else:
+                core.m.os.run_timers(core.m, ref.m.os.now_us // 1000)
+            print('%-10s not compared (object %d accesses; the open driver has no counterpart)' % (
+                what, len(want)))
+            continue
         n1 = len(core.chip.trace)
         try:
             r_core = core.step(what, cs)
@@ -242,14 +296,19 @@ def check(show=20, steps=STEPS, stop=True):
         except EmuError as e:
             r_core, err = None, str(e).splitlines()[0]
         got = comparable(ab.logical(core.chip.trace[n1:], core.s.names), core_rings)
+        if word in ('radio', 'mpc') and got and got[-1][:4] == ('W', 'd11', 0x12c, 4):
+            got = got[:-1]      # the core enables the interrupts after a bring-up; the object's glue does it later
         same = got == want and err is None
-        print('%-8s object %5d accesses, core %5d%s  %s' % (
+        print('%-10s object %5d accesses, core %5d%s  %s' % (
             what, len(want), len(got), '' if cs is None else ' (chanspec %#06x)' % cs,
             'same' if same else ('STOPPED: ' + err if err else 'DIFFERENT')))
         if not same:
             bad += 1
             if not err or got:
                 ab.compare(want, got, show)
+            if os.environ.get('STANDALONE_FULL'):
+                print('  object:', *want[:80], sep='\n    ')
+                print('  core:', *got[:80], sep='\n    ')
             if err and stop:
                 break
     print('standalone check: %s' % ('pass' if not bad else '%d step(s) differ' % bad))
@@ -300,6 +359,8 @@ def main():
         undefined()
         return 0
     steps = ns.steps.split(',') if ns.steps else STEPS
+    if ns.steps == 'real':
+        steps = hybrid.REAL
     return 1 if check(ns.show, steps, stop=not ns.go_on) else 0
 
 

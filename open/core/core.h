@@ -37,6 +37,7 @@
 #include "frames.h"
 #include "wlchw.h"
 #include "pskeys.h"
+#include "ctl.h"
 
 #define FIELD(p, off, type)	(*(type *)((u8 *)(p) + (off)))
 
@@ -233,6 +234,9 @@ struct bcm4360_core {
 
 	/* power save and hardware keys (keys.c, ps.c; docs/re/spec/ps-keys.md) */
 	struct core_pskeys pk;
+
+	/* LEDs, radio switch and MPC, join, coexistence (ctl.c; docs/re/spec/coverage.md G2-G7) */
+	struct core_ctl ctl;
 };
 
 /* the MAC layer's block, made by its attach */

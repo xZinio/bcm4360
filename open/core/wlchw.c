@@ -86,6 +86,8 @@
 #define TPL_OWN			0x48
 
 #define PHYTYPE_AC		11
+#define JOIN_TIMEOUT_TICKS	15
+#define AMT_ATTR_JOIN		0x8002
 
 /* the chanspec's band: 0xc000 = 5 GHz */
 static u32 band_unit_of(u16 cs)
@@ -308,7 +310,7 @@ static void ucode_mac_upd(struct bcm4360_core *c)
 /* wlc_stay_awake (5.6): what keeps the WAKE bit */
 static bool stay_awake(struct bcm4360_core *c)
 {
-	return c->w.scanning != 0 || core_ps_wake_req(c);	/* ps-keys.md 1.1: the requests of ps.c */
+	return c->w.scanning != 0 || c->ctl.joining || core_ps_wake_req(c);	/* ps-keys.md 1.1: the requests of ps.c */
 }
 
 /* sub_03a14c, wlc_set_wake_ctrl (1.4 step 29) */
@@ -466,8 +468,10 @@ int core_w_set_chanspec(struct bcm4360_core *c, u16 cs)
 {
 	struct core_wlchw *w = &c->w;
 
-	if (!c->up)
-		return -19;
+	if (!c->up) {			/* radio off or MPC: the next up uses it */
+		c->chanspec = cs;
+		return 0;
+	}
 	w->defchanspec = cs;
 	if (cs == FIELD(c->wlc, WLC_CHANSPEC, u16))
 		return 0;
@@ -619,34 +623,14 @@ void core_w_attach(struct bcm4360_core *c)
 		      else w->radio_dis &= ~2);
 	FIELD(hw, 0x1a4, u32) = 0;			/* wlc_bmac_antsel_set */
 
+	core_led_attach(c);				/* G2 */
+	core_radio_attach(c);				/* G4 */
+	c->ctl.hw_prev = (w->radio_dis & RADIO_DIS_HW) != 0;
+	c->ctl.hw_known = 1;
+
 	/* the rate sets of both bands (1.4 step 14), and the quiet channels (channel-power) */
 	for (i = 0; i < 2; i++)
 		rates_band_init(c, i);
-}
-
-/* ---------------------------------------------------------------------- */
-/* LEDs: bmac-run.md R4, wlc-hw.md 1.2 step 2, 1.5 step 20, 4.1 step 7     */
-/* ---------------------------------------------------------------------- */
-
-/*
- * The LED policy of wlc_led.c has no specification. Observed (wlc-hw.md 1.2,
- * 1.5, 4.1): the GPIO mask is 7 on the emulated card (no ledbh variables);
- * at up pin 0 is off and pins 1 and 2 are on, at down all are off.
- */
-static u32 led_pins(struct bcm4360_core *c)
-{
-	(void)c;
-	return 7;
-}
-
-/* wlc_led_event: wlc_bmac_led(hw, 1 << pin, on ? 1 << pin : 0, active_high) per LED */
-static void led_event(struct bcm4360_core *c, bool up)
-{
-	void *hw = CORE_WLC_HW(c);
-	u32 i;
-
-	for (i = 0; i < 3; i++)
-		bcm4360_bmac_led(hw, 1u << i, (up && i) ? 1u << i : 0, 1);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -830,7 +814,7 @@ int core_w_up(struct bcm4360_core *c, u16 chanspec)
 	}
 	c->chanspec = chanspec;
 	if (!FIELD(pub, PUB_HW_UP, u8)) {
-		w->led_mask = led_pins(c);
+		w->led_mask = core_led_mask(c);
 		bcm4360_bmac_led_hw_mask_init(CORE_WLC_HW(c), w->led_mask);
 		CORE_MAC_CALL(c, bcm4360_bmac_hw_up(m));
 		FIELD(pub, PUB_HW_UP, u8) = 1;
@@ -846,6 +830,7 @@ int core_w_up(struct bcm4360_core *c, u16 chanspec)
 		return 0;
 	if (r)
 		return r;
+	core_radio_monitor_stop(c);			/* G4: wlc_up, once the radio is allowed */
 	/* wlc_bmac_set_ctrl_ePA: nothing on the 4360 */
 	if (FIELD(CORE_WLC_HW(c), 0x1bc, u8) == 0xff) {
 		CORE_MAC_CALL(c, bcm4360_bmac_set_ctrl_bt_shd0(m, true));
@@ -885,7 +870,7 @@ int core_w_up(struct bcm4360_core *c, u16 chanspec)
 	if (c->phy)
 		bcm4360_phy_ldpc_override_set(c->phy, STF(c)[0x13] != 0);
 	stf_chanspec_upd(c);
-	led_event(c, true);
+	core_led_up(c);
 	/* step 21: D11(0xa00) bit 0 */
 	if (FIELD(wlc, 0x71a, u8)) {
 		u32 v = d11_read16(c->hw, D11_REG_A00);
@@ -948,6 +933,7 @@ static void watchdog_btc(struct bcm4360_core *c)
 	}
 	if (p)
 		(void)shm_r(c, p + 0x4e);	/* wlc_bmac_btc_params_get(hw, 0x27) */
+	core_btc_ps_protection(c);		/* G3, on the 2.4 GHz band */
 }
 
 /* wlc_bmac_fifoerrors (R7): 1 if a FIFO reports an error */
@@ -1021,16 +1007,7 @@ static void stf_tempsense_upd(struct bcm4360_core *c)
 /* wlc_stf_txchain_set: the transmit chains (cca-stf.md, acphy-api wlc_phy_stf_chain_set) */
 void core_w_stf_txchain_set(struct bcm4360_core *c, u8 mask)
 {
-	u8 *stf = STF(c);
-
-	mask &= stf[0];
-	if (!mask || mask == stf[1])
-		return;
-	stf[1] = mask;
-	stf[2] = (u8)popcount8(mask);
-	if (c->phy)
-		bcm4360_phy_stf_chain_set(c->phy, mask, stf[5]);
-	bcm4360_stf_spatial_policy_set(c->wlc, (s8)stf[0x28]);
+	(void)core_stf_txchain_set(c, mask, false, 4);	/* requester 4: temperature reduction */
 }
 
 /* wlc_watchdog (sub_0450f0), once a second while up */
@@ -1048,16 +1025,19 @@ void core_w_watchdog(struct bcm4360_core *c)
 	}
 	w->ticks++;
 	/* sub_030b4b: the radio switch */
-	CORE_MAC_CALL(c, if (bcm4360_bmac_radio_read_hwdisabled(m)) w->radio_dis |= 2;
-		      else w->radio_dis &= ~2);
-	if (w->radio_dis)
+	(void)core_radio_poll_hw(c);
+	if (w->radio_dis) {			/* MPC or the hardware switch: down (G4) */
+		core_radio_upd(c);
 		return;
+	}
+	if (c->ctl.joining && ++c->ctl.join_ticks > JOIN_TIMEOUT_TICKS)
+		bcm4360_core_join_end(c, false);	/* G7: never hold the PHY for ever */
 	if (ubs_unit(c) == 0)
 		watchdog_btc(c);
 	bmac_watchdog(c);
 	if (!(w->ticks % 30))
 		statsupd(c);
-	led_event(c, true);
+	core_led_event(c);
 	bcm4360_cca_watchdog(c->cca);	/* the channel statistics module */
 	stf_tempsense_upd(c);
 	core_ps_watchdog(c);				/* ps-keys.md 1.5, 1.8 */
@@ -1073,7 +1053,12 @@ static void clear_hw_association(struct bcm4360_core *c);
 void core_w_down(struct bcm4360_core *c)
 {
 	struct core_wlchw *w = &c->w;
+	u8 peer, tid;
 
+	if (w->radio_dis)
+		core_radio_monitor_start(c);		/* G4: the switch is read while down */
+	c->ctl.joining = 0;				/* G7 */
+	c->ctl.cal_valid = 0;
 	CORE_MAC_CALL(c, bcm4360_bmac_down_prep(m));
 	if (w->associated)
 		clear_hw_association(c);
@@ -1084,13 +1069,17 @@ void core_w_down(struct bcm4360_core *c)
 	w->scanning = 0;
 	w->bcn_promisc_scan = 0;
 	core_ps_down(c);
+	core_keys_forget(c);				/* the platform sets its keys again at the next start */
+	for (peer = 0; peer < BCM4360_AMPDU_NPEERS; peer++)
+		for (tid = 0; tid < 16; tid++)
+			bcm4360_core_ampdu_tx_stop(c, peer, tid);
 	if (c->wd_timer)
 		bcm4360_plat_timer_del(c->plat, c->wd_timer);
 	FIELD(c->pub, PUB_UP, u8) = 0;
 	c->up = false;
 	if (c->phy)
 		bcm4360_phy_mute_upd(c->phy, false, 0xffffffff);
-	led_event(c, false);
+	core_led_down(c);
 	CORE_MAC_CALL(c, bcm4360_bmac_down_finish(m));
 	FIELD(c->wlc, WLC_CLK, u8) = 0;
 	w->clk_up = 0;
@@ -1099,6 +1088,8 @@ void core_w_down(struct bcm4360_core *c)
 /* wlc_detach, the part before wlc_bmac_detach (4.2 step 1) */
 void core_w_detach(struct bcm4360_core *c)
 {
+	core_radio_detach(c);
+	core_led_detach(c);
 	if (c->w.ol) {
 		FIELD(c->wlc, WLC_OFFLOAD, void *) = NULL;
 		hw_free(c->w.ol, 0x100);
@@ -1207,6 +1198,94 @@ static void clear_hw_association(struct bcm4360_core *c)
 	set_ratetable(c);
 }
 
+/* G7: the BSS's rate set as the response-rate map wants it: the basic rates flagged;
+ * with no basic rates known, the mandatory ones of the band (1, 2, 5.5, 11; 6, 12, 24) */
+static void join_rates(struct bcm4360_core *c, u16 basic, struct bcm4360_rateset *rs)
+{
+	const struct bcm4360_rateset *hw = &c->w.hwrs[ubs_unit(c)];
+	u32 i;
+
+	hw_memset(rs, 0, sizeof(*rs));
+	for (i = 0; i < hw->count && i < 16; i++) {
+		u8 r = hw->rates[i] & 0x7f;
+		bool basic_rate = basic ? (basic & (1u << i)) != 0 :
+				  (r == 2 || r == 4 || r == 11 || r == 22 || r == 12 ||
+				   r == 24 || r == 48);
+
+		rs->rates[rs->count++] = basic_rate ? r | 0x80 : r;
+	}
+}
+
+/*
+ * The start of a join (docs/re/spec/coverage.md G7, wlc_join_BSS), called when mac80211
+ * begins to authenticate (mgd_prepare_tx): the channel, the rate map, a full calibration
+ * (reason 4) when channel or BSS are new, AMT[62] = BSSID with attribute 0x8002, the PHY
+ * held (hold 0x1) and WAKE kept until bcm4360_core_join_end() or the association
+ * (bcm4360_core_set_bss). Calling it again for the association request is harmless.
+ */
+int bcm4360_core_join_start(struct bcm4360_core *c, u16 chanspec, const u8 *bssid,
+			    u16 basic_rates, bool reassoc)
+{
+	struct core_wlchw *w = &c->w;
+	struct core_ctl *t = &c->ctl;
+	struct bcm4360_rateset rs;
+	bool fresh;
+
+	if (!c->up)
+		return -19;
+	/* step 2: the channel */
+	if (chanspec != FIELD(c->wlc, WLC_CHANSPEC, u16)) {
+		int r = core_w_set_chanspec(c, chanspec);
+
+		if (r)
+			return r;
+	} else if (core_cp_quiet(c, chanspec) && c->phy) {
+		bcm4360_phy_mute_upd(c->phy, false, 0xffffffff);	/* wlc_mute(wlc, 0, 0) */
+	}
+	/* step 3 */
+	join_rates(c, basic_rates, &rs);
+	rate_lookup_init(c, &rs);
+	/* step 4 */
+	fresh = !t->cal_valid || t->join_cs != chanspec || hw_memcmp(t->join_bssid, bssid, 6);
+	if (fresh && !reassoc && c->phy)
+		bcm4360_phy_cal_perical(c->phy, 4);
+	t->cal_valid = 1;
+	t->join_cs = chanspec;
+	hw_memcpy(t->join_bssid, bssid, 6);
+	/* step 6: the AP's frames pass the BSSID filter */
+	if (!w->associated)
+		CORE_MAC_CALL(c, bcm4360_bmac_write_amt(m, AMT_BSSID, bssid, AMT_ATTR_JOIN));
+	core_keys_hostflag(c);				/* wlc_bsscfg_up */
+	/* wlc_assoc_change_state: leaving the idle states holds the PHY */
+	if (!t->joining) {
+		t->joining = 1;
+		if (c->phy)
+			bcm4360_phy_hold_upd(c->phy, 1, true);
+	}
+	t->join_ticks = 0;
+	set_wake_ctrl(c);
+	core_led_event(c);
+	return 0;
+}
+
+/* The association state machine is idle again (wlc_assoc_change_state): release the PHY and
+ * the wake bit; a join that failed also frees AMT[62] */
+void bcm4360_core_join_end(struct bcm4360_core *c, bool success)
+{
+	struct core_ctl *t = &c->ctl;
+	static const u8 zero[6];
+
+	if (!t->joining)
+		return;
+	t->joining = 0;
+	if (c->phy)
+		bcm4360_phy_hold_upd(c->phy, 1, false);
+	if (!success && !c->w.associated)
+		CORE_MAC_CALL(c, bcm4360_bmac_write_amt(m, AMT_BSSID, zero, 0));
+	set_wake_ctrl(c);
+	core_led_event(c);
+}
+
 /* bcm4360_core_set_bss: wlc-hw.md 5.8 */
 void bcm4360_core_set_bss(struct bcm4360_core *c, const struct bcm4360_bss *bss)
 {
@@ -1222,6 +1301,10 @@ void bcm4360_core_set_bss(struct bcm4360_core *c, const struct bcm4360_bss *bss)
 	if (!bss->associated) {
 		if (w->associated)
 			clear_hw_association(c);
+		if (c->ctl.joining)
+			bcm4360_core_join_end(c, false);	/* the join failed or was given up */
+		core_btc_ps_protection(c);
+		core_led_event(c);
 		return;
 	}
 	if (!w->associated) {
@@ -1249,6 +1332,9 @@ void bcm4360_core_set_bss(struct bcm4360_core *c, const struct bcm4360_bss *bss)
 		edcf_apply_all(c, true);
 		w->last_tsf = 0;
 		core_ps_bss(c, true, false);		/* awake until the first beacon (ps-keys.md 1.8) */
+		bcm4360_core_join_end(c, true);		/* G7: the association state machine is idle */
+		core_btc_ps_protection(c);		/* G3: wlc_sta_assoc_upd */
+		core_led_event(c);			/* G2: a join completed */
 	} else if (unit = ubs_unit(c), unit == 0 && bss->short_slot != w->shortslot) {
 		w->shortslot = bss->short_slot;
 		CORE_MAC_CALL(c, bcm4360_bmac_set_shortslot(m, bss->short_slot));
