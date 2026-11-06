@@ -64,15 +64,33 @@ AC-PHY.
 | DMA engines (rings, descriptors) | open (`open/mac/dma.c`), on the card |
 | Shared memory, address match table, templates, retry limits, contention window | open (`open/mac/bmac_mem.c`) |
 | Regulatory power limits | open lookup (`open/lib/clm.c`) on Broadcom's database |
-| Rests of the lower layers: backplane enumeration (`si_attach`), OTP reading, PCIe bridge setup | missing, small: [chip](spec/chip.md) and [srom-otp](spec/srom-otp.md) cover parts |
-| **Interrupts**: status bits, mask, order of handling | missing: [bmac-data](spec/bmac-data.md) section 3 (planned there) |
-| **Receive**: frames of FIFO 0, the receive header of MAC revision 42, its fields as mac80211 receive status (rate, signal, band, flags) | missing: bmac-data section 2 |
-| **Transmit**: FIFO per access category, the transmit header of revision 42 (rates, retries, PHY control words, frame id), transmit status words | missing: bmac-data section 2 |
-| **What the upper layer writes to the hardware** at attach, init, up, join and channel change: defaults in shared memory, the rate table, BSSID, beacon interval and TSF, power-save control, receive filters | missing: new spec `wlc-hw` |
-| Hardware keys | later: mac80211's software crypto first |
-| Aggregation (A-MPDU through the microcode) | later |
-| Linux side: PCI probe, interrupts, NAPI, firmware loading, mac80211 callbacks, the platform under `hw.h` and the `*_env` interfaces | new code |
-| Firmware file | `fwcut.py` extracts it; the install step and the loader are new |
+| Rests of the lower layers: backplane enumeration (`si_attach`), OTP reading, PCIe bridge setup | open (`open/core/chip_attach.c`, spec [chip-attach](spec/chip-attach.md)) |
+| **Interrupts**: status bits, mask, order of handling | open (`open/core/frames.c`, spec [frames](spec/frames.md)) |
+| **Receive**: FIFO 0, the receive header of MAC revision 42, mac80211 receive status | open (`open/core/rx.c`, frames.md) |
+| **Transmit**: FIFO per access category, the transmit header of revision 42, transmit status | open (`open/core/tx.c`, frames.md); per-rate power field (coverage.md G1) in progress |
+| **What the upper layer writes to the hardware** (attach, init, up, join, channel change) | open (`open/core/wlchw.c`, spec [wlc-hw](spec/wlc-hw.md), [channel-power](spec/channel-power.md)); join start (coverage.md G7) in progress |
+| Hardware keys, power save | open (`open/core/keys.c`, `ps.c`, spec [ps-keys](spec/ps-keys.md)); spec-checked only; power save opt-in (`powersave=1`), `nohwcrypt=1` for software crypto |
+| Aggregation (A-MPDU through the microcode), BlockAckReq | open (`open/core/ampdu.c`, spec [ampdu](spec/ampdu.md)); spec-checked only |
+| LEDs, Bluetooth coexistence policy, radio switch / rfkill / MPC, chain changes | specified ([coverage](spec/coverage.md) G2-G5), being implemented |
+| Linux side: PCI probe, interrupts, firmware loading, mac80211 callbacks, suspend/resume, restart after a fatal error | open (`drv/`) |
+| Firmware file | `scripts/bcm4360-fwcut.py`; made by `open-test.sh` on first use |
+
+Completeness: [coverage.md](spec/coverage.md) maps every Broadcom function a
+client reaches (1,228) to a spec, "no hardware effect" (mac80211 does it) or
+"not used on this card"; the only open gap is beamforming (G8), not needed
+because the driver does not advertise it.
+
+### Status (2026-11-06)
+
+- Milestone 1 reached 2026-11-05 (`3a5656a`): `standalone.py check` - the
+  open core alone makes the same hardware accesses as Broadcom's object for
+  the whole standard session.
+- First card test (stage rx) 2026-11-05: the chip attach ran on the card,
+  then the kernel oopsed in `wiphy_register` (a const bitrate table; fixed in
+  `2d2ccd6`). The restore now detects a module that holds the card and says
+  that a reboot is needed instead of hanging.
+- Next on the card: `scripts/open-test.sh KO --stage all` (receive only,
+  then joins with software and hardware crypto).
 
 ## Milestones
 
