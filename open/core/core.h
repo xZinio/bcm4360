@@ -365,4 +365,17 @@ void core_ps_txstatus(struct bcm4360_core *c, u32 w0);
 void core_ps_beacon(struct bcm4360_core *c, const u8 *f, u32 len, u8 rate, u8 enc, u8 flags);
 void core_ps_watchdog(struct bcm4360_core *c);
 
+/* txpwr.c: coverage.md G1 (the power field of PHY control word 1) */
+u32 core_txrate_rspec(const struct bcm4360_txrate *r);
+u32 core_stf_txchain_get(struct bcm4360_core *c, u32 rspec);
+u32 core_stf_spatial_expansion_get(struct bcm4360_core *c, u32 rspec);
+s8 core_stf_get_pwrperrate(struct bcm4360_core *c, u32 rspec, u32 e);
+u16 core_txctl1_calc(struct bcm4360_core *c, u32 rspec);
+/* chains.c: coverage.md G5 (changes of the transmit and receive chains) */
+int core_stf_txchain_set(struct bcm4360_core *c, u8 mask, bool force, u32 id);
+void core_stf_txchain_set_complete(struct bcm4360_core *c);
+int core_stf_rxchain_set(struct bcm4360_core *c, u8 mask);
+void core_txfifo_complete(struct bcm4360_core *c);	/* the FIFOs drained: pending changes complete */
+void *core_test_block(struct bcm4360_core *c, u32 which);
+
 #endif

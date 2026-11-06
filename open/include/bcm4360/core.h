@@ -244,6 +244,14 @@ void bcm4360_core_key_state(struct bcm4360_core *c, bool wpa, bool group);
  * clears HPS. bcm4360_core_set_ps() does the same from the platform's configuration. */
 void bcm4360_core_set_ps(struct bcm4360_core *c, bool ps);
 
+/* Changes of the chains (docs/re/spec/coverage.md G5). txmask / rxmask: the bit masks of the
+ * transmit / receive chains to use (a subset of what bcm4360_core_info reports); 0 leaves
+ * that side as it is. Call while up (-1 otherwise), e.g. from mac80211's config callback
+ * (IEEE80211_CONF_CHANGE_SMPS: rxmask 1 for static SM power save, the full mask otherwise;
+ * mac80211 sends the action frame itself) or for a user's antenna selection
+ * (set_antenna: both masks). 0: done; -29: refused (empty or outside the hardware's chains). */
+int bcm4360_core_set_chains(struct bcm4360_core *c, u8 txmask, u8 rxmask);
+
 /* Provided by the platform; `plat` as given to bcm4360_core_attach(). */
 void bcm4360_plat_rx(void *plat, void *pkt, const struct bcm4360_rxstatus *rs);
 void bcm4360_plat_txstatus(void *plat, void *pkt, const struct bcm4360_txstatus *ts);

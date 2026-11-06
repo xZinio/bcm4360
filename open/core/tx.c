@@ -171,16 +171,15 @@ static u32 tx_corecount_mask(struct bcm4360_core *c, const struct bcm4360_txrate
 	if (idx > 5)
 		idx = 5;
 	if (stf) {
-		m = stf[0x17 + 2 * idx];		/* txcore[idx].mask */
-		if (stf[0x22 + idx])			/* txcore_override[idx] */
-			m = stf[0x22 + idx];
+		m = stf[0x17 + 2 * idx];		/* txcore[idx].mask: the overrides are folded in
+							 * by the spatial policy (G1 verification) */
 	}
 	if (!m)
 		m = c->info.txchain;		/* wlc-hw: the stf defaults are not made yet */
 	return m & 0xf;
 }
 
-/* frames.md 3.5: the three PHY control words of an entry */
+/* frames.md 3.5, coverage.md G1: the three PHY control words of an entry */
 static void tx_phyctl(struct bcm4360_core *c, u8 *e, const struct bcm4360_txrate *r)
 {
 	u32 type, bwc = r->bw > 2 ? 2 : r->bw;
@@ -193,9 +192,8 @@ static void tx_phyctl(struct bcm4360_core *c, u8 *e, const struct bcm4360_txrate
 	w0 = type | 4 | (tx_corecount_mask(c, r) << 6) | (bwc << 14);
 	if ((r->flags & BCM4360_TX_SHORTPRE) && rate_is_cck(r) && r->rate != 2)
 		w0 |= 0x10;
-	/* sub-channel in the channel; the power field (bits 3..8) is 0: wlc_stf_get_pwrperrate
-	 * is not specified yet (TODO, questions) */
-	w1 = ((c->chanspec >> 8) & 7) >> bwc;
+	/* the power field and the sub-channel in the channel: coverage.md G1.3 (txpwr.c) */
+	w1 = core_txctl1_calc(c, core_txrate_rspec(r));
 	if (r->enc == 1)
 		w2 = r->rate;
 	else if (r->enc == 2)
@@ -316,6 +314,18 @@ static struct bcm4360_dma *tx_engine(struct bcm4360_core *c, u32 fifo)
 	return FIELD(CORE_WLC_HW(c), HW_DI(fifo), struct bcm4360_dma *);
 }
 
+/* frames.md 3.8, 4.3 step 10: the pending count of a FIFO (wlc->core+0x38+2*fifo) */
+static void tx_pending(struct bcm4360_core *c, u32 fifo, s32 d)
+{
+	s16 *n = (s16 *)((u8 *)c->wlc_core + CORE_TXPKTPEND + 2 * fifo);
+
+	if (fifo >= FR_NFIFO || !c->wlc_core)
+		return;
+	if (d < 0 && *n <= 0)
+		return;
+	*n += d;
+}
+
 /* frames.md 3.2: the headroom needed in front of a frame */
 u32 bcm4360_core_tx_headroom(struct bcm4360_core *c)
 {
@@ -363,6 +373,7 @@ int bcm4360_core_tx(struct bcm4360_core *c, void *pkt, const struct bcm4360_txpa
 	c->fr.txid++;
 	if (bcm4360_dma_txfast(di, pkt, true))
 		return -1;			/* the engine freed the packet */
+	tx_pending(c, p->fifo, 1);		/* frames.md 3.8: the FIFO's pending count */
 	avail = ((struct bcm4360_dma_pub *)di)->txavail;
 	if (avail < TX_STOP_BELOW) {
 		c->fr.stopped[p->fifo] = true;
@@ -376,6 +387,7 @@ static void tx_report(struct bcm4360_core *c, u32 fifo, struct bcm4360_dma *di, 
 		      const struct bcm4360_txstatus *ts)
 {
 	osl_pktpull(c->osh, pkt, TX_HEADROOM);
+	tx_pending(c, fifo, -1);
 	c->fr.tx_status++;
 	bcm4360_plat_txstatus(c->plat, pkt, ts);
 	if (c->fr.stopped[fifo] &&
@@ -421,10 +433,12 @@ static bool tx_status_ampdu(struct bcm4360_core *c, struct bcm4360_dma *di, u32 
 	if (reason == 1 && a->repost < AMPDU_MAX_REPOST) {
 		/* ampdu.md 2.3 step 2: the receiver was asleep, nothing was sent: post them again */
 		for (i = 0; i < ncons; i++) {
-			if (bcm4360_dma_txfast(di, pkts[i], true))
+			if (bcm4360_dma_txfast(di, pkts[i], true)) {
 				a->nholes++;	/* no room: the engine freed it; lost */
-			else
+				tx_pending(c, fifo, -1);
+			} else {
 				a->nreposts++;
+			}
 		}
 		a->repost++;
 		return false;
@@ -517,5 +531,7 @@ bool core_txstatus_run(struct bcm4360_core *c, u32 bound, bool *fatal)
 		c->fr.tx_fatal++;
 		return false;
 	}
+	if (n)
+		core_txfifo_complete(c);		/* coverage.md G5 step 5: pending chain changes */
 	return n >= bound;
 }

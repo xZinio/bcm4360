@@ -4,7 +4,7 @@
 The core's frame path (open/core/frames.c, rx.c, tx.c) against Broadcom's
 object on the same card model (docs/re/tasks/core-frames.md).
 
-    frames_check.py [receive] [transmit] [status] [ampdu] [--show N]
+    frames_check.py [receive] [transmit] [status] [ampdu] [keys] [ps] [power] [chains] [--show N]
 
 Both sessions are brought up (attach, up) and get the DMA channel model of
 dma_scenarios.DmaHw. Then
@@ -33,10 +33,17 @@ dma_scenarios.DmaHw. Then
             1.6, 2.2, 2.3, 2.6. Checked against the spec only: the object has
             no public entry point that makes it aggregate.
 
+  power     (docs/re/tasks/core-gaps-tx.md, coverage.md G1) wlc_stf_spatial_expansion_get,
+            wlc_stf_get_pwrperrate and wlc_acphy_txctl1_calc of the object against the core's for
+            random stf states, containers, chanspecs and rate specifications.
+  chains    (coverage.md G5) wlc_stf_txchain_set / wlc_stf_rxchain_set of the object against the
+            core's: results, stf block, accesses.
+
 The object is used as a black box through its public entry points and the
 functions frames.md names (wlc_isr, wlc_dpc, wlc_recv, wlc_txfifo).
 """
 import argparse
+import os
 import random
 import struct
 import sys
@@ -451,7 +458,7 @@ def hdr_fields(raw):
     for i in range(4):
         e = h[ENTRY + ENTRY * i:ENTRY + ENTRY * i + ENTRY]
         w0, w1, w2 = struct.unpack_from('<3H', e, 0)
-        f['e%d' % i] = (w0, w1 & ~0x1f8, w2, e[6:12].hex(), e[12:14].hex(),
+        f['e%d' % i] = (w0, w1, w2, e[6:12].hex(), e[12:14].hex(),
                         struct.unpack_from('<H', e, 14)[0], struct.unpack_from('<H', e, 16)[0],
                         e[18:20].hex())
     return f
@@ -1106,10 +1113,225 @@ def ps(a, b, show):
     return bad
 
 
+# ------------------------------------------------------------ power, chains
+
+def rspec_vectors(rng, n):
+    """Rate specifications (coverage.md G1): legacy (CCK, OFDM, other), HT MCS 0..32,
+    VHT 1..3 streams MCS 0..9, bandwidths 0..4, STBC and beamforming bits."""
+    cck, ofdm = (2, 4, 11, 22), (12, 18, 24, 36, 48, 72, 96, 108)
+    for _ in range(n):
+        enc = rng.choice((0, 0, 1, 1, 2, 2))
+        bw = rng.choice((1, 1, 2, 2, 3, 3, 0, 4))
+        v = enc << 24 | bw << 16
+        if enc == 0:
+            v |= rng.choice(cck + ofdm)
+        elif enc == 1:
+            v |= rng.choice(list(range(24)) + [32])
+        else:
+            v |= rng.randrange(0, 10) | rng.randrange(1, 4) << 4
+        if rng.random() < 0.3:
+            v |= 0x100000
+        if rng.random() < 0.3:
+            v |= 0x200000
+        yield v
+
+
+def fill_stf(rng, side_stf, side_m, ppr_bytes, state):
+    """The same random stf state (cca-stf.md "The stf state") and container in a block."""
+    for off, val in state.items():
+        side_m.write(side_stf + off, bytes([val]))
+    p = side_m.r64(side_stf + 0x30)
+    side_m.write(p + 4, ppr_bytes)
+
+
+def power(a, b, show):
+    """coverage.md G1: the object's wlc_stf_spatial_expansion_get, wlc_stf_get_pwrperrate and
+    wlc_acphy_txctl1_calc against the core's, for random stf states, containers, chanspecs
+    and rate specifications."""
+    rng = random.Random(7)
+    om, cm = a.m, b.m
+    wo = a.run.d.wlc
+    wc = b.core.call('core_test_block', b.core.core, 0)
+    so, sc = om.r64(wo + 0x550), b.core.call('core_test_block', b.core.core, 1)
+    po, pc = om.r64(wo), b.core.call('core_test_block', b.core.core, 2)
+    ptr_o, ptr_c = om.r64(so + 0x30), cm.r64(sc + 0x30)
+    if not ptr_o or not ptr_c:
+        print('power: no stf container (object %#x, core %#x)' % (ptr_o, ptr_c))
+        return 1
+    bwo, bwc = om.r32(ptr_o), cm.r32(ptr_c)
+    if bwo != bwc or bwo > 2:
+        print('power: containers of different bandwidth (%d / %d)' % (bwo, bwc))
+        return 1
+    size = 182 * (bwo + 1)
+    save = [(om, so, bytes(om.read(so, 0x90))), (cm, sc, bytes(cm.read(sc, 0x90))),
+            (om, po + 0xe8, bytes(om.read(po + 0xe8, 1))), (cm, pc + 0xe8, bytes(cm.read(pc + 0xe8, 1))),
+            (om, wo + 0x518, bytes(om.read(wo + 0x518, 2))), (cm, wc + 0x518, bytes(cm.read(wc + 0x518, 2)))]
+    save_ppr = [(om, ptr_o + 4, bytes(om.read(ptr_o + 4, size))), (cm, ptr_c + 4, bytes(cm.read(ptr_c + 4, size)))]
+    n = bad = 0
+    stats = {'skipped': 0, 'olpc': 0, 'exp': set(), 'p': set()}
+    for it in range(100):
+        t = rng.choice((1, 2, 2, 2, 3))
+        state = {0x00: 3, 0x01: rng.choice((1, 2, 3, 3, 6)), 0x02: t, 0x88: rng.choice((0, 5, 21, 25, 29, 31))}
+        for i in range(6):
+            state[0x16 + 2 * i] = rng.choice((1, 1, 2, 3, 4))
+            state[0x17 + 2 * i] = rng.choice((0, 1, 2, 3, 3, 5, 6, 7))
+            state[0x22 + i] = rng.choice((0, 0, 0, 1, 3, 7))
+        ppr = bytes(0x80 if rng.random() < 0.08 else (rng.randrange(0, 32) if rng.random() < 0.9
+                                                       else rng.randrange(216, 256))
+                    for _ in range(size))
+        cap = rng.choice((0, 1))
+        cs = (rng.randrange(0, 8) << 8) | rng.choice((0xe024, 0xe02a, 0x1001, 0xd0a5, 0xe0a4))
+        for m, st in ((om, so), (cm, sc)):
+            fill_stf(rng, st, m, ppr, state)
+        om.write(po + 0xe8, bytes([cap])); cm.write(pc + 0xe8, bytes([cap]))
+        om.write(wo + 0x518, struct.pack('<H', cs)); cm.write(wc + 0x518, struct.pack('<H', cs))
+        for rs in rspec_vectors(rng, 50):
+            eo = om.call('wlc_stf_spatial_expansion_get', wo, rs) & 0xff
+            ec = b.core.call('core_stf_spatial_expansion_get', b.core.core, rs) & 0xff
+            e = eo
+            to_ = om.call('wlc_stf_txchain_get', wo, rs) & 0xff
+            tc_ = b.core.call('core_stf_txchain_get', b.core.core, rs) & 0xff
+            if to_ != tc_:
+                bad += 1
+                if bad <= show:
+                    print('power: txchain_get of rspec %#010x (t=%d, txchain %#x, masks %s, ovr %s): object %d, core %d'
+                          % (rs, t, state[1], [state[0x17 + 2 * i] for i in range(6)],
+                             [state[0x22 + i] for i in range(6)], to_, tc_))
+            try:
+                po_ = om.call('wlc_stf_get_pwrperrate', wo, rs, e) & 0xff
+            except EmuError:
+                stats['skipped'] = stats.get('skipped', 0) + 1     # a group the object's table lacks
+                continue
+            pc_ = b.core.call('core_stf_get_pwrperrate', b.core.core, rs, e) & 0xff
+            wo_ = om.call('wlc_acphy_txctl1_calc', wo, rs) & 0xffff
+            wc_ = b.core.call('core_txctl1_calc', b.core.core, rs) & 0xffff
+            n += 3
+            stats['exp'].add(eo)
+            stats['p'].add(po_)
+            if wo_ >> 3 & 0x3f != po_ & 0x3f:
+                stats['olpc'] += 1
+            for what, x, y in (('expansion', eo, ec), ('pwrperrate', po_, pc_), ('txctl1', wo_, wc_)):
+                if x != y:
+                    bad += 1
+                    if bad <= show:
+                        print('power: %s of rspec %#010x (t=%d cs=%#06x cap=%d): object %#x, core %#x'
+                              % (what, rs, t, cs, cap, x, y))
+    for m, off, raw in save + save_ppr:
+        if off in (so, sc):
+            m.write(off, raw[:0x30]); m.write(off + 0x38, raw[0x38:])
+        else:
+            m.write(off, raw)
+    print('power: %d calls compared with the object (expansions seen %s, %d words changed by the '
+          'open-loop offset, %d different power values, %d rates skipped: no group in the object)'
+          % (n, sorted(stats['exp']), stats['olpc'], len(stats['p']), stats['skipped']))
+    print('power: %s' % ('same' if not bad else '%d difference(s)' % bad))
+    return bad
+
+
+def stf_bytes(side, wlc_stf):
+    raw = bytes(side.m.read(wlc_stf, 0x90))
+    return raw[:0x30] + raw[0x38:]
+
+
+def chains(a, b, show):
+    """coverage.md G5: wlc_stf_txchain_set / wlc_stf_rxchain_set of the object against the
+    core's: results, the stf block and the accesses to the card."""
+    om, cm = a.m, b.m
+    wo = a.run.d.wlc
+    so = om.r64(wo + 0x550)
+    sc = b.core.call('core_test_block', b.core.core, 1)
+    bad = 0
+    # the same starting state: attach-time fields that are not the subject (stf+0x7, 0x4d.., 0x68..)
+    raw = bytes(om.read(so, 0x90))
+    cm.write(sc, raw[:0x30])
+    cm.write(sc + 0x38, raw[0x38:])
+    # no frame pending in either (the earlier checks leave frames in the rings)
+    co, cc = om.r64(wo + 0x38), cm.r64(b.core.call('core_test_block', b.core.core, 0) + 0x38)
+    for m, blk in ((om, co), (cm, cc)):
+        m.write(blk + 0x38, bytes(8))
+    # (what, mask, force, id)
+    steps = [('tx', 1, 0, 0), ('tx', 3, 0, 0), ('tx', 1, 0, 4), ('tx', 2, 1, 3), ('tx', 3, 0, 4),
+             ('tx', 4, 0, 0), ('tx', 3, 0, 3), ('rx', 1, 0, 0), ('rx', 3, 0, 0), ('rx', 7, 0, 0),
+             ('rx', 2, 0, 0), ('rx', 3, 0, 0), ('tx', 3, 0, 0)]
+    for k, (w, mask, force, rid) in enumerate(steps):
+        na, nb = len(a.chip.trace), len(b.chip.trace)
+        if w == 'tx':
+            ro = s32(om.call('wlc_stf_txchain_set', wo, mask, force, rid))
+            rc = s32(b.core.call('core_stf_txchain_set', b.core.core, mask, force, rid))
+        else:
+            ro = s32(om.call('wlc_stf_rxchain_set', wo, mask))
+            rc = s32(b.core.call('core_stf_rxchain_set', b.core.core, mask))
+        ta, tb = a.trace_from(na), b.trace_from(nb)
+        # not compared: the MAC suspend / enable around the beacon update (env_stf.c's wlc_valid_rate
+        # is true, the object's false: questions, 5) and the core's re-read of the beamforming base
+        ta, tb = ([x for x in t if not (x[1] == 'd11' and x[2] in (288, 296)) and
+                   x[:3] not in (('R', 'shm', 64), ('R', 'shm', 176))] for t in (ta, tb))
+        if os.environ.get("CHAINS_DUMP") and k == int(os.environ["CHAINS_DUMP"]):
+            for x in ta:
+                print('  object', x)
+            for x in tb:
+                print('  core  ', x)
+        fo, fc = stf_bytes(a, so), stf_bytes(b, sc)
+        msg = []
+        if ro != rc:
+            msg.append('result: object %d, core %d' % (ro, rc))
+        for off in range(len(fo)):
+            if fo[off] != fc[off]:
+                real = off + (8 if off >= 0x30 else 0)
+                msg.append('stf+%#x: object %#x, core %#x' % (real, fo[off], fc[off]))
+        if ta != tb:
+            for i, (x, y) in enumerate(zip(ta, tb)):
+                if x != y:
+                    msg.append('access %d: object %s, core %s' % (i, x, y))
+                    break
+            else:
+                msg.append('%d accesses of the object, %d of the core' % (len(ta), len(tb)))
+        print('chains: %s mask %d force %d id %d -> %d (%d accesses)%s' % (w, mask, force, rid, ro, len(ta),
+                                                                           '' if not msg else ' DIFFERS'))
+        for x in msg[:show]:
+            print('    ' + x)
+        bad += 1 if msg else 0
+    # G5 step 5: a chain change that removes a chain waits while a frame is pending, and
+    # completes when the FIFO has drained (wlc_txfifo_complete / core_txfifo_complete)
+    wc = b.core.call('core_test_block', b.core.core, 0)
+    for m, blk in ((om, co), (cm, cc)):
+        m.write(blk + 0x38, struct.pack('<h', 1))
+    na, nb = len(a.chip.trace), len(b.chip.trace)
+    ro = s32(om.call('wlc_stf_txchain_set', wo, 1, 0, 0))
+    rc = s32(b.core.call('core_stf_txchain_set', b.core.core, 1, 0, 0))
+    msg = []
+    if (ro, rc) != (0, 0) or len(a.chip.trace) != na or len(b.chip.trace) != nb:
+        msg.append('the change was not deferred (results %d / %d)' % (ro, rc))
+    fl = (om.read(wo + 0x304, 1)[0], cm.read(wc + 0x304, 1)[0])
+    if fl[0] & 0x20 == 0 or fl[1] & 0x20 == 0 or stf_bytes(a, so) != stf_bytes(b, sc):
+        msg.append('flag bit 5 %#x / %#x or stf block differs while pending' % fl)
+    na, nb = len(a.chip.trace), len(b.chip.trace)
+    om.call('wlc_txfifo_complete', wo, 0, 1)
+    cm.write(cc + 0x38, struct.pack('<h', 0))
+    b.core.call('core_txfifo_complete', b.core.core)
+    ta, tb = a.trace_from(na), b.trace_from(nb)
+    ta, tb = ([x for x in t if not (x[1] == 'd11' and x[2] in (288, 296)) and
+               x[:3] not in (('R', 'shm', 64), ('R', 'shm', 176))] for t in (ta, tb))
+    if ta != tb or stf_bytes(a, so) != stf_bytes(b, sc) or om.read(so + 1, 1)[0] != 1:
+        msg.append('after the drain: %d / %d accesses, chains %#x / %#x' % (
+            len(ta), len(tb), om.read(so + 1, 1)[0], cm.read(sc + 1, 1)[0]))
+    print('chains: deferred while a frame is pending, completed at the drain%s' %
+          ('' if not msg else ' DIFFERS'))
+    for x in msg:
+        print('    ' + x)
+    bad += 1 if msg else 0
+    for m, blk in ((om, co), (cm, cc)):
+        m.write(blk + 0x38, bytes(8))
+    om.call('wlc_stf_txchain_set', wo, 3, 0, 0)
+    b.core.call('core_stf_txchain_set', b.core.core, 3, 0, 0)
+    print('chains: %s' % ('same' if not bad else '%d difference(s)' % bad))
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('what', nargs='*', default=['receive', 'transmit', 'status', 'ampdu', 'keys', 'ps'])
+    ap.add_argument('what', nargs='*', default=['receive', 'transmit', 'status', 'ampdu', 'power', 'chains', 'keys', 'ps'])
     ap.add_argument('--show', type=int, default=10)
     ns = ap.parse_args()
     a, b = bring_up()
