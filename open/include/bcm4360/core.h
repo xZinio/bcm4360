@@ -46,6 +46,8 @@ struct bcm4360_rxstatus {
 	u8  nss;		/* VHT: spatial streams */
 	u8  bw;			/* 0: 20, 1: 40, 2: 80 MHz */
 	u8  flags;		/* BCM4360_RX_* */
+	u8  key;		/* with BCM4360_RX_DECRYPTED / _DECRYPT_ERR: the key entry used
+				 * (ps-keys.md 2.5: RxStatus1 bits 5..10) */
 };
 
 #define BCM4360_RX_SGI		0x01	/* short guard interval */
@@ -55,6 +57,10 @@ struct bcm4360_rxstatus {
 #define BCM4360_RX_FCS_FAIL	0x10	/* frame check sequence wrong */
 #define BCM4360_RX_DECRYPTED	0x20	/* the hardware decrypted it */
 #define BCM4360_RX_AMPDU	0x40	/* part of an A-MPDU */
+/* the hardware tried to decrypt and the ICV (or, with hardware MIC keys, the TKIP MIC) check
+ * failed (ps-keys.md 2.5: RxStatus1 bits 3 and 4; the frame is garbage, the platform drops it).
+ * BCM4360_RX_DECRYPTED is not set with it. */
+#define BCM4360_RX_DECRYPT_ERR	0x80
 
 /* What the platform asks for when it transmits a frame. */
 struct bcm4360_txrate {
@@ -86,6 +92,12 @@ struct bcm4360_txparams {
 	u8  tid;		/* the TID of the session; valid with ampdu */
 	u8  peer;		/* the platform's index of the peer (< BCM4360_AMPDU_NPEERS),
 				 * as given to bcm4360_core_ampdu_tx_start(); valid with ampdu */
+	/* hardware encryption (docs/re/spec/ps-keys.md 2.4). The platform has built the
+	 * Protected bit and the IV (the CCMP / TKIP header after the 802.11 header and QoS
+	 * control) and appended the TKIP MIC; the core's engine encrypts and appends the
+	 * ICV / CCMP MIC. 0: the frame goes as it is. */
+	u8  hw_key;		/* the key entry returned by bcm4360_core_set_key(), plus 1 */
+	u16 tkip_p1k[5];	/* TKIP: the transmit phase-1 key for this frame's IV32 */
 };
 
 #define BCM4360_AMPDU_NPEERS	8
@@ -195,6 +207,39 @@ void bcm4360_core_ampdu_tx_start(struct bcm4360_core *c, u8 peer, u8 tid, u16 ss
 				 u8 max_mpdus, u8 density);
 void bcm4360_core_ampdu_tx_operational(struct bcm4360_core *c, u8 peer, u8 tid, u8 buf_size);
 void bcm4360_core_ampdu_tx_stop(struct bcm4360_core *c, u8 peer, u8 tid);
+
+/* Hardware keys (docs/re/spec/ps-keys.md 2). Cipher numbers are the hardware's. Entries 0..3
+ * are the group keys by key id, 4..53 the pairwise keys (one per peer address).
+ * set_key: `key_id` selects the entry of a group key (addr NULL); a pairwise key (addr is the
+ *   peer) takes the peer's entry, else the first free one. WEP-40 / WEP-104: key 5 / 13 bytes.
+ *   CCMP: 16 bytes. TKIP: 32 bytes in mac80211's order (temporal key 16, transmit MIC key 8,
+ *   receive MIC key 8); `rx_p1k` is the receive phase-1 key for the peer's address and IV32
+ *   `rx_iv32` (NULL: all zero and IV32 0, for a new key). TKIP group keys are not done by the
+ *   hardware (-95). Returns the entry (>= 0), or a negative error: -22 bad arguments, -28 no
+ *   free entry, -95 not supported (the platform does it in software). Writes the hardware
+ *   at once while up; else when the core is brought up.
+ * del_key: the entry is written empty.
+ * tkip_rx_update: a new receive phase-1 key and IV32 for a TKIP pairwise entry.
+ * key_state: for power save (ps-keys.md 1.2 step 4): `wpa` a key was set since the association,
+ *   `group` a group key was set; power save is not entered between the two. */
+#define BCM4360_NKEYS		54
+#define BCM4360_CIPHER_WEP40	1
+#define BCM4360_CIPHER_TKIP	2
+#define BCM4360_CIPHER_WEP104	3
+#define BCM4360_CIPHER_CCMP	5
+int bcm4360_core_set_key(struct bcm4360_core *c, u8 cipher, u8 key_id, const u8 *addr,
+			 const u8 *key, u8 keylen, const u16 *rx_p1k, u32 rx_iv32);
+void bcm4360_core_del_key(struct bcm4360_core *c, u8 entry);
+void bcm4360_core_tkip_rx_update(struct bcm4360_core *c, u8 entry, u32 iv32, const u16 *p1k);
+void bcm4360_core_key_state(struct bcm4360_core *c, bool wpa, bool group);
+
+/* Power save (docs/re/spec/ps-keys.md 1; IEEE80211_CONF_PS). The platform sends the null
+ * frames and parses the TIM (mac80211's PS_NULLFUNC_STACK mode); the core follows them: a
+ * null data frame to the BSSID with the PM bit set, passed to bcm4360_core_tx(), sets the
+ * hardware's HPS bit (the microcode puts the PM bit on the air, the core sets none itself),
+ * holds WAKE until that frame is acknowledged "PM indicated", and one without the PM bit
+ * clears HPS. bcm4360_core_set_ps() does the same from the platform's configuration. */
+void bcm4360_core_set_ps(struct bcm4360_core *c, bool ps);
 
 /* Provided by the platform; `plat` as given to bcm4360_core_attach(). */
 void bcm4360_plat_rx(void *plat, void *pkt, const struct bcm4360_rxstatus *rs);

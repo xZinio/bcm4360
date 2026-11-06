@@ -5,6 +5,7 @@
  * crypto in software); the core does what the hardware needs.
  */
 #include <linux/module.h>
+#include <linux/unaligned.h>
 
 #include "drv.h"
 
@@ -247,6 +248,17 @@ static bool allow_tx = true;
 module_param(allow_tx, bool, 0644);
 MODULE_PARM_DESC(allow_tx, "transmit frames (1, default) or drop them all (0: receive-only test)");
 
+/* power save and hardware keys are checked against the spec only (ps-keys.md):
+ * until the card has run them, power save is opt-in (with SUPPORTS_PS,
+ * CONFIG_CFG80211_DEFAULT_PS turns it on at every association), and the
+ * hardware keys can be switched off for a join test with software crypto */
+static bool powersave;
+module_param(powersave, bool, 0444);
+MODULE_PARM_DESC(powersave, "offer 802.11 power save to mac80211 (default 0: not card-tested yet)");
+static bool nohwcrypt;
+module_param(nohwcrypt, bool, 0444);
+MODULE_PARM_DESC(nohwcrypt, "all encryption in software (1) instead of the core's engine (0, default)");
+
 /* per station: the index the core knows its A-MPDU sessions by */
 struct bcm4360_sta {
 	u8 peer;
@@ -321,6 +333,24 @@ static void bcm4360_tx(struct ieee80211_hw *ieee, struct ieee80211_tx_control *c
 		p.seq_by_hw = 0;
 	}
 
+	if (info->control.hw_key) {
+		/* hardware encryption (docs/re/spec/ps-keys.md 2.4): mac80211 has put the IV into
+		 * the frame (IEEE80211_KEY_FLAG_GENERATE_IV); the core takes the key entry and, for
+		 * TKIP, the transmit phase-1 key. A frame that cannot carry them is dropped, never
+		 * sent in the clear. */
+		struct ieee80211_key_conf *key = info->control.hw_key;
+		struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+
+		if (key->hw_key_idx >= BCM4360_NKEYS || skb->len < 24 ||
+		    skb->len < ieee80211_hdrlen(hdr->frame_control) + 8) {
+			ieee80211_free_txskb(ieee, skb);
+			return;
+		}
+		p.hw_key = key->hw_key_idx + 1;
+		if (key->cipher == WLAN_CIPHER_SUITE_TKIP)
+			ieee80211_get_tkip_p1k(key, skb, p.tkip_p1k);
+	}
+
 	spin_lock_bh(&dev->lock);
 	err = dev->up ? bcm4360_core_tx(dev->core, skb, &p) : -1;
 	if (err > 0)
@@ -330,12 +360,48 @@ static void bcm4360_tx(struct ieee80211_hw *ieee, struct ieee80211_tx_control *c
 		ieee80211_free_txskb(ieee, skb);
 }
 
+/*
+ * ps-keys.md 3 "TKIP receive IV32 advance": the core decrypts with the phase-1 key for one
+ * IV32. After a frame decrypted with IV16 0xffff, the key for IV32 + 1 goes into the core
+ * (mac80211 only calls update_tkip_key for frames it decrypted itself). Called without the
+ * lock; the skb is not consumed.
+ */
+static void bcm4360_tkip_rx_next(struct bcm4360_dev *dev, struct sk_buff *skb, u8 entry)
+{
+	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+	struct ieee80211_key_conf *key;
+	u32 iv32;
+	u16 p1k[5];
+	u8 *iv;
+	int hl;
+
+	if (entry >= BCM4360_NKEYS || skb->len < 24 + 8 || !ieee80211_has_protected(hdr->frame_control))
+		return;
+	hl = ieee80211_hdrlen(hdr->frame_control);
+	if (skb->len < hl + 8)
+		return;
+	iv = skb->data + hl;
+	if (iv[0] != 0xff || iv[2] != 0xff)		/* TSC1, TSC0 */
+		return;
+	iv32 = get_unaligned_le32(iv + 4) + 1;
+	spin_lock_bh(&dev->lock);
+	key = dev->hwkey[entry];
+	if (key && key->cipher == WLAN_CIPHER_SUITE_TKIP) {
+		ieee80211_get_tkip_rx_p1k(key, hdr->addr2, iv32, p1k);
+		bcm4360_core_tkip_rx_update(dev->core, entry, iv32, p1k);
+	}
+	spin_unlock_bh(&dev->lock);
+}
+
 /* hand the frames and transmit status queued by the core's callbacks to
  * mac80211; called without the lock */
 void bcm4360_deliver(struct bcm4360_dev *dev)
 {
 	struct sk_buff_head rxq, txsq;
 	struct sk_buff *skb;
+	u16 agg_left = 0, agg_seq = 0;	/* MPDUs of the aggregate still to come; last sequence number */
+	bool agg_nack = false;
+	u8 agg_tid = 0, agg_ra[ETH_ALEN] = {};
 
 	__skb_queue_head_init(&rxq);
 	__skb_queue_head_init(&txsq);
@@ -348,6 +414,12 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 		struct bcm4360_rxstatus rs;
 
 		memcpy(&rs, skb->cb, sizeof(rs));
+		if (rs.flags & BCM4360_RX_DECRYPT_ERR) {	/* ps-keys.md 2.5 step 4: garbage */
+			dev_kfree_skb(skb);
+			continue;
+		}
+		if (rs.flags & BCM4360_RX_DECRYPTED)
+			bcm4360_tkip_rx_next(dev, skb, rs.key);
 		if (!bcm4360_rx_status(dev, &rs, IEEE80211_SKB_RXCB(skb))) {
 			dev_kfree_skb(skb);
 			continue;
@@ -358,9 +430,30 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 		struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
 		struct bcm4360_txstatus ts;
 		u8 asked[IEEE80211_TX_MAX_RATES];
+		bool bar = false;
 		int i, left;
 
 		memcpy(&ts, info->status.status_driver_data, sizeof(ts));
+		if (ts.ampdu) {
+			/* ampdu.md 2.4: one BlockAckReq after an aggregate with an MPDU that was not
+			 * acknowledged, SSN = the last MPDU's sequence number + 1 (once per aggregate) */
+			struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+
+			if (ts.ampdu_len) {
+				agg_left = ts.ampdu_len;
+				agg_nack = false;
+			}
+			if (agg_left && skb->len >= 26 && ieee80211_is_data_qos(hdr->frame_control)) {
+				agg_left--;
+				agg_nack |= !ts.acked;
+				agg_seq = IEEE80211_SEQ_TO_SN(le16_to_cpu(hdr->seq_ctrl));
+				agg_tid = ieee80211_get_tid(hdr);
+				ether_addr_copy(agg_ra, hdr->addr1);
+				bar = !agg_left && agg_nack;
+			} else if (agg_left) {
+				agg_left--;
+			}
+		}
 		left = ts.tries;
 		/* clear_status zeroes the try counts asked for: keep them */
 		for (i = 0; i < IEEE80211_TX_MAX_RATES; i++)
@@ -400,6 +493,12 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 		if (ts.acked && !(info->flags & IEEE80211_TX_CTL_NO_ACK))
 			info->flags |= IEEE80211_TX_STAT_ACK;
 		ieee80211_tx_status_ni(dev->ieee, skb);
+		if (bar && READ_ONCE(dev->vif)) {
+			local_bh_disable();
+			ieee80211_send_bar(READ_ONCE(dev->vif), agg_ra, agg_tid,
+					   (agg_seq + 1) & (IEEE80211_SN_MODULO - 1));
+			local_bh_enable();
+		}
 	}
 }
 
@@ -475,6 +574,8 @@ static int bcm4360_config(struct ieee80211_hw *ieee, int radio_idx, u32 changed)
 				dev->chanspec = cs;
 		}
 	}
+	if (changed & IEEE80211_CONF_CHANGE_PS)		/* ps-keys.md 1.9 */
+		bcm4360_core_set_ps(dev->core, !!(conf->flags & IEEE80211_CONF_PS));
 	if (changed & IEEE80211_CONF_CHANGE_POWER)
 		bcm4360_core_set_txpower(dev->core, conf->power_level > 0 ? conf->power_level * 4 : 0);
 	spin_unlock_bh(&dev->lock);
@@ -492,6 +593,13 @@ static void bcm4360_bss_info_changed(struct ieee80211_hw *ieee, struct ieee80211
 			 BSS_CHANGED_BEACON_INT | BSS_CHANGED_BASIC_RATES |
 			 BSS_CHANGED_BEACON_INFO)))
 		return;
+	if ((changed & BSS_CHANGED_ASSOC) && !vif->cfg.assoc) {
+		/* ps-keys.md 1.2 step 4: power save waits for the group key of the next handshake */
+		spin_lock_bh(&dev->lock);
+		dev->wpa_seen = dev->group_seen = false;
+		bcm4360_core_key_state(dev->core, false, false);
+		spin_unlock_bh(&dev->lock);
+	}
 	memset(&bss, 0, sizeof(bss));
 	if (info->bssid)
 		memcpy(bss.bssid, info->bssid, ETH_ALEN);
@@ -637,6 +745,103 @@ static int bcm4360_ampdu_action(struct ieee80211_hw *ieee, struct ieee80211_vif 
 	return -EOPNOTSUPP;
 }
 
+/*
+ * Hardware keys (docs/re/spec/ps-keys.md 2.7). The core's engine does CCMP (pairwise and
+ * group) and TKIP (pairwise); everything else is mac80211's software crypto (-EOPNOTSUPP):
+ * WEP (simplest, and obsolete), TKIP group keys (the object's hardware does not enable
+ * them either, 2.1), BIP / GCMP / CCMP-256 (no hardware support, 2.6), and every key that
+ * decrypts management frames (IEEE80211_KEY_FLAG_RX_MGMT: whether the core touches them is
+ * open question 4). mac80211 builds the IV (GENERATE_IV), does the TKIP Michael MIC in
+ * software (GENERATE_MMIC; the core's MIC engine needs capability bit 31, open question 3)
+ * and checks the replay counters. May sleep: only the spinlock is taken.
+ */
+static int bcm4360_set_key(struct ieee80211_hw *ieee, enum set_key_cmd cmd,
+			   struct ieee80211_vif *vif, struct ieee80211_sta *sta,
+			   struct ieee80211_key_conf *key)
+{
+	struct bcm4360_dev *dev = ieee->priv;
+	bool pairwise = sta && (key->flags & IEEE80211_KEY_FLAG_PAIRWISE);
+	u16 p1k[5];
+	u8 cipher;
+	int idx;
+
+	if (nohwcrypt)
+		return -EOPNOTSUPP;
+	if (cmd == DISABLE_KEY) {
+		idx = key->hw_key_idx;
+		if (idx < 0 || idx >= BCM4360_NKEYS)
+			return 0;
+		spin_lock_bh(&dev->lock);
+		if (dev->hwkey[idx] == key) {	/* not if a new key of the peer took the entry */
+			dev->hwkey[idx] = NULL;
+			bcm4360_core_del_key(dev->core, idx);
+		}
+		spin_unlock_bh(&dev->lock);
+		return 0;
+	}
+
+	/* power save waits for the group key (ps-keys.md 1.2 step 4): note every key, also
+	 * those mac80211 keeps in software */
+	spin_lock_bh(&dev->lock);
+	dev->wpa_seen = true;
+	if (!pairwise)
+		dev->group_seen = true;
+	bcm4360_core_key_state(dev->core, dev->wpa_seen, dev->group_seen);
+	spin_unlock_bh(&dev->lock);
+
+	switch (key->cipher) {
+	case WLAN_CIPHER_SUITE_CCMP:
+		cipher = BCM4360_CIPHER_CCMP;
+		break;
+	case WLAN_CIPHER_SUITE_TKIP:
+		if (!pairwise)
+			return -EOPNOTSUPP;
+		cipher = BCM4360_CIPHER_TKIP;
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+	if ((key->flags & IEEE80211_KEY_FLAG_RX_MGMT) || (!pairwise && sta))
+		return -EOPNOTSUPP;
+	if (cipher == BCM4360_CIPHER_TKIP)
+		/* a new key: the receive IV32 is 0 (ps-keys.md 2.2 step 5) */
+		ieee80211_get_tkip_rx_p1k(key, sta->addr, 0, p1k);
+
+	spin_lock_bh(&dev->lock);
+	idx = bcm4360_core_set_key(dev->core, cipher, key->keyidx, pairwise ? sta->addr : NULL,
+				   key->key, key->keylen,
+				   cipher == BCM4360_CIPHER_TKIP ? p1k : NULL, 0);
+	if (idx >= 0)
+		dev->hwkey[idx] = key;
+	spin_unlock_bh(&dev->lock);
+	if (idx < 0)
+		return -EOPNOTSUPP;		/* also "no free entry": software takes the key */
+
+	key->hw_key_idx = idx;
+	key->flags |= IEEE80211_KEY_FLAG_GENERATE_IV;
+	if (cipher == BCM4360_CIPHER_TKIP)
+		key->flags |= IEEE80211_KEY_FLAG_GENERATE_MMIC;
+	else
+		key->flags |= IEEE80211_KEY_FLAG_SW_MGMT_TX;
+	return 0;
+}
+
+/* ps-keys.md 3: a new receive phase-1 key; called in the context of receive, atomic */
+static void bcm4360_update_tkip_key(struct ieee80211_hw *ieee, struct ieee80211_vif *vif,
+				    struct ieee80211_key_conf *conf, struct ieee80211_sta *sta,
+				    u32 iv32, u16 *p1k)
+{
+	struct bcm4360_dev *dev = ieee->priv;
+	int idx = conf->hw_key_idx;
+
+	if (idx < 0 || idx >= BCM4360_NKEYS)
+		return;
+	spin_lock_bh(&dev->lock);
+	if (dev->hwkey[idx] == conf)
+		bcm4360_core_tkip_rx_update(dev->core, idx, iv32, p1k);
+	spin_unlock_bh(&dev->lock);
+}
+
 static const struct ieee80211_ops bcm4360_ops = {
 	.tx = bcm4360_tx,
 	.wake_tx_queue = ieee80211_handle_wake_tx_queue,
@@ -654,6 +859,8 @@ static const struct ieee80211_ops bcm4360_ops = {
 	.sta_add = bcm4360_sta_add,
 	.sta_remove = bcm4360_sta_remove,
 	.ampdu_action = bcm4360_ampdu_action,
+	.set_key = bcm4360_set_key,
+	.update_tkip_key = bcm4360_update_tkip_key,
 	.add_chanctx = ieee80211_emulate_add_chanctx,
 	.remove_chanctx = ieee80211_emulate_remove_chanctx,
 	.change_chanctx = ieee80211_emulate_change_chanctx,
@@ -682,7 +889,14 @@ int bcm4360_mac80211_register(struct bcm4360_dev *dev)
 	ieee80211_hw_set(ieee, SIGNAL_DBM);
 	ieee80211_hw_set(ieee, RX_INCLUDES_FCS);	/* frames.md 1.8: the FCS stays on the frame */
 	ieee80211_hw_set(ieee, REPORTS_TX_ACK_STATUS);
-	ieee80211_hw_set(ieee, MFP_CAPABLE);	/* crypto in software */
+	ieee80211_hw_set(ieee, MFP_CAPABLE);	/* BIP and management frames in software */
+	/* ps-keys.md 1.9: the core follows the null frames mac80211 sends and the TIM it parses
+	 * (PS_NULLFUNC_STACK, which also leaves dynamic power save to mac80211): independent of
+	 * whether the microcode overrides the PM bit of the host (open question 1) */
+	if (powersave) {
+		ieee80211_hw_set(ieee, SUPPORTS_PS);
+		ieee80211_hw_set(ieee, PS_NULLFUNC_STACK);
+	}
 	ieee80211_hw_set(ieee, AMPDU_AGGREGATION);	/* ampdu.md: the microcode builds the A-MPDUs */
 	ieee->sta_data_size = sizeof(struct bcm4360_sta);
 	ieee->queues = IEEE80211_NUM_ACS;

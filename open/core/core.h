@@ -36,6 +36,7 @@
 
 #include "frames.h"
 #include "wlchw.h"
+#include "pskeys.h"
 
 #define FIELD(p, off, type)	(*(type *)((u8 *)(p) + (off)))
 
@@ -229,6 +230,9 @@ struct bcm4360_core {
 
 	/* the frame path (frames.c, frames.h; docs/re/spec/frames.md) */
 	struct core_frames fr;
+
+	/* power save and hardware keys (keys.c, ps.c; docs/re/spec/ps-keys.md) */
+	struct core_pskeys pk;
 };
 
 /* the MAC layer's block, made by its attach */
@@ -346,5 +350,19 @@ void *core_cp_limits(struct bcm4360_core *c, u16 cs);	/* a ratepwr container, to
 void core_cp_free(struct bcm4360_core *c, void *p);
 bool core_cp_quiet(struct bcm4360_core *c, u16 cs);
 void core_w_stf_txchain_set(struct bcm4360_core *c, u8 mask);
+void core_w_set_wake_ctrl(struct bcm4360_core *c);	/* wlc_set_wake_ctrl, after a request changed */
+
+/* keys.c: docs/re/spec/ps-keys.md 2 */
+void core_keys_reinit(struct bcm4360_core *c);		/* after the table was cleared at init */
+int core_keys_tx(struct bcm4360_core *c, u32 entry, u8 *cipher, u8 *icvlen);
+/* ps.c: docs/re/spec/ps-keys.md 1 */
+bool core_ps_wake_req(struct bcm4360_core *c);		/* a wake request is held (wlc_stay_awake) */
+void core_ps_down(struct bcm4360_core *c);
+void core_ps_bss(struct bcm4360_core *c, bool joined, bool left);
+void core_ps_chanspec(struct bcm4360_core *c);
+void core_ps_tx_frame(struct bcm4360_core *c, const u8 *f, u32 len, u16 frame_id);
+void core_ps_txstatus(struct bcm4360_core *c, u32 w0);
+void core_ps_beacon(struct bcm4360_core *c, const u8 *f, u32 len, u8 rate, u8 enc, u8 flags);
+void core_ps_watchdog(struct bcm4360_core *c);
 
 #endif

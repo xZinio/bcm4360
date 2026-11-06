@@ -188,6 +188,7 @@ def info(side):
 # ----------------------------------------------------------------- receive
 
 F_SGI, F_LDPC, F_STBC, F_SHORT, F_FCS, F_DEC, F_AMPDU = 1, 2, 4, 8, 0x10, 0x20, 0x40
+F_DECERR = 0x80
 NRXD = 1024
 
 
@@ -282,8 +283,8 @@ def expect(v, st):
             if amp:
                 st['rate'] = (enc, rate, nss, bw, fl)
         fl |= F_AMPDU if amp else 0
-    if v['st1'] & 8 and not v['st1'] & 0x10:
-        fl |= F_DEC
+    if v['st1'] & 8:
+        fl |= F_DECERR if v['st1'] & 0x10 else F_DEC
     return (enc, rate, nss, bw, fl)
 
 
@@ -402,14 +403,17 @@ TXH = 4                         # the prefix; the header follows
 ENTRY = 0x14
 
 
-def txparams(m, fifo, rates, no_ack=0, rts=0, cts=0, seq_by_hw=0, ampdu=0, tid=0, peer=0):
+def txparams(m, fifo, rates, no_ack=0, rts=0, cts=0, seq_by_hw=0, ampdu=0, tid=0, peer=0,
+             hw_key=0, p1k=(0, 0, 0, 0, 0)):
     """struct bcm4360_txparams in the machine's memory; rates: (enc, rate, nss, bw, flags)."""
-    raw = bytearray(36)
+    raw = bytearray(48)
     raw[0], raw[1] = fifo, len(rates)
     for i, r in enumerate(rates):
         raw[2 + 6 * i:2 + 6 * i + 6] = bytes(list(r) + [0] * (5 - len(r)) + [1])
     raw[26], raw[27], raw[28], raw[29] = no_ack, rts, cts, seq_by_hw
     raw[30], raw[31], raw[32] = ampdu, tid, peer
+    raw[33] = hw_key
+    raw[34:44] = struct.pack('<5H', *p1k)
     return m.buf(bytes(raw))
 
 
@@ -864,10 +868,248 @@ def ampdu(a, b, show):
     return bad
 
 
+# --------------------------------------------------------------- keys, ps
+
+PEER = bytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55])
+OWN_PM = 0x10
+
+
+def shm_writes(side, n0):
+    """The shared-memory writes since trace position n0, as {offset: value} in order."""
+    return [(x[2], x[4]) for x in side.trace_from(n0) if x[0] == 'W' and x[1] == 'shm']
+
+
+def amt_writes(side, n0):
+    return [(x[2], x[4]) for x in side.trace_from(n0) if x[0] == 'W' and x[1] == 'amt']
+
+
+def key_words(key, base=0):
+    """The 16 key bytes as the 8 shared-memory words at `base` (ps-keys.md 2.1)."""
+    k = (bytes(key) + bytes(16))[:16]
+    return [(base + 2 * i, k[2 * i] | k[2 * i + 1] << 8) for i in range(8)]
+
+
+def set_key(b, cipher, key_id, addr, key, p1k=None, iv32=0):
+    m, c = b.m, b.core
+    ap = m.buf(addr) if addr else 0
+    kp = m.buf(bytes(key))
+    pp = m.buf(struct.pack('<5H', *p1k)) if p1k else 0
+    return s32(c.call('bcm4360_core_set_key', c.core, cipher, key_id, ap, kp, len(key), pp, iv32))
+
+
+def keys(a, b, show):
+    """ps-keys.md 2.1 to 2.5: the key table, the index block, the AMT binding, the transmit
+    header's key bytes and the receive flags. Checked against the spec only (the object's key
+    code cannot be called from outside)."""
+    bad = 0
+    c = b.core
+    if not hasattr(b, 'posted'):
+        b.posted = {}
+
+    def fail(msg):
+        nonlocal bad
+        bad += 1
+        print('keys: ' + msg)
+
+    # CCMP pairwise (2.7): entry 4, index word 0x45, AMT[0] = peer, attribute 0x8004
+    ck = bytes(range(0x10, 0x20))
+    n0 = len(b.chip.trace)
+    r = set_key(b, 5, 0, PEER, ck)
+    want = [(0x5e0 + 8, 0x45)] + key_words(ck, 16 * 4)
+    if r != 4 or shm_writes(b, n0) != want or amt_writes(b, n0) != [(0, 0), (4, 0),
+                                                                    (0, 0x33221100), (4, 0x80045544)]:
+        fail('CCMP pairwise: entry %d, shm %s, amt %s' % (r, shm_writes(b, n0), amt_writes(b, n0)))
+    # CCMP group key id 1: entry 1, 0x15, no AMT write
+    n0 = len(b.chip.trace)
+    r = set_key(b, 5, 1, None, ck)
+    if r != 1 or shm_writes(b, n0)[0] != (0x5e0 + 2, 0x15) or amt_writes(b, n0):
+        fail('CCMP group: entry %d, shm %s, amt %s' % (r, shm_writes(b, n0)[:1], amt_writes(b, n0)))
+    # TKIP group: not in hardware; bad lengths and ciphers
+    tk = bytes(range(0x30, 0x50))
+    for name, got in (('TKIP group', set_key(b, 2, 2, None, tk)),
+                      ('short CCMP key', set_key(b, 5, 0, PEER, ck[:8])),
+                      ('cipher 4', set_key(b, 4, 0, PEER, ck))):
+        if got not in (-95, -22):
+            fail('%s: %d' % (name, got))
+    # TKIP pairwise replaces the CCMP key of the same peer: entry 4 again, 0x42, phase-1 block
+    p1k = (0x1111, 0x2222, 0x3333, 0x4444, 0x5555)
+    n0 = len(b.chip.trace)
+    r = set_key(b, 2, 0, PEER, tk, p1k, 0x00030002)
+    sw = shm_writes(b, n0)
+    want = [(0x5e0 + 8, 0x42)] + key_words(tk, 16 * 4) + \
+        [(0x2e0 + 14 * 4 + 2 * i, p1k[i]) for i in range(5)] + \
+        [(0x2e0 + 14 * 4 + 10, 2), (0x2e0 + 14 * 4 + 12, 3)]
+    if r != 4 or sw != want:
+        fail('TKIP pairwise: entry %d, shm %s' % (r, sw))
+    # a second peer gets entry 5
+    if set_key(b, 5, 0, bytes([2, 3, 4, 5, 6, 7]), ck) != 5:
+        fail('second peer is not entry 5')
+    # update of the receive phase-1 key: the seven words only
+    n0 = len(b.chip.trace)
+    c.call('bcm4360_core_tkip_rx_update', c.core, 4, 0x10005, b.m.buf(struct.pack('<5H', 1, 2, 3, 4, 5)))
+    want = [(0x2e0 + 14 * 4 + 2 * i, i + 1) for i in range(5)] + \
+        [(0x2e0 + 14 * 4 + 10, 5), (0x2e0 + 14 * 4 + 12, 1)]
+    if shm_writes(b, n0) != want or amt_writes(b, n0):
+        fail('tkip_rx_update: %s' % shm_writes(b, n0))
+
+    # transmit header (2.4): CCMP entry 5, TKIP entry 4 with phase-1 key and IV bytes 0..2
+    def hdr(fifo, key_entry, cipher_iv, **kw):
+        fc = bytes([0x88, 0x41, 0, 0]) + PEER + bytes(range(6, 18)) + bytes([0x10, 0, 0, 0]) + cipher_iv
+        fr = fc + bytes(range(40))
+        r, d = post(b, fifo, fr, [LEG_R], hw_key=key_entry + 1, **kw)
+        return r, d, fr
+
+    b.posted.setdefault(2, [])
+    ccmp_iv = bytes([1, 0, 0, 0x20, 0, 0, 0, 0])
+    r, d, fr = hdr(2, 5, ccmp_iv)
+    if r < 0:
+        fail('CCMP frame not taken (%d)' % r)
+    else:
+        h = d[TXH:]
+        flen = struct.unpack_from('<H', h, 0x0a)[0]
+        if h[0x64] != 0x50 or h[0x65] != 5 or flen != len(fr) + 4 + 8 or h[0x66:0x7c] != bytes(22):
+            fail('CCMP header: %02x %02x len %d %s' % (h[0x64], h[0x65], flen, h[0x66:0x7c].hex()))
+    iv = bytes([0x00, 0x20, 0x02, 0x20, 0, 0, 0, 0])
+    r, d, fr = hdr(2, 4, iv, p1k=p1k)
+    if r < 0:
+        fail('TKIP frame not taken (%d)' % r)
+    else:
+        h = d[TXH:]
+        flen = struct.unpack_from('<H', h, 0x0a)[0]
+        if (h[0x64], h[0x65], flen) != (0x20, 4, len(fr) + 4 + 4) or \
+                h[0x6c:0x76] != struct.pack('<5H', *p1k) or h[0x76:0x79] != iv[:3]:
+            fail('TKIP header: %02x %02x len %d %s' % (h[0x64], h[0x65], flen, h[0x6c:0x79].hex()))
+    # refused: unknown entry, frame without the Protected bit, frame too short for its IV
+    r, _ = post(b, 2, bytes([0x88, 0x01, 0, 0]) + PEER + bytes(30), [LEG_R], hw_key=5)
+    r2, _ = post(b, 2, bytes([0x88, 0x41, 0, 0]) + PEER + bytes(30), [LEG_R], hw_key=40)
+    r3, _ = post(b, 2, bytes([0x88, 0x41, 0, 0]) + PEER + bytes(14), [LEG_R], hw_key=5)
+    if (r, r2, r3) != (-1, -1, -1):
+        fail('refused frames returned %s' % ((r, r2, r3),))
+    # without a key: bytes 0x64.. stay 0
+    r, d = post(b, 2, qos_frame(5, 0), [LEG_R])
+    if r < 0 or d[TXH + 0x64:TXH + 0x7c] != bytes(0x18):
+        fail('plain frame has key bytes')
+
+    # delete: the entry empty, AMT cleared keeping the attribute 0x0004 (2.3 step 2)
+    n0 = len(b.chip.trace)
+    c.call('bcm4360_core_del_key', c.core, 5)
+    want = [(0x5e0 + 10, 0x50)] + key_words(b'', 16 * 5)
+    if shm_writes(b, n0) != want or amt_writes(b, n0) != [(8, 0), (12, 0x00040000)]:
+        fail('del_key: shm %s, amt %s' % (shm_writes(b, n0)[:2], amt_writes(b, n0)))
+    for e in (4, 1):
+        c.call('bcm4360_core_del_key', c.core, e)
+    print('keys: %s' % ('same' if not bad else '%d difference(s)' % bad))
+    return bad
+
+
+def beacon_vec(rng, bssid):
+    v = vec(rng, 'beacon', bytes([2, 0x11, 0x22, 0, 0, 0]), 1)
+    fr = bytes([0x80, 0, 0, 0]) + bytes([0xff] * 6) + bssid + bssid + bytes(2) + \
+        struct.pack('<QHH', 0x123456, 100, 0x11) + bytes(range(16)) + bytes(4)
+    body = bytes([2, 0x11, 0x22, 0, 0, 0]) + fr
+    v.update(frame=fr, body=body, size=len(body), nlen=len(fr))
+    return v
+
+
+def mctrl_bits(side, n0):
+    """(HPS, WAKE) in D11(0x120) after the steps since n0 (suspend / enable of the MAC toggle
+    WAKE inside a step, so only the end state is compared)."""
+    v = side.d11.peek(0x120)
+    return (v >> 25 & 1, v >> 26 & 1)
+
+
+def ps(a, b, show):
+    """ps-keys.md 1.3 to 1.5, 1.8, 1.9: the HPS and WAKE bits through the join, a beacon, the
+    null frame with the PM bit, its status, and the null frame without it. Spec only."""
+    bad = 0
+    c, m = b.core, b.m
+    rng = random.Random(3)
+    if not hasattr(b, 'posted'):
+        b.posted = {}
+
+    def fail(msg):
+        nonlocal bad
+        bad += 1
+        print('ps: ' + msg)
+
+    def bits(fn):
+        n0 = len(b.chip.trace)
+        fn()
+        return mctrl_bits(b, n0)
+
+    def null(pm):
+        fr = bytes([0x48, 0x01 | (OWN_PM if pm else 0), 0, 0]) + PEER + bytes(range(6, 12)) + PEER + bytes(2)
+        r, d = post(b, 1, fr, [LEG_R])
+        return r, d
+
+    def done(d, w0low):
+        fid = struct.unpack_from('<H', d, TXH + 0x0c)[0]
+        b.sregs.q.append((w0low | 1 << 8 | fid << 16, 0, 1, 0, 1, 0, 0, 0))
+        b.hw.set_status(txch(1), b.hw.posted(txch(1), 1), ST_IDLE)
+        run_irq(b, None, MI_TFS)
+
+    if not hasattr(b, 'sregs'):
+        b.sregs = StatusRegs(b)
+    core_call(b, 'bcm4360_core_intrson')
+    b.posted.setdefault(1, [])
+    bss = bytearray(32)
+    bss[0:6] = PEER
+    bss[6] = 1
+    struct.pack_into('<HH', bss, 8, 1, 100)
+    bss[12] = 2
+    bp = m.buf(bytes(bss))
+    # the join holds WAKE until the first beacon (1.8); no HPS
+    got = bits(lambda: c.call('bcm4360_core_set_bss', c.core, bp))
+    if got != (0, 1):
+        fail('join: %s' % (got,))
+    got = bits(lambda: (deliver(b, [rx_bytes(beacon_vec(rng, bytes([9] * 6)), a.cs)]),
+                        run_irq(b, None, MI_DMAINT)))
+    if got != (0, 1):
+        fail('foreign beacon: %s' % (got,))
+    got = bits(lambda: (deliver(b, [rx_bytes(beacon_vec(rng, PEER), a.cs)]),
+                        run_irq(b, None, MI_DMAINT)))
+    if got != (0, 0):
+        fail('beacon of the BSS: %s' % (got,))
+    # no key was set: power save is allowed. A null frame with PM: HPS, then WAKE (pending)
+    res = {}
+    got = bits(lambda: res.update(r=null(True)))
+    if got != (1, 1) or res['r'][0] < 0:
+        fail('null with PM: %s' % (got,))
+    got = bits(lambda: done(res['r'][1], 1 | 0x8000))      # acknowledged, "PM indicated" missing
+    if got != (1, 1):
+        fail('ack without PM indicated: %s' % (got,))
+    got = bits(lambda: (res.update(r=null(True)), done(res['r'][1], 1 | 0x8000 | 8)))
+    if got != (1, 0):
+        fail('ack with PM indicated: %s' % (got,))
+    # configuration says power save off: HPS off, WAKE held for the frame that ends it
+    got = bits(lambda: c.call('bcm4360_core_set_ps', c.core, 0))
+    if got != (0, 1):
+        fail('set_ps(0): %s' % (got,))
+    got = bits(lambda: res.update(r=null(False)))
+    if got != (0, 1) or res['r'][0] < 0:
+        fail('null without PM: %s' % (got,))
+    got = bits(lambda: done(res['r'][1], 1 | 0x8000))
+    if got != (0, 0):
+        fail('status of the leave frame: %s' % (got,))
+    # a group key must exist first once a key was set (1.2 step 4)
+    c.call('bcm4360_core_key_state', c.core, 1, 0)
+    got = bits(lambda: c.call('bcm4360_core_set_ps', c.core, 1))
+    if got != (0, 0):
+        fail('set_ps with a pairwise key only: %s' % (got,))
+    got = bits(lambda: c.call('bcm4360_core_key_state', c.core, 1, 1))
+    if got != (1, 1):
+        fail('group key arrives: %s' % (got,))
+    got = bits(lambda: c.call('bcm4360_core_set_bss', c.core, m.buf(bytes(32))))
+    if got != (0, 0):
+        fail('disassociation: %s' % (got,))
+    print('ps: %s' % ('same' if not bad else '%d difference(s)' % bad))
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('what', nargs='*', default=['receive', 'transmit', 'status', 'ampdu'])
+    ap.add_argument('what', nargs='*', default=['receive', 'transmit', 'status', 'ampdu', 'keys', 'ps'])
     ap.add_argument('--show', type=int, default=10)
     ns = ap.parse_args()
     a, b = bring_up()

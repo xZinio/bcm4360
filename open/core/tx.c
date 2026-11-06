@@ -22,6 +22,12 @@
 #define RTS_CTS_SELF		0x0008
 #define RTS_OFDM		0x0001
 
+/* the key bytes of the transmit header (frames.md 3.3 "Cache part", ps-keys.md 2.4) */
+#define TXH_KEY_CIPHER		0x64	/* hardware cipher << 4 */
+#define TXH_KEY_ENTRY		0x65	/* key entry */
+#define TXH_TKIP_P1K		0x6c	/* TKIP: transmit phase-1 key, 5 words */
+#define TXH_TKIP_IV		0x76	/* TKIP: IV bytes 0..2 */
+
 /* the flow control of the platform's queues (frames.md 3.8) */
 #define TX_STOP_BELOW		4	/* free descriptors: the FIFO counts as full */
 #define TX_WAKE_FROM		32
@@ -238,9 +244,25 @@ static u32 tx_hdrlen(const u8 *f, u32 len)
 	return n < len ? n : len;
 }
 
+/* ps-keys.md 2.4 step 2: the key bytes of the header (the IV is the platform's, in the frame) */
+static void tx_key_bytes(u8 *h, const u8 *f, u32 hdrlen, const struct bcm4360_txparams *p,
+			 u8 cipher)
+{
+	u32 i;
+
+	h[TXH_KEY_CIPHER] = cipher << 4;
+	h[TXH_KEY_ENTRY] = p->hw_key - 1;
+	if (cipher != PK_CIPHER_TKIP)
+		return;
+	for (i = 0; i < 5; i++)
+		put16(h, TXH_TKIP_P1K + 2 * i, p->tkip_p1k[i]);
+	for (i = 0; i < 3; i++)
+		h[TXH_TKIP_IV + i] = f[hdrlen + i];
+}
+
 /* frames.md 3.3, 3.4: the header in front of the frame*/
 static void tx_header(struct bcm4360_core *c, u8 *h, const u8 *f, u32 len,
-		      const struct bcm4360_txparams *p, u16 id, bool agg)
+		      const struct bcm4360_txparams *p, u16 id, bool agg, u8 cipher, u8 icv)
 {
 	/* ampdu.md 1.4 step 3: RTS/CTS before every A-MPDU; step 1: the host's sequence number */
 	bool rts = p->rts || agg;
@@ -250,7 +272,7 @@ static void tx_header(struct bcm4360_core *c, u8 *h, const u8 *f, u32 len,
 	u16 low = TXC_FIRST_FRAG, high = 0;
 	bool qos = type == 2 && (f[0] & 0x80);
 	bool to_ap = (f[1] & 3) == 1;
-	u32 hdrlen = tx_hdrlen(f, len);
+	u32 hdrlen = tx_hdrlen(f, len), flen;
 
 	hw_memset(h, 0, TX_HDR_LEN);
 	if (!(f[4] & 1) && !p->no_ack && (type != 2 || !qos || !(f[hdrlen - 2] & 0x60)))
@@ -268,7 +290,8 @@ static void tx_header(struct bcm4360_core *c, u8 *h, const u8 *f, u32 len,
 	put16(h, TXH_CTL_HIGH, high);
 	put16(h, TXH_CHANSPEC, c->chanspec);
 	h[TXH_IVOFFSET] = hdrlen;
-	put16(h, TXH_FRAMELEN, len + 4);
+	flen = len + 4 + icv;			/* ps-keys.md 2.4 step 2: plus the ICV / MIC */
+	put16(h, TXH_FRAMELEN, flen);
 	put16(h, TXH_FRAMEID, id);
 	if (!hwseq && len >= 24)
 		put16(h, TXH_SEQ, f[22] | (u16)f[23] << 8);
@@ -277,10 +300,12 @@ static void tx_header(struct bcm4360_core *c, u8 *h, const u8 *f, u32 len,
 		const struct bcm4360_txrate *r = &p->rates[i];
 
 		tx_phyctl(c, e, r);
-		tx_plcp(e + 6, r, len + 4, to_ap);
+		tx_plcp(e + 6, r, flen, to_ap);
 		put16(e, 0x0e, txrate_500k(r));
 		put16(e, 0x10, tx_rtsctl(p, r, i == p->nrates - 1, rts));
 	}
+	if (cipher)
+		tx_key_bytes(h, f, hdrlen, p, cipher);
 }
 
 /* frames.md 3.2, 3.8: the free descriptors of a FIFO's engine */
@@ -304,6 +329,7 @@ int bcm4360_core_tx(struct bcm4360_core *c, void *pkt, const struct bcm4360_txpa
 	struct bcm4360_dma *di;
 	u32 len, avail;
 	u8 *f, *h;
+	u8 cipher = 0, icv = 0;
 	u16 id;
 
 	if (!c->up || !p->nrates || p->nrates > TX_NRATES)
@@ -319,9 +345,18 @@ int bcm4360_core_tx(struct bcm4360_core *c, void *pkt, const struct bcm4360_txpa
 		return -1;
 
 	f = osl_pktdata(c->osh, pkt);
+	if (p->hw_key) {
+		/* ps-keys.md 2.4: the key must exist, the frame must be protected and carry its IV;
+		 * else the platform drops it (never send in the clear what should be encrypted) */
+		if (core_keys_tx(c, p->hw_key - 1u, &cipher, &icv) || !(f[1] & 0x40) ||
+		    len < tx_hdrlen(f, len) + (cipher == PK_CIPHER_TKIP || cipher == PK_CIPHER_CCMP ?
+					       8u : 4u))
+			return -1;
+	}
 	h = osl_pktpush(c->osh, pkt, TX_HEADROOM);
 	id = p->fifo | ((c->fr.txid & 0x3f) << 9);
-	tx_header(c, h + TX_PREFIX_LEN, f, len, p, id, core_ampdu_is_agg(c, p));
+	tx_header(c, h + TX_PREFIX_LEN, f, len, p, id, core_ampdu_is_agg(c, p), cipher, icv);
+	core_ps_tx_frame(c, f, len, id);		/* a null frame: ps-keys.md 1.4 */
 	h[0] = 0x02;				/* the prefix (3.2); byte 2 bit 1 is the A-MPDU epoch */
 	h[1] = h[2] = h[3] = 0;
 	core_ampdu_header(c, h, h + TX_PREFIX_LEN, f, p);	/* ampdu.md 1.4-1.6 */
@@ -445,6 +480,7 @@ static bool tx_status_one(struct bcm4360_core *c, u32 w0, u32 w1, u32 w2, u32 w3
 	ts.acked = ((w0 & 0x8000) || ncons > 1) && !((w0 >> 4) & 0xf) && !((w1 >> 16) & 0xff);
 	ts.tries = (w2 & 0xff) + ((w2 >> 16) & 0xff) + (w3 & 0xff) + ((w3 >> 16) & 0xff);
 	ts.rate_idx = (w3 >> 16) & 0xff ? 3 : (w3 & 0xff) ? 2 : ((w2 >> 16) & 0xff) ? 1 : 0;
+	core_ps_txstatus(c, w0);			/* wlc_update_pmstate (ps-keys.md 1.5) */
 	tx_report(c, fifo, di, pkt, &ts);
 	return false;
 }

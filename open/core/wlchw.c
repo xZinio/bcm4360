@@ -308,17 +308,33 @@ static void ucode_mac_upd(struct bcm4360_core *c)
 /* wlc_stay_awake (5.6): what keeps the WAKE bit */
 static bool stay_awake(struct bcm4360_core *c)
 {
-	return c->w.scanning != 0;
+	return c->w.scanning != 0 || core_ps_wake_req(c);	/* ps-keys.md 1.1: the requests of ps.c */
 }
 
 /* sub_03a14c, wlc_set_wake_ctrl (1.4 step 29) */
 static void set_wake_ctrl(struct bcm4360_core *c)
 {
 	bool s = stay_awake(c);
+	u32 budget = 0, waited = 0;
 
 	(void)d11_read32(c->hw, D11_MACCONTROL);
 	mctrl(c, MCTL_WAKE, s ? MCTL_WAKE : 0);
-	/* bmac-init A5 (wlc_bmac_wait_for_wake) when s: TODO, no open entry point */
+	if (!s)
+		return;
+	/* bmac-init A5 (wlc_bmac_wait_for_wake, no open entry point): a delay of 40 us, then
+	 * until the microcode state SHM(0x40) is not "asleep" (4), at most fastpwrup_dly us */
+	CORE_MAC_CALL(c, budget = m->fastpwrup_dly);
+	hw_udelay(40);
+	while (shm_r(c, 0x40) == 4 && waited < budget) {
+		hw_udelay(10);
+		waited += 10;
+	}
+}
+
+/* ps.c: a wake request changed (ps-keys.md 1.1) */
+void core_w_set_wake_ctrl(struct bcm4360_core *c)
+{
+	set_wake_ctrl(c);
 }
 
 /* sub_039dd4, wlc_bsinit (1.4 step 23): the band's MAC settings */
@@ -461,6 +477,7 @@ int core_w_set_chanspec(struct bcm4360_core *c, u16 cs)
 	set_chanspec(c, cs);
 	mac_enable(c);
 	c->chanspec = cs;
+	core_ps_chanspec(c);				/* awake until the next beacon (ps-keys.md 1.8) */
 	return 0;
 }
 
@@ -677,6 +694,7 @@ static void key_hw_init_all(struct bcm4360_core *c)
 	for (i = 0; i < KEY_ENTRIES - 4; i++)
 		CORE_MAC_CALL(c, bcm4360_bmac_set_rcmta(m, i, zero));
 	mhf(c, 0, 0x4000, 0, 3);
+	core_keys_reinit(c);				/* every configured key again (ps-keys.md 2.3) */
 }
 
 /* wlc_set_mac (1.4 step 13): AMT[63], TPL(0x48) */
@@ -1042,6 +1060,7 @@ void core_w_watchdog(struct bcm4360_core *c)
 	led_event(c, true);
 	bcm4360_cca_watchdog(c->cca);	/* the channel statistics module */
 	stf_tempsense_upd(c);
+	core_ps_watchdog(c);				/* ps-keys.md 1.5, 1.8 */
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1064,6 +1083,7 @@ void core_w_down(struct bcm4360_core *c)
 	bcm4360_cca_down(c->cca);
 	w->scanning = 0;
 	w->bcn_promisc_scan = 0;
+	core_ps_down(c);
 	if (c->wd_timer)
 		bcm4360_plat_timer_del(c->plat, c->wd_timer);
 	FIELD(c->pub, PUB_UP, u8) = 0;
@@ -1163,6 +1183,7 @@ static void clear_hw_association(struct bcm4360_core *c)
 
 	w->associated = 0;
 	hw_memset(w->bssid, 0, 6);
+	core_ps_bss(c, false, true);			/* wlc_reset_pmstate (ps-keys.md 1.8) */
 	if (!c->up)
 		return;
 	if (c->phy)
@@ -1227,6 +1248,7 @@ void bcm4360_core_set_bss(struct bcm4360_core *c, const struct bcm4360_bss *bss)
 			bcm4360_phy_hold_upd(c->phy, 0x20, false);	/* wlc_sta_assoc_upd */
 		edcf_apply_all(c, true);
 		w->last_tsf = 0;
+		core_ps_bss(c, true, false);		/* awake until the first beacon (ps-keys.md 1.8) */
 	} else if (unit = ubs_unit(c), unit == 0 && bss->short_slot != w->shortslot) {
 		w->shortslot = bss->short_slot;
 		CORE_MAC_CALL(c, bcm4360_bmac_set_shortslot(m, bss->short_slot));
@@ -1241,6 +1263,7 @@ void bcm4360_core_set_bss(struct bcm4360_core *c, const struct bcm4360_bss *bss)
 		w->dtim_period = bss->dtim_period;
 		shm_w(c, SHM_DTIM, bss->dtim_period);
 	}
+	core_ps_bss(c, false, false);		/* the DTIM period may allow power save now */
 }
 
 /* bcm4360_core_set_macaddr (1.4 step 13) */

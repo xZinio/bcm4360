@@ -30,7 +30,11 @@
 #define ST1_PAD			0x0004
 #define ST1_DECRYPTED		0x0008
 #define ST1_DECRYPT_ERR	0x0010
+#define ST1_KEY_SHIFT		5
+#define ST1_KEY_MASK		0x3f
 #define ST2_AMSDU		0x0001
+#define ST2_MIC_CHECKED	0x0008
+#define ST2_MIC_ERR		0x0010
 #define ST2_PHYSTATUS_VALID	0x0100
 
 #define TYPE_CCK		0
@@ -166,6 +170,23 @@ static struct bcm4360_phy *rx_phy(struct bcm4360_core *c)
 }
 
 /*
+ * ps-keys.md 2.5: the core's decryption. RxStatus1 bit 3 (attempted) with bit 4 (ICV check
+ * failed): the frame is garbage. RxStatus2 bits 3 and 4 (the core checked the TKIP Michael
+ * MIC / it was wrong) mean something only with the hardware MIC keys, which are never
+ * written (keys.c): ignored unless c->pk.hw_mic.
+ */
+static void rx_crypto(struct bcm4360_core *c, struct bcm4360_rxstatus *rs, u16 st1, u16 st2)
+{
+	if (!(st1 & ST1_DECRYPTED))
+		return;
+	if ((st1 & ST1_DECRYPT_ERR) || (c->pk.hw_mic && (st2 & ST2_MIC_CHECKED) &&
+					(st2 & ST2_MIC_ERR)))
+		rs->flags |= BCM4360_RX_DECRYPT_ERR;
+	else
+		rs->flags |= BCM4360_RX_DECRYPTED;
+}
+
+/*
  * frames.md 1.8: fill the status of one frame whose receive header is at
  * the start of `d` and cut the packet down to the 802.11 frame and its FCS.
  * False: the frame is dropped (1.4, steps 1 to 6).
@@ -231,14 +252,16 @@ static bool rx_one(struct bcm4360_core *c, void *p, u32 lo, u32 hi)
 		rs.flags |= BCM4360_RX_AMPDU;
 	if (st1 & ST1_FCSERR)
 		rs.flags |= BCM4360_RX_FCS_FAIL;
-	if ((st1 & ST1_DECRYPTED) && !(st1 & ST1_DECRYPT_ERR))
-		rs.flags |= BCM4360_RX_DECRYPTED;
+	rs.key = (st1 >> ST1_KEY_SHIFT) & ST1_KEY_MASK;
+	rx_crypto(c, &rs, st1, st2);
 
 	/* the frame: header, pad and PLCP header removed; the FCS stays */
 	skip = RXH_LEN + pad + PLCP_LEN;
 	osl_pktpull(c->osh, p, (int)skip);
 	osl_pktsetlen(c->osh, p, RXH_LEN + n - skip);
 	c->fr.rx_frames++;
+	if (!(st1 & ST1_FCSERR))
+		core_ps_beacon(c, d + skip, RXH_LEN + n - skip, rate.rate, rate.enc, rate.flags);
 	bcm4360_plat_rx(c->plat, p, &rs);
 	return true;
 }

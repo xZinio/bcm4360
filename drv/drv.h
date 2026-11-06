@@ -62,6 +62,10 @@ struct bcm4360_dev {
 
 	struct ieee80211_vif *vif;	/* the one interface (station) */
 	u32 peer_map;		/* A-MPDU peer indices in use (mac80211.c) */
+	/* hardware keys and power save (mac80211.c); both under dev->lock */
+	struct ieee80211_key_conf *hwkey[BCM4360_NKEYS];	/* keys in the core, by entry */
+	bool wpa_seen;		/* a key was set since the association */
+	bool group_seen;	/* a group key was set since the association */
 	bool up;
 	u16 chanspec;
 	struct work_struct restart;
