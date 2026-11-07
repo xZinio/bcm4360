@@ -447,6 +447,7 @@ band24() {
 		c['connection']['uuid'] = str(uuid.uuid4())
 		c['connection']['autoconnect'] = 'false'
 		c['wifi']['bssid'] = bssid
+		c['wifi'].pop('band', None)	# a profile kept to 5 GHz would never join it
 		with open(dst, 'w') as f:
 		    c.write(f, space_around_delimiters=False)
 	EOF

@@ -1153,6 +1153,8 @@ wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	struct wl_cfg80211_priv *wl = wiphy_to_wl(wiphy);
 	struct wl_join_params join_params;
 	size_t join_params_size;
+	const u8 *join_bssid;
+	struct ieee80211_channel *join_chan;
 	char valc;
 	s32 err = 0;
 
@@ -1188,18 +1190,44 @@ wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 
 	wl_set_join_pref(dev);
 
-	/* Remembered to name the right AP if the join fails. */
-	if (sme->bssid) {
-		memcpy(wl->profile->bssid, sme->bssid, ETHER_ADDR_LEN);
-	}
+	/*
+	 * The AP to join. Because the driver says it roams by itself,
+	 * wpa_supplicant leaves the choice to it and passes the AP it picked
+	 * only as a hint (bssid_hint, channel_hint); sme->bssid and sme->channel
+	 * come only when the profile fixes a BSSID. wpa_supplicant's pick
+	 * honours the profile (band, frequency list, BSSID blacklist), so the
+	 * hint is passed to the core as the join target, as brcmfmac does.
+	 * Without it the core chose by signal alone among all APs of the SSID,
+	 * and a profile limited to 5 GHz still joined 2.4 GHz.
+	 */
+	join_bssid = sme->bssid;
+	join_chan = sme->channel;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 0, 0)
-	else if (sme->bssid_hint) {
-		memcpy(wl->profile->bssid, sme->bssid_hint, ETHER_ADDR_LEN);
-	}
+	if (!join_bssid)
+		join_bssid = sme->bssid_hint;
+	if (!join_chan)
+		join_chan = sme->channel_hint;
 #endif
-	else {
+
+	/* Remembered to name the right AP if the join fails. */
+	if (join_bssid)
+		memcpy(wl->profile->bssid, join_bssid, ETHER_ADDR_LEN);
+	else
 		memset(wl->profile->bssid, 0, ETHER_ADDR_LEN);
-	}
+
+	/*
+	 * A BSSID fixed in the profile must not be left by the core's own
+	 * roaming; otherwise the core roams as before. Set before every join,
+	 * so the next connect without a fixed BSSID turns roaming back on.
+	 */
+	err = wl_dev_intvar_set(dev, "roam_off", sme->bssid ? 1 : 0);
+	if (err)
+		printk(KERN_NOTICE KBUILD_MODNAME ": %s: the core rejected roam_off (%d)\n",
+			dev->name, err);
+	else if (sme->bssid)
+		printk(KERN_INFO KBUILD_MODNAME ": %s: BSSID %pM fixed by the profile, "
+			"roaming off\n", dev->name, sme->bssid);
+	err = 0;
 
 	memset(&join_params, 0, sizeof(join_params));
 	join_params_size = sizeof(join_params.ssid);
@@ -1207,12 +1235,16 @@ wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	join_params.ssid.SSID_len = min(sizeof(join_params.ssid.SSID), sme->ssid_len);
 	memcpy(&join_params.ssid.SSID, sme->ssid, join_params.ssid.SSID_len);
 	join_params.ssid.SSID_len = htod32(join_params.ssid.SSID_len);
-	memcpy(&join_params.params.bssid, &ether_bcast, ETHER_ADDR_LEN);
+	memcpy(&join_params.params.bssid, join_bssid ? join_bssid : (const u8 *)&ether_bcast,
+		ETHER_ADDR_LEN);
 
 	memcpy(wl->profile->ssid.SSID, &join_params.ssid.SSID, join_params.ssid.SSID_len);
 	wl->profile->ssid.SSID_len = join_params.ssid.SSID_len;
 
-	wl_ch_to_chanspec(sme->channel, &join_params, &join_params_size);
+	wl_ch_to_chanspec(join_chan, &join_params, &join_params_size);
+	/* A BSSID without a channel: the assoc params, with no channel list. */
+	if (join_bssid && !join_chan)
+		join_params_size += WL_ASSOC_PARAMS_FIXED_SIZE;
 	WL_DBG(("join_param_size %u\n", (unsigned int)join_params_size));
 
 	if (join_params.ssid.SSID_len < IEEE80211_MAX_SSID_LEN) {

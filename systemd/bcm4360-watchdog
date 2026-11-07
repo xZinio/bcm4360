@@ -3,14 +3,26 @@
 #
 # Installed by the bcm4360 driver (scripts/install.sh), run every 30 s by
 # bcm4360-watchdog.timer. Last resort for states of Broadcom's firmware that
-# the driver cannot get out of by itself (it stops seeing or joining any
-# network): once Wi-Fi has been without a connection for 150 s after having
-# had one in the last 30 minutes, reload bcm4360, which has always brought
-# the card back. It leaves things alone while connected, with the radio off,
-# after a deliberate disconnect ("nmcli device disconnect", autoconnect off),
-# right after suspend, and reloads at most once every 10 minutes.
+# the driver cannot get out of by itself. Two kinds:
 #
-# BCM4360_WD_TEST=1 replaces the observations and the reload with the
+# - No connection: Wi-Fi stops seeing or joining any network. Once it has
+#   been without a connection for 150 s after having had one in the last
+#   30 minutes, reload bcm4360, which has always brought the card back.
+# - A stall: still associated, but no data gets through (the access point
+#   and the card stop talking, e.g. 2.4 GHz on busy Cisco/Meraki networks).
+#   NetworkManager sees nothing wrong, so it is found by asking the default
+#   gateway on the Wi-Fi interface (ARP, then ping) on every run. After two
+#   unanswered runs in a row (30-60 s of stall) the connection is brought up
+#   again, which makes wpa_supplicant pick an AP afresh. If the link stalls
+#   again within 5 minutes of that, bcm4360 is reloaded. The gateway is
+#   asked, not the internet, so an outage beyond it changes nothing here.
+#
+# It leaves things alone with the radio off, after a deliberate disconnect
+# ("nmcli device disconnect", autoconnect off), right after suspend and in
+# the first minute of a connection, reconnects at most once every 3 minutes
+# and reloads at most once every 10 minutes.
+#
+# BCM4360_WD_TEST=1 replaces the observations and the actions with the
 # BCM4360_WD_* variables below and a message (scripts/test-watchdog.sh).
 set -u
 
@@ -18,12 +30,17 @@ window=150	# seconds without a connection before reloading
 recent=1800	# ... provided there was one within this many seconds
 cooldown=600	# seconds between reloads
 max_gap=120	# a longer gap between two runs means a suspend: start over
+settle=60	# seconds of a (new) connection before the gateway is asked
+stall_runs=2	# unanswered runs in a row that make a stall
+reconnect_gap=180	# seconds between reconnects
+escalate=300	# a stall within this many seconds of a reconnect: reload
 
 dir=${BCM4360_WD_DIR:-/run/bcm4360-watchdog}
 mkdir -p "$dir"
 get() { cat "$dir/$1" 2>/dev/null; }
 put() { echo "$2" >"$dir/$1"; }
 
+iface=
 if [ -n "${BCM4360_WD_TEST:-}" ]; then
 	now=$BCM4360_WD_NOW loaded=$BCM4360_WD_LOADED wifi=$BCM4360_WD_WIFI
 	state=$BCM4360_WD_STATE autoconnect=$BCM4360_WD_AUTOCONNECT
@@ -43,24 +60,103 @@ else
 	fi
 fi
 
+# Does the default gateway on the Wi-Fi interface answer? "ok" also when
+# there is none to ask (nothing to judge by).
+probe() {
+	if [ -n "${BCM4360_WD_TEST:-}" ]; then
+		echo "${BCM4360_WD_PROBE:-ok}"
+		return
+	fi
+	gw=$(ip -4 route show default dev "$iface" 2>/dev/null | awk '{print $3; exit}')
+	if [ -z "$gw" ]; then
+		echo ok
+	elif arping -q -c 2 -w 3 -I "$iface" "$gw" >/dev/null 2>&1 ||
+		ping -q -c 2 -W 2 -I "$iface" "$gw" >/dev/null 2>&1; then
+		echo ok
+	else
+		echo "fail $gw"
+	fi
+}
+
+reload() {
+	put reloaded "$now"
+	rm -f "$dir/down_since" "$dir/stalls"
+	echo "$1; reloading bcm4360"
+	if [ -n "${BCM4360_WD_TEST:-}" ]; then
+		echo RELOAD
+		exit 0
+	fi
+	# rmmod, not modprobe -r: that also unloads cfg80211, and the cfg80211
+	# that loads again registers nl80211 under a new netlink id, which the
+	# running wpa_supplicant never looks up again. It then cannot take any
+	# Wi-Fi interface ("couldn't grab this interface") until it restarts,
+	# and Wi-Fi stays off until a reboot (2026-10-21). The restart also
+	# clears whatever it kept of the old interface.
+	rmmod bcm4360
+	modprobe bcm4360 || { echo "bcm4360 did not load, falling back to wl"; modprobe wl; }
+	systemctl try-restart wpa_supplicant.service
+	exit 0
+}
+
 last_run=$(get last_run)
 put last_run "$now"
 if [ -z "$last_run" ] || [ $((now - last_run)) -gt "$max_gap" ]; then
-	rm -f "$dir/down_since"
+	rm -f "$dir/down_since" "$dir/up_since" "$dir/stalls"
 fi
 
 if [ "$loaded" != yes ] || [ "$wifi" != enabled ] || [ "$autoconnect" != yes ]; then
-	rm -f "$dir/down_since"
+	rm -f "$dir/down_since" "$dir/up_since" "$dir/stalls"
 	exit 0
 fi
+
 case $state in
 100*)
 	put connected "$now"
 	rm -f "$dir/down_since"
+	up=$(get up_since)
+	[ -n "$up" ] || { put up_since "$now"; up=$now; }
+	reconnected=$(get reconnected) reloaded=$(get reloaded)
+	if [ $((now - up)) -lt "$settle" ] ||
+		{ [ -n "$reconnected" ] && [ $((now - reconnected)) -lt "$settle" ]; } ||
+		{ [ -n "$reloaded" ] && [ $((now - reloaded)) -lt "$settle" ]; }; then
+		rm -f "$dir/stalls"
+		exit 0
+	fi
+	result=$(probe)
+	if [ "$result" = ok ]; then
+		rm -f "$dir/stalls"
+		exit 0
+	fi
+	stalls=$(($(get stalls || echo 0) + 1))
+	put stalls "$stalls"
+	[ "$stalls" -ge "$stall_runs" ] || exit 0
+
+	what="associated, but the gateway ${result#fail } has not answered for $stalls runs"
+	if [ -n "$reconnected" ] && [ $((now - reconnected)) -lt "$escalate" ]; then
+		if [ -z "$reloaded" ] || [ $((now - reloaded)) -ge "$cooldown" ]; then
+			reload "$what, again within $((now - reconnected)) s of a reconnect"
+		fi
+	fi
+	[ -z "$reconnected" ] || [ $((now - reconnected)) -ge "$reconnect_gap" ] || exit 0
+	put reconnected "$now"
+	rm -f "$dir/stalls"
+	echo "$what; reconnecting"
+	if [ -n "${BCM4360_WD_TEST:-}" ]; then
+		echo RECONNECT
+		exit 0
+	fi
+	uuid=$(nmcli -g UUID,DEVICE connection show --active 2>/dev/null |
+		awk -F: -v i="$iface" '$2 == i {print $1; exit}')
+	if [ -n "$uuid" ]; then
+		nmcli -w 60 connection up uuid "$uuid" ifname "$iface"
+	else
+		nmcli -w 60 device connect "$iface"
+	fi
 	exit 0
 	;;
 esac
 
+rm -f "$dir/up_since" "$dir/stalls"
 connected=$(get connected)
 [ -n "$connected" ] && [ $((now - connected)) -le "$recent" ] || exit 0
 down=$(get down_since)
@@ -72,19 +168,4 @@ fi
 reloaded=$(get reloaded)
 [ -z "$reloaded" ] || [ $((now - reloaded)) -ge "$cooldown" ] || exit 0
 
-put reloaded "$now"
-rm -f "$dir/down_since"
-echo "no Wi-Fi connection for $((now - down)) s (state: $state); reloading bcm4360"
-if [ -n "${BCM4360_WD_TEST:-}" ]; then
-	echo RELOAD
-	exit 0
-fi
-# rmmod, not modprobe -r: that also unloads cfg80211, and the cfg80211 that
-# loads again registers nl80211 under a new netlink id, which the running
-# wpa_supplicant never looks up again. It then cannot take any Wi-Fi
-# interface ("couldn't grab this interface") until it restarts, and Wi-Fi
-# stays off until a reboot (2026-10-21). The restart also clears whatever
-# it kept of the old interface.
-rmmod bcm4360
-modprobe bcm4360 || { echo "bcm4360 did not load, falling back to wl"; modprobe wl; }
-systemctl try-restart wpa_supplicant.service
+reload "no Wi-Fi connection for $((now - down)) s (state: $state)"

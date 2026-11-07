@@ -8,7 +8,7 @@
 # and verifies its checksums before unpacking it into lib/. Open code
 # (hybrid/, open/, ISC licensed) takes over parts of that core at link time.
 
-BCM4360_VERSION := 1.1.0
+BCM4360_VERSION := 1.1.1
 
 ifneq ($(KERNELRELEASE),)
 # ---- Kbuild -----------------------------------------------------------------
@@ -23,8 +23,11 @@ HYBRID ?= 1
 BCM4360_MODULES ?= bcm4360
 
 obj-m := $(addsuffix .o,$(BCM4360_MODULES))
+# drv/ is not part of the DKMS tree (install.sh): only for bcm4360_open
+ifneq ($(filter bcm4360_open,$(BCM4360_MODULES)),)
 include $(src)/drv/objects.mk
 bcm4360_open-objs := $(open-drv-objs)
+endif
 bcm4360-objs := src/shared/linux_osl.o \
                 src/wl/sys/wl_linux.o \
                 src/wl/sys/wl_iw.o \

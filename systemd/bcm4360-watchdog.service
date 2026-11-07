@@ -7,3 +7,5 @@ After=NetworkManager.service
 [Service]
 Type=oneshot
 ExecStart=/usr/local/lib/bcm4360/bcm4360-watchdog
+# a reconnect waits up to 60 s for NetworkManager, a reload for modprobe
+TimeoutStartSec=150
