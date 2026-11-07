@@ -200,14 +200,3 @@ history (up to 1.1.0 and commit `6a58d4e`).
 Arch Linux's `broadcom-wl-dkms` patches 001–023 (commit `281691a`), and
 this project's changes (`patches/0001-bcm4360-fixes.patch` in the history up
 to 1.1.0).
-
-## License and credits
-
-Everything in this repository is under the ISC license (`LICENSE`).
-Broadcom's code is not included. It is downloaded at install time, stays under
-Broadcom's own license, and that license is installed to
-`/usr/share/licenses/bcm4360/`.
-
-Thanks to Broadcom (the original driver), the broadcom‑wl and Arch Linux
-maintainers (kernel compatibility patches), and the Linux wireless developers
-(cfg80211, and the `brcmfmac` driver used as a reference).
