@@ -724,6 +724,7 @@ static void wlc_init(struct bcm4360_core *c, u16 cs)
 
 	w->defchanspec = cs;
 	/* step 3 */
+	bcm4360_plat_trace(c->plat, "init: MAC init (bmac_init: microcode, PHY)");
 	CORE_MAC_CALL(c, bcm4360_bmac_init(m, cs, false));
 	/* step 4: the rate directories */
 	for (i = 0; i < 16; i++)
@@ -738,6 +739,7 @@ static void wlc_init(struct bcm4360_core *c, u16 cs)
 	if (!w->dtimnoslp)
 		w->dtimnoslp = (shm_r(c, SHM_4C) >> 7) & 1;
 	/* steps 9, 11 */
+	bcm4360_plat_trace(c->plat, "init: keys, beamforming");
 	key_hw_init_all(c);
 	txbf_init(c);
 	/* step 13 */
@@ -746,6 +748,7 @@ static void wlc_init(struct bcm4360_core *c, u16 cs)
 	/* steps 14, 15 */
 	w->home_chanspec = cs;
 	/* step 16 */
+	bcm4360_plat_trace(c->plat, "init: PHY channel");
 	set_phy_chanspec(c, cs);
 	/* step 17 */
 	shm_w(c, SHM_74, 0);
@@ -761,6 +764,7 @@ static void wlc_init(struct bcm4360_core *c, u16 cs)
 	FIELD(stf, 0x2a, u16) = FIELD(pub, PUB_SHM_CORE_BASE, u16);
 	bcm4360_stf_txcore_shmem_write(wlc, true);
 	/* step 23 */
+	bcm4360_plat_trace(c->plat, "init: band init (bsinit)");
 	bsinit(c);
 	/* step 24: WME */
 	if (w->wme) {
@@ -770,6 +774,7 @@ static void wlc_init(struct bcm4360_core *c, u16 cs)
 	/* step 26 */
 	(void)shm_r(c, SHM_UCODE_MAJOR);	/* the version is read again at every init */
 	(void)shm_r(c, SHM_UCODE_MINOR);
+	bcm4360_plat_trace(c->plat, "init: MAC enable");
 	/* step 28 */
 	mac_enable(c);
 	/* step 29 */
@@ -802,6 +807,7 @@ int core_w_up(struct bcm4360_core *c, u16 chanspec)
 	bool gone = false;
 	u32 m0, i;
 
+	bcm4360_plat_trace(c->plat, "up: device present?");
 	CORE_MAC_CALL(c, gone = bcm4360_bmac_deviceremoved(m));
 	if (gone)
 		return -9;
@@ -815,12 +821,14 @@ int core_w_up(struct bcm4360_core *c, u16 chanspec)
 	if (!FIELD(pub, PUB_HW_UP, u8)) {
 		w->led_mask = core_led_mask(c);
 		bcm4360_bmac_led_hw_mask_init(CORE_WLC_HW(c), w->led_mask);
+		bcm4360_plat_trace(c->plat, "up: hardware up (bmac_hw_up)");
 		CORE_MAC_CALL(c, bcm4360_bmac_hw_up(m));
 		FIELD(pub, PUB_HW_UP, u8) = 1;
 	}
 	/* wlc_bmac_4331_epa_init: nothing on the 4360 */
 	mhf(c, 4, 0x0080, STF(c)[0x59] ? 0x0080 : 0, 3);
 	if (!w->radio_dis) {
+		bcm4360_plat_trace(c->plat, "up: up_prep");
 		CORE_MAC_CALL(c, r = bcm4360_bmac_up_prep(m));
 		if (r == -9)
 			w->radio_dis |= 2;
@@ -829,6 +837,7 @@ int core_w_up(struct bcm4360_core *c, u16 chanspec)
 		return 0;
 	if (r)
 		return r;
+	bcm4360_plat_trace(c->plat, "up: radio allowed; BT switch");
 	core_radio_monitor_stop(c);			/* G4: wlc_up, once the radio is allowed */
 	/* wlc_bmac_set_ctrl_ePA: nothing on the 4360 */
 	if (FIELD(CORE_WLC_HW(c), 0x1bc, u8) == 0xff) {
@@ -843,11 +852,13 @@ int core_w_up(struct bcm4360_core *c, u16 chanspec)
 		mhf(c, 1, 0x0008, 0x0008, 3);
 	CORE_MAC_CALL(c, bcm4360_bmac_seci_upd(m));
 	/* wl_init: wl_intrsoff, wlc_reset, wl_intrsrestore, wlc_init */
+	bcm4360_plat_trace(c->plat, "up: MAC reset");
 	m0 = core_intrsoff(c);
 	CORE_MAC_CALL(c, bcm4360_bmac_reset(m));
 	core_intrsrestore(c, m0);
 	if (!m0)	/* observed: this restore to 0 is read back */
 		(void)d11_read32(c->hw, D11_MACINTMASK);
+	bcm4360_plat_trace(c->plat, "up: init (wlc_init)");
 	wlc_init(c, chanspec);
 	FIELD(pub, PUB_UP, u8) = 1;
 
@@ -859,6 +870,7 @@ int core_w_up(struct bcm4360_core *c, u16 chanspec)
 	shm_w(c, SHM_LIFETIME, w->lifetime);
 	mhf(c, 3, 0x0020, w->lifetime ? 0x0020 : 0, 3);
 	mac_enable(c);
+	bcm4360_plat_trace(c->plat, "up: up_finish");
 	CORE_MAC_CALL(c, r = bcm4360_bmac_up_finish(m));
 	for (i = 0; i < 4; i++)
 		shm_w(c, SHM_RETRY + 2 * i, w->retry[i]);
@@ -877,6 +889,7 @@ int core_w_up(struct bcm4360_core *c, u16 chanspec)
 		if (v & 1)
 			d11_write16(c->hw, D11_REG_A00, (u16)(v & 0xfffe));
 	}
+	bcm4360_plat_trace(c->plat, "up: done");
 	return r;
 }
 

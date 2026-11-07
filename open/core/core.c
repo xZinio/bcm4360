@@ -141,6 +141,7 @@ struct bcm4360_core *bcm4360_core_attach(struct bcm4360_hw *hw, void *osh, u16 v
 		return NULL;
 	}
 
+	bcm4360_plat_trace(plat, "attach: backplane (si)");
 	/* wlc_bmac_si_attach (bmac-attach.md, Overview) */
 	sih = core_si_attach(c, device, osh, hw->bar0, 1, &c->vars, &c->varsz);
 	if (!sih) {
@@ -152,12 +153,14 @@ struct bcm4360_core *bcm4360_core_attach(struct bcm4360_hw *hw, void *osh, u16 v
 	FIELD(c->pub, PUB_VARS, void *) = c->vars;
 	FIELD(c->pub, PUB_VARS_SIZE, u32) = c->varsz;
 
+	bcm4360_plat_trace(plat, "attach: regulatory database");
 	/* the regulatory database (clm.md, "Loading"), given by the platform */
 	{
 		const void *hdr = bcm4360_plat_clm(plat);
 
 		c->clm_ok = hdr && !bcm4360_clm_init(&c->clm, hdr);
 	}
+	bcm4360_plat_trace(plat, "attach: MAC and PHY (bmac attach)");
 	/* wlc-hw: the rest of wlc_attach (modules, stf and channel manager defaults, country) */
 	e = bcm4360_bmac_attach(c->wlc, vendor, device, 0, 0, osh, hw->bar0, 1, NULL);
 	if (e) {
@@ -167,6 +170,7 @@ struct bcm4360_core *bcm4360_core_attach(struct bcm4360_hw *hw, void *osh, u16 v
 		return NULL;
 	}
 	hw_memcpy((u8 *)c->pub + PUB_ETHERADDR, (u8 *)CORE_WLC_HW(c) + 0x178, 6);
+	bcm4360_plat_trace(plat, "attach: driver state");
 	core_w_attach(c);
 	c->wd_timer = bcm4360_plat_timer_init(plat, core_watchdog, c, "watchdog");
 	c->attached = true;

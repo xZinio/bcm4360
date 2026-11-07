@@ -541,6 +541,7 @@ static int bcm4360_start(struct ieee80211_hw *ieee)
 	struct cfg80211_chan_def *def = &ieee->conf.chandef;
 	int err;
 
+	bcm4360_plat_trace(dev, "start: core up");
 	spin_lock_bh(&dev->lock);
 	dev->chanspec = def->chan ? bcm4360_chanspec_of(def) : CHSPEC_BAND_2G | CHSPEC_BW_20 | 1;
 	err = bcm4360_core_up(dev->core, dev->chanspec);
@@ -549,6 +550,7 @@ static int bcm4360_start(struct ieee80211_hw *ieee)
 		bcm4360_core_intrson(dev->core);
 	}
 	spin_unlock_bh(&dev->lock);
+	bcm4360_plat_trace(dev, err ? "start: core up FAILED" : "start: up, interrupts on");
 	return err ? -EIO : 0;
 }
 
@@ -556,6 +558,7 @@ static void bcm4360_stop(struct ieee80211_hw *ieee, bool suspend)
 {
 	struct bcm4360_dev *dev = ieee->priv;
 
+	bcm4360_plat_trace(dev, "stop");
 	spin_lock_bh(&dev->lock);
 	WRITE_ONCE(dev->up, false);
 	bcm4360_core_intrsoff(dev->core);
@@ -600,6 +603,12 @@ static int bcm4360_config(struct ieee80211_hw *ieee, int radio_idx, u32 changed)
 		u16 cs = bcm4360_chanspec_of(&conf->chandef);
 
 		if (cs != dev->chanspec) {
+			static unsigned int traced;
+
+			if (traced < 3) {	/* the first ones only: scans change it often */
+				traced++;
+				bcm4360_plat_trace(dev, "config: channel change");
+			}
 			err = bcm4360_core_set_chanspec(dev->core, cs);
 			if (!err)
 				dev->chanspec = cs;

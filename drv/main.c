@@ -61,6 +61,32 @@ void bcm4360_plat_fatal(void *plat)
 	schedule_work(&dev->restart);
 }
 
+/*
+ * trace=MS: log every step of bring-up and teardown, then wait MS ms (busy:
+ * some steps run under the driver's spinlock), so that a log reader can save
+ * the line to disk before the next step runs. For finding where the card
+ * hangs the machine; 0 (default) logs nothing.
+ */
+static uint trace;
+module_param(trace, uint, 0644);
+MODULE_PARM_DESC(trace, "log each bring-up step and wait this many ms after it (0: off)");
+
+static void bcm4360_trace(const char *step)
+{
+	uint ms = min(READ_ONCE(trace), 1000u);
+
+	if (!ms)
+		return;
+	pr_info(BCM4360_DRV_NAME ": trace: %s\n", step);
+	if (!in_hardirq())
+		mdelay(ms);
+}
+
+void bcm4360_plat_trace(void *plat, const char *step)
+{
+	bcm4360_trace(step);
+}
+
 const void *bcm4360_plat_clm(void *plat)
 {
 	return bcm4360_fw_clm(plat);
@@ -70,8 +96,14 @@ static irqreturn_t bcm4360_isr(int irq, void *data)
 {
 	struct bcm4360_dev *dev = data;
 
+	static bool first = true;
+
 	if (!READ_ONCE(dev->up))
 		return IRQ_NONE;
+	if (first) {
+		first = false;
+		bcm4360_trace("isr: first interrupt while up");
+	}
 	return bcm4360_core_isr(dev->core) ? IRQ_WAKE_THREAD : IRQ_NONE;
 }
 
@@ -138,6 +170,7 @@ static int bcm4360_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	void __iomem *bar0;
 	int err;
 
+	bcm4360_trace("probe: enable device");
 	err = pcim_enable_device(pdev);
 	if (err)
 		return err;
@@ -148,6 +181,7 @@ static int bcm4360_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 	if (err)
 		return err;
+	bcm4360_trace("probe: map BAR0");
 	bar0 = pcim_iomap(pdev, 0, BCM4360_BAR0_WINSZ);
 	if (!bar0)
 		return -ENOMEM;
@@ -177,10 +211,12 @@ static int bcm4360_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	dev->hw.cc = (u8 *)dev->hw.bar0 + 0x3000;
 	dev->hw.pdev = dev->osh;	/* hw_pcicfg_*() take the OS layer's handle */
 
+	bcm4360_trace("probe: load firmware data");
 	err = bcm4360_fw_load(dev);
 	if (err)
 		goto fail_osh;
 
+	bcm4360_trace("probe: core attach");
 	dev->core = bcm4360_core_attach(&dev->hw, dev->osh, pdev->vendor, pdev->device, dev,
 					&err);
 	if (!dev->core) {
@@ -190,16 +226,19 @@ static int bcm4360_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 	bcm4360_core_get_info(dev->core, &dev->info);
 
+	bcm4360_trace("probe: request irq");
 	err = request_threaded_irq(pdev->irq, bcm4360_isr, bcm4360_dpc, IRQF_SHARED,
 				   BCM4360_DRV_NAME, dev);
 	if (err)
 		goto fail_core;
 
+	bcm4360_trace("probe: register with mac80211");
 	err = bcm4360_mac80211_register(dev);
 	if (err)
 		goto fail_irq;
 	dev_info(&pdev->dev, "BCM%x rev %u, %pM: open driver, no Broadcom code linked\n",
 		 dev->info.chip_id, dev->info.chip_rev, dev->info.etheraddr);
+	bcm4360_trace("probe: done");
 	return 0;
 
 fail_irq:
@@ -219,6 +258,7 @@ static void bcm4360_remove(struct pci_dev *pdev)
 {
 	struct bcm4360_dev *dev = pci_get_drvdata(pdev);
 
+	bcm4360_trace("remove");
 	bcm4360_mac80211_unregister(dev);
 	free_irq(pdev->irq, dev);
 	cancel_work_sync(&dev->restart);
