@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * Chanspecs and the validity of channels: the chanspec helpers of Broadcom's
  * bcmwifi_channels.c and the validity checks of its channel manager

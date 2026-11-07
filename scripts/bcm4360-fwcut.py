@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: ISC
 """
 bcm4360-fwcut.py: make the firmware file of the open driver bcm4360_open
 (/lib/firmware/bcm4360/bcm4360-data.bin) out of Broadcom's download, the way
@@ -25,9 +24,8 @@ What it cuts out (docs/re/03-tools.md, drv/drv.h for the file format):
   clm_data within clm_db (le32 each). The loader adds the address of its
   copy to every listed pointer (drv/fw.c, bcm4360_fw_clm()).
 
-The output is Broadcom's data under Broadcom's license (lib/LICENSE.txt): it
-is for the machine it is made on and must not be redistributed. This script
-is ours and contains none of it. Python 3 standard library only.
+The output is Broadcom's data, for the machine it is made on; this script
+contains none of it. Python 3 standard library only.
 """
 import bisect
 import hashlib

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * The board variables of a card ("boardflags=0x...", "pa2ga0=...") made from
  * its SROM, or from the SROM image in its OTP, or taken from the platform's

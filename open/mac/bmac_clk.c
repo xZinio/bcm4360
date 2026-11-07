@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Clocks, core reset, crystal and core disable of the 802.11 core
  * (wlc_bmac.c, wlc_hw.c): the gated clocks and the PHY clock in the core's

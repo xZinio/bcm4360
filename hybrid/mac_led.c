@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the LEDs of the MAC layer in Broadcom's core (wlc_bmac.c:
  * wlc_bmac_led*, the blink engine and its timer function sub_061660) by the

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The per-rate transmit power container (Broadcom's wlc_ppr.c, `ppr_t`): one
  * heap block holding a 32-bit bandwidth word and 1, 2 or 3 sets of 182 power

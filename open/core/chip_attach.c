@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The lower layers that Broadcom's si_attach and its helpers did: the
  * enumeration of the cores, the backplane handle, the PCIe bridge, the OTP,

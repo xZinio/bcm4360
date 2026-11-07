@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: Broadcom's per-rate transmit power container (wlc_ppr.c, the
  * 50 named ppr_* functions) by the open code of open/lib/ratepwr.c

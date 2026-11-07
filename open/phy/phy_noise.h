@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * Between the noise path (open/phy/phy_rx.c) and the carrier-sense
  * minimum-power calibration (open/phy/phy_desense.c).

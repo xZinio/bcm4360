@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * AC-PHY of the BCM4360: initialisation of the PHY (wlc_phy_init and what it
  * drives) and the small helpers of the initialisation that the channel

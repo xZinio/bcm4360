@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * The state of what Broadcom's upper layer added around the open layers
  * (docs/re/spec/wlc-hw.md), embedded in struct bcm4360_core as `w`.

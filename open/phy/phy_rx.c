@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The receive and measurement entry points of the PHY API: the signal strength
  * of a received frame, the noise average and the noise-sample path, the

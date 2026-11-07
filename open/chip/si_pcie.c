@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The PCIe bridge of the backplane (Broadcom's nicpci.c and the si_pci*
  * functions of siutils.c). For now: the PERST work-around si_survive_perst_war

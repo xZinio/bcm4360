@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * State of the core's power save and hardware keys (docs/re/spec/ps-keys.md),
  * embedded in struct bcm4360_core as `pk`. Owned by keys.c and ps.c.

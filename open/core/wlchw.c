@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * What Broadcom's upper layer (wlc.c and its modules) does to the hardware,
  * as the open core does it: attach, up and init, channel change, periodic

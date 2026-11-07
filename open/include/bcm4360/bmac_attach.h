@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * Attach and detach of the hardware MAC layer: the allocation of the MAC
  * layer's state (wlc_hw and its blocks), the identity and board checks, the

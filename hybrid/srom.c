@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the board variables of Broadcom's core - srom_var_init (the
  * SROM or OTP image of the card turned into "name=value" strings) and

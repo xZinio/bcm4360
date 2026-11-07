@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The power field of PHY control word 1 of the transmit header's rate
  * entries (docs/re/spec/coverage.md part 2, G1; frames.md 3.5): the per-rate

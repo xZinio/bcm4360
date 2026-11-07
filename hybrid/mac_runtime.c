@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: functions of the MAC core that Broadcom's core runs
  * constantly (wlc_bmac.c: the energy detect at every channel change, the

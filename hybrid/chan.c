@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: Broadcom's chanspec helpers (bcmwifi_channels.c) and the
  * validity checks of channels and chanspecs of its channel manager

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * The backplane of a card: selecting a core (the two movable windows of
  * BAR0), register access to any core, the AXI wrapper of the current core

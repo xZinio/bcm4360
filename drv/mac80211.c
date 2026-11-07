@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * bcm4360_open: the mac80211 side. mac80211 is the upper 802.11 layer
  * (joining, scanning, rate control with minstrel_ht, aggregation sessions,

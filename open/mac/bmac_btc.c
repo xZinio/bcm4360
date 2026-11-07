@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Bluetooth coexistence of the MAC core (wlc_bmac.c): the coexistence mode
  * and the interface type ("wire"), the switch between the Bluetooth and the

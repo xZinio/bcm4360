@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: a read-only snapshot of the card's PHY registers, radio
  * registers, PHY tables and shared memory, to compare Broadcom's PHY and the

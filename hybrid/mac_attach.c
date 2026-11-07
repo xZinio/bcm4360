@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the attach and detach of the MAC layer in Broadcom's core
  * (wlc_bmac.c, wlc_hw.c, and the helpers of wlc.c, wlc_alloc.c, bcmutils.c and

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * What the PHY code needs from the other layers of the driver: services of
  * the MAC layer, of the chip layer (backplane, OTP) and timers.

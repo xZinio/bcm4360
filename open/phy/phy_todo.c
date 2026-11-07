@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Functions of the PHY that belong to tasks which are not done yet. The code
  * of the finished tasks calls them at the places where the specifications

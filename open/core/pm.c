@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * System suspend: the part of wl_suspend of Broadcom's glue
  * (src/wl/sys/wl_linux.c, ISC; no offload engine) after its wl_down.

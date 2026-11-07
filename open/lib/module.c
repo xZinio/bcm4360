@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The module table of the driver (Broadcom's wlc_module_register /
  * wlc_module_unregister, wlc.c): the modules enter themselves in it when they

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The core's frame path: interrupts (docs/re/spec/frames.md, section 2).
  * Receive is in rx.c, transmit and transmit status in tx.c. State: struct

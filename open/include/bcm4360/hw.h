@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * The platform interface: everything the hardware layer needs from its
  * environment. There are three environments:

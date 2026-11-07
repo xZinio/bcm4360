@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The regulatory database interpreter (Broadcom's wlc_clm.c): two data sets
  * (base and incremental), countries, aggregates, advertised codes, locales,

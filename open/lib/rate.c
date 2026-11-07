@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Rate sets: the helpers that build and narrow the sets of rates the driver
  * may use - the default set of a PHY type and band, the filter by kind of

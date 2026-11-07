@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The services of stf.h, cca.h, channel.h and srom.h (hybrid/stf.c, cca.c,
  * chan.c, srom.c with the open functions in place of Broadcom's). `void

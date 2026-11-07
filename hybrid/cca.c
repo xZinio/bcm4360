@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: Broadcom's channel statistics module (wlc_cca.c) by the open
  * code of open/lib/cca.c (docs/re/spec/cca-stf.md, part 1). Switch open_cca:

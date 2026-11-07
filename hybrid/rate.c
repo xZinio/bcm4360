@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the rate set helpers of Broadcom's wlc_rate.c by the open
  * code of open/lib/rate.c (docs/re/spec/rate.md). Switch open_rate, read at

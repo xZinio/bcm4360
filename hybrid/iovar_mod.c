@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: Broadcom's module table functions (wlc_module_register /
  * wlc_module_unregister, wlc.c) by the open code of open/lib/module.c

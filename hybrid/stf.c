@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: Broadcom's wlc_update_txppr_offset (wlc_stf.c: the per-rate
  * transmit power offsets of the transmit chains, after every computation of

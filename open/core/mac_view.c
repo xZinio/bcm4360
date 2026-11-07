@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The MAC layer's view of the raw wlc_hw (the same field map as
  * hybrid/mac.c, which does this for Broadcom's wlc_hw): struct bcm4360_mac is

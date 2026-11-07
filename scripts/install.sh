@@ -1,6 +1,4 @@
 #!/bin/sh
-# SPDX-License-Identifier: ISC
-#
 # Build and install bcm4360 through DKMS (rebuilt automatically for new
 # kernels) and make it the driver for the card from the next boot on.
 # It does not touch the running driver; to switch without rebooting use
@@ -53,6 +51,5 @@ depmod -a
 
 echo
 echo "bcm4360 $ver installed; it takes over from the next boot."
-echo "To switch right now (drops Wi-Fi for ~10 s, rolls back on failure):"
-echo "  sudo systemd-run --unit=bcm4360-swap --collect /bin/bash $(pwd)/scripts/swap-test.sh bcm4360"
-echo "  (result: /var/log/bcm4360-swap-test.log)"
+echo "To switch right now instead (drops Wi-Fi for ~10 s):"
+echo "  sudo rmmod bcm4360; sudo modprobe bcm4360; sudo systemctl restart wpa_supplicant"

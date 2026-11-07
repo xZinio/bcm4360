@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: Broadcom's DMA engine (hnddma.c) by the open code of
  * open/mac/dma.c (docs/re/spec/bmac-data.md section 1; task

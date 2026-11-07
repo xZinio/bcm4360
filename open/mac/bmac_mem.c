@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The object memories of the 802.11 core (wlc_bmac.c) - shared memory,
  * scratch registers of the microcode, internal hardware registers, address

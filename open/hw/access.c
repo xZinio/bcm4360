@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Register access of the BCM4360: PHY registers, radio registers, PHY tables
  * and the shared memory of driver and microcode.

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Timers for the open layers (core.h, bcm4360_plat_timer_*): a delayed work
  * item per timer, whose callback runs with the device lock held, like every

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * The AC-PHY of the BCM4360: its state, and the interface through which the
  * MAC layer uses it.

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the clocks, the core reset, the crystal and the core disable
  * of the MAC core in Broadcom's core (wlc_bmac.c, wlc_hw.c) by the open code

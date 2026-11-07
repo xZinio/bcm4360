@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the backplane functions of Broadcom's core that the other
  * layers call - core selection, register access to any core, the AXI wrapper

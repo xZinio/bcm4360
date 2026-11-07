@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * State of the control policies of Broadcom's upper layer: LEDs (G2), the
  * radio switch, rfkill and MPC (G4), the start of a join (G7), Bluetooth

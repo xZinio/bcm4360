@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The core of the open driver: attach, up, down, channel, periodic work,
  * interrupts (docs/re/07-open-driver.md, milestone 1). The calls into the open

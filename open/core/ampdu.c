@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * A-MPDU transmit (docs/re/spec/ampdu.md): the sessions the platform starts
  * (3.1), what an aggregatable MPDU's transmit header gets (1.4), the epoch

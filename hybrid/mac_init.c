@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the initialisation of the MAC core in Broadcom's core
  * (wlc_bmac.c: wlc_bmac_init with the microcode download and start, the

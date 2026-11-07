@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The firmware file: Broadcom's data the open code loads by name
  * (hw_fw_data() of open/include/bcm4360/hw.h). It is made at install time

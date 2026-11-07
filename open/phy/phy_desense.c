@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * AC-PHY of the BCM4360: receive-gain control, the desense applied to it, the
  * adjacent-channel-interference mitigation set-up and periodic engine, and the

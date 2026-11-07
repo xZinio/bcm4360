@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The initialisation of the 802.11 core (wlc_bmac.c): wlc_bmac_init with the
  * microcode download and start, the register initialisation lists, the

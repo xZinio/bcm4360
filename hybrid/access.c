@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the register access primitives of Broadcom's core - PHY and
  * radio registers, PHY tables, shared memory - by the open code of

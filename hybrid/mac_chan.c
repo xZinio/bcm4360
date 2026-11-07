@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the channel and band functions of the MAC core in Broadcom's
  * core (wlc_bmac.c: wlc_bmac_set_chanspec with its band switch, wlc_setxband,

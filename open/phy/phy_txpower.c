@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * AC-PHY of the BCM4360: transmit power. The transmit gain set by index, the
  * closed-loop power-control set-up (loop parameters, target powers, the

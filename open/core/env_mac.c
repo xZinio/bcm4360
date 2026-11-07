@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The services of open/include/bcm4360/mac_env.h, with the open functions in
  * place of Broadcom's. Each comment names the adapter of hybrid/ (mac_clk.c,

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * The DMA engine of one FIFO of the 802.11 core (64-bit descriptors): rings of
  * descriptors in coherent memory, transmit and receive channels, packet

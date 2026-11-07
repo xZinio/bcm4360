@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The control entry points of the PHY API: the small stores and getters, the
  * channel list, the orchestration functions that are not transmit power,

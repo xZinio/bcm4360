@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The MAC core at run time (wlc_bmac.c): the energy detect of the IFS block
  * for the current bandwidth, the suspend and resume of the transmit FIFOs,

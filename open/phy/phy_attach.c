@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The AC-PHY of the BCM4360: attach and detach, the state that attach makes
  * from the variables of the board, the queries of the MAC layer, analog core

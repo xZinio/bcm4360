@@ -1,12 +1,10 @@
-# SPDX-License-Identifier: ISC
-#
 # bcm4360: Broadcom BCM4360 802.11ac driver for Linux (MacBook Air 2013-2017).
 #
-# The Linux/cfg80211 side (src/, ISC licensed) is open source. It links
-# against Broadcom's proprietary 802.11 core, lib/wlc_hybrid.o_shipped, which
-# is NOT part of this tree: `make fetch` downloads Broadcom's original release
-# and verifies its checksums before unpacking it into lib/. Open code
-# (hybrid/, open/, ISC licensed) takes over parts of that core at link time.
+# The Linux/cfg80211 side is in src/. It links against Broadcom's 802.11
+# core, lib/wlc_hybrid.o_shipped, which is not part of this tree: `make fetch`
+# downloads Broadcom's original release and verifies its checksums before
+# unpacking it into lib/. Open code (hybrid/, open/) takes over parts of that
+# core at link time.
 
 BCM4360_VERSION := 1.1.1
 

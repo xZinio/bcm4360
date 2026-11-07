@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The LEDs of the hardware MAC layer (docs/re/spec/bmac-run.md R4): per GPIO
  * pin the polarity and the blink times, the GPIO writes, and the blink engine

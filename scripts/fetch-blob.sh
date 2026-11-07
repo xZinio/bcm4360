@@ -1,10 +1,7 @@
 #!/bin/sh
-# SPDX-License-Identifier: ISC
-#
 # Download Broadcom's proprietary 802.11 core from Broadcom, verify it and
-# unpack it into lib/. It is linked into the module at build time and stays
-# under Broadcom's license (copied to lib/LICENSE.txt); it is not part of this
-# repository and is used exactly as Broadcom ships it.
+# unpack it into lib/. It is linked into the module at build time; it is not
+# part of this repository and is used exactly as Broadcom ships it.
 #
 #   scripts/fetch-blob.sh [LOCAL_TARBALL]
 set -eu
@@ -35,4 +32,4 @@ fi
 tar -xzf "$tmp/$TARBALL" -C "$tmp" lib/wlc_hybrid.o_shipped lib/LICENSE.txt
 mkdir -p lib
 install -m 0644 "$tmp/lib/wlc_hybrid.o_shipped" "$tmp/lib/LICENSE.txt" lib/
-echo "OK: lib/wlc_hybrid.o_shipped (Broadcom 6.30.223.271, license: lib/LICENSE.txt)"
+echo "OK: lib/wlc_hybrid.o_shipped (Broadcom 6.30.223.271)"

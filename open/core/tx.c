@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The core's transmit path and transmit status (docs/re/spec/frames.md,
  * sections 3 and 4): the prefix and the transmit header of MAC revision 42

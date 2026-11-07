@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The core's receive path (docs/re/spec/frames.md, section 1): wlc_bmac_recv
  * and the hardware checks of wlc_recv, with the rate decode of

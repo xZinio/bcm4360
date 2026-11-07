@@ -1,6 +1,4 @@
 #!/bin/sh
-# SPDX-License-Identifier: ISC
-#
 # Remove bcm4360. From the next boot the previously installed driver
 # (e.g. Broadcom's wl from broadcom-wl-dkms) is used again.
 set -eu
@@ -25,4 +23,4 @@ systemctl daemon-reload
 depmod -a
 
 echo "bcm4360 removed. The previous driver takes over at the next boot;"
-echo "to switch right now: sudo systemd-run --unit=bcm4360-swap --collect /bin/bash $(pwd)/scripts/swap-test.sh wl"
+echo "to switch right now: sudo rmmod bcm4360; sudo modprobe wl; sudo systemctl restart wpa_supplicant"

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * Channel statistics (Broadcom's wlc_cca.c): per channel and second, how much
  * of the air time the own and other networks and interference took, from the

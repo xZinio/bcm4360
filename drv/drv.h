@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * bcm4360_open: the open mac80211 driver for the BCM4360
  * (docs/re/07-open-driver.md). This is the Linux side: PCI, interrupts,

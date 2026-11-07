@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * MAC control primitives of the 802.11 core (wlc_bmac.c): the software copy of
  * the MAC control register with its overrides, the microcode wake override,

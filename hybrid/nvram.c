@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: Broadcom's global NVRAM (nvram_ro.c: the board variables of
  * a host file "nvram.txt") by the open code of open/chip/nvram.c

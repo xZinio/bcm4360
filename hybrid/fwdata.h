@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * Data of Broadcom that the open code loads at runtime (hw_fw_data() of
  * open/include/bcm4360/hw.h): PHY tables, transmit gain tables, radio tables,

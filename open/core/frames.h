@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * State of the core's frame path (docs/re/spec/frames.md), embedded in
  * struct bcm4360_core as `fr`. Owned by frames.c (interrupts), rx.c

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the Bluetooth coexistence functions of the MAC core in
  * Broadcom's core (wlc_bmac.c: mode, wire, the switch, the channel told to

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The backplane of the BCM4360: selecting the current core (the two movable
  * windows of BAR0), register access to any core, the AXI wrapper of the

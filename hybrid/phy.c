@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the PHY (Broadcom's wlc_phy_cmn.c and wlc_phy_ac.c) by the
  * open PHY of open/phy (docs/re/spec/acphy-api.md and the specifications it

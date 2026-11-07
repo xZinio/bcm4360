@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the PMU and the clocks (Broadcom's hndpmu.c) by the open
  * code of open/chip/pmu.c (docs/re/spec/pmu.md).

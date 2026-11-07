@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the control primitives of the MAC core in Broadcom's core
  * (wlc_bmac.c: the MAC control register with its overrides, the microcode

@@ -1,6 +1,4 @@
 #!/bin/sh
-# SPDX-License-Identifier: ISC
-#
 # Prepare Broadcom's core for linking with the open code that takes over parts
 # of it ("hybrid" build, see hybrid/README.md).
 #

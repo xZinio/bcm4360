@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Channel statistics: per channel and second, how much of the air time went
  * to the own network, to other networks and to interference, accumulated

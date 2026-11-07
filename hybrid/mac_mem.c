@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the object memories of the MAC core in Broadcom's core
  * (wlc_bmac.c: shared memory fill, copies to and from the object memories,

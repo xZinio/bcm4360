@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * Hybrid build: open code takes over functions of Broadcom's object inside
  * bcm4360.ko (hybrid/README.md). This header holds what the adapters need to

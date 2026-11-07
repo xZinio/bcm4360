@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the board-variable lookup, number parsing, bit count and
  * CRC-8 of Broadcom's core (bcmutils.c) by the open code of open/lib/utils.c

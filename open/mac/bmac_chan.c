@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The channel and the band of the 802.11 core (wlc_bmac.c): the channel change
  * of the MAC layer with its band switch, the selection of the current band

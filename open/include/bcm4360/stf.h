@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * The per-rate transmit power offsets of the transmit chains ("space-time
  * features", Broadcom's wlc_stf.c): after every computation of the PHY's

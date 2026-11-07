@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * The regulatory database interpreter (Broadcom's wlc_clm.c): country and
  * locale lookup, valid channels, flags, per-rate power limits.

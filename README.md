@@ -7,22 +7,39 @@ installs through DKMS, so it is rebuilt automatically for every new kernel.
 
 ## What's new
 
+**1.1.1**
+
+- **The access point NetworkManager picks is the one it joins.** The driver
+  passed only the network name to Broadcom's core, which then chose among
+  all its access points by signal alone. A profile limited to 5 GHz still
+  ended up on 2.4 GHz. Now the access point and channel wpa_supplicant
+  picked (which honours the profile's band and BSSID) are the join target,
+  as in `brcmfmac`. A profile with a fixed BSSID also turns the core's own
+  roaming off, so it stays on that access point.
+- **Stalled connections recover.** On busy networks the link can stay
+  associated while no data gets through, which NetworkManager never notices.
+  The watchdog now asks the router every 30 s. After 30–60 s without an
+  answer it reconnects. If the link stalls again within 5 minutes, it reloads
+  the driver.
+
+**1.1.0**
+
 - **Open code instead of Broadcom's.** Since 1.1.0 most of Broadcom's code
   for this chip runs as open code, written from specifications. This
-  includes the radio and PHY (AC‑PHY): the part no open driver had working,
-  since the in‑kernel `b43` driver marks its BCM4360 support as broken. The
+  includes the radio and PHY (AC‑PHY), which the in‑kernel `b43` driver
+  lacks (it marks its BCM4360 support as broken). The
   MAC hardware layer, DMA, clocks and power, board configuration and
   regulatory lookup are open too. In a bring‑up with channel changes,
   measured in an emulator, only 37 % of the Broadcom code that used to run
   still runs. Counting how often each piece runs, 99 % of what the driver
   executes is open code. Each open layer has a switch to fall back to
-  Broadcom's code (see [hybrid/README.md](hybrid/README.md)).
+  Broadcom's code (see [Settings](#settings)).
 - **Fewer problems than Broadcom's `wl`.** Connections and roams are
   reported to the kernel correctly. eduroam works through NetworkManager.
   Wi‑Fi no longer dies until a reboot after a failed roam, and scans no
   longer get stuck after a dropped link. The memory-safety warning at every
   boot is gone, `iw` shows correct values, and normal users can query the
-  interface. Full list: [docs/fixes.md](docs/fixes.md).
+  interface.
 - **Recovers by itself.** A watchdog reloads the driver if Wi‑Fi stays dead.
   A fallback service loads `wl` if the driver failed to build for a new kernel.
   On networks with both bands, the driver prefers 5 GHz access points, which
@@ -30,8 +47,10 @@ installs through DKMS, so it is rebuilt automatically for every new kernel.
 
 Still Broadcom's: the upper 802.11 layer (joining networks, scanning,
 aggregation, rate selection, keys) and the chip's microcode and data tables.
-Replacing the upper layer is the next step; see
-[docs/re/07-open-driver.md](docs/re/07-open-driver.md).
+Replacing the upper layer is the next step: `bcm4360_open`, a mac80211
+driver without any of Broadcom's code, is in `drv/` and `open/core/`. It is
+**experimental and not installed**. Its last test on the card froze the
+whole machine during bring‑up, so don't load it.
 
 ## Will it work on my machine?
 
@@ -78,18 +97,19 @@ This builds the module (half a minute), installs it, and blocks the
 other Broadcom drivers that would grab the card (`b43`, `bcma`, `ssb`,
 `brcm*`, `wl`). It also sets up the watchdog and the fallback service.
 
-**4. Reboot.** Or switch without rebooting. Wi‑Fi drops for about 10
-seconds, and if the new driver doesn't reconnect, the old one comes back:
+**4. Reboot.** Or switch without rebooting (Wi‑Fi drops for about 10
+seconds):
 
 ```sh
-sudo systemd-run --unit=bcm4360-swap --collect /bin/bash "$PWD/scripts/swap-test.sh" bcm4360
-sudo cat /var/log/bcm4360-swap-test.log     # ends with RESULT: PASS
+sudo rmmod bcm4360 2>/dev/null; sudo modprobe bcm4360; sudo systemctl restart wpa_supplicant
 ```
 
 **5. Check it:**
 
 ```sh
-sudo bash scripts/verify.sh     # link, DHCP, internet, DNS, scan, kernel log
+cat /sys/module/bcm4360/version      # the version you installed
+iw dev wlan0 link                    # access point, band, signal
+journalctl -k -b | grep bcm4360      # no WARNING or Call Trace
 ```
 
 ### Update
@@ -98,7 +118,7 @@ sudo bash scripts/verify.sh     # link, DHCP, internet, DNS, scan, kernel log
 cd bcm4360 && git pull && sudo sh scripts/install.sh
 ```
 
-Then reboot, or switch with the `swap-test.sh` command from step 4.
+Then reboot, or switch with the command from step 4.
 
 ### Uninstall
 
@@ -125,14 +145,6 @@ sudo rmmod bcm4360; sudo modprobe wl; sudo systemctl restart wpa_supplicant
 Don't use `modprobe -r` to reload the driver. It also unloads `cfg80211`,
 and wpa_supplicant then can't use Wi‑Fi until it is restarted.
 
-To see how the driver is doing over days, `scripts/wifi-daily.py` logs the
-connection as your normal user and reports outages per network and band:
-
-```sh
-python3 scripts/wifi-daily.py enable          # starts logging, also at every login
-python3 scripts/wifi-daily.py report --days 7
-```
-
 ## Settings
 
 Module parameters go in a file in `/etc/modprobe.d/` (as in step 2 above)
@@ -141,7 +153,7 @@ and take effect after a reboot.
 | Parameter | Default | What it does |
 |---|---|---|
 | `prefer_5ghz` | 15 | Bonus in dB for 5 GHz access points when joining; 0 picks by signal only. Can also be changed at runtime in `/sys/module/bcm4360/parameters/`. |
-| `open_phy`, `open_mac`, `open_dma`, … | 1 | One switch per open layer; 0 runs Broadcom's code for that layer. The full list is in [hybrid/README.md](hybrid/README.md). |
+| `open_phy`, `open_mac`, `open_dma`, `open_pmu`, `open_si`, `open_srom`, `open_nvram`, `open_clm`, `open_chan`, `open_ppr`, `open_rate`, `open_stf`, `open_stf_policy`, `open_cca`, `open_iovar`, `open_access`, `open_utils` | 1 | One switch per open layer; 0 runs Broadcom's code for that layer. `modinfo bcm4360` describes each. |
 
 ## Known limitations
 
@@ -154,22 +166,25 @@ and take effect after a reboot.
   (802.1X, e.g. eduroam). Networks that accept only WPA3, or that require
   management frame protection, don't work.
 - **Roaming** between access points is done by Broadcom's core.
-  wpa_supplicant only picks the network.
+  wpa_supplicant picks the access point to join; with a BSSID fixed in the
+  profile, the core does not roam.
 - **2.4 GHz on busy enterprise networks** (seen on Cisco and Meraki) can stall
-  for 20–60 seconds. It recovers by itself, and the 5 GHz preference avoids
-  most of it.
+  while staying associated. Broadcom's complete `wl` driver does the same on
+  those channels. The watchdog reconnects after 30–60 s. To avoid it, keep the
+  profile on 5 GHz: `nmcli con modify NAME 802-11-wireless.band a`.
 - The blocklist also blocks `bcma` and `ssb`. Don't install on a machine that
   needs them for another Broadcom device.
 
 ## How it is made
 
 ```
-src/       Linux side (cfg80211): Broadcom's wl source with this project's fixes
-open/      open hardware layer: PHY and radio, MAC, DMA, backplane, power, SROM, ...
-hybrid/    adapters that let open/ take over functions of Broadcom's code at link time
-docs/re/   specifications, method and status of the reverse engineering
-tools/re/  emulator that runs Broadcom's code and the open code side by side
-scripts/   install, uninstall, swap-test, verify, card tests, logging
+src/        Linux side (cfg80211): Broadcom's wl source with this project's fixes
+open/       open hardware layer: PHY and radio, MAC, DMA, backplane, power, SROM, ...
+hybrid/     adapters that let open/ take over functions of Broadcom's code at link time
+drv/        bcm4360_open, the open mac80211 driver (experimental, with open/core/)
+scripts/    install, uninstall, download of Broadcom's core, firmware data extractor
+systemd/    watchdog and fallback service
+modprobe.d/ blocklist of the other Broadcom drivers
 ```
 
 Analysts (AI agents) studied Broadcom's code and wrote specifications that
@@ -177,12 +192,14 @@ describe its behaviour, never its code. The open code was written from those
 specifications alone, by agents that never saw Broadcom's code. Every open
 layer then had to do exactly what Broadcom's does in an emulator, compared
 register access by register access, before it was tested on the card. The
-method is in [docs/re/](docs/re/README.md).
+specifications, the emulator and the test scripts are in this repository's
+history (up to 1.1.0 and commit `6a58d4e`).
 
 `src/` can be rebuilt from public sources: Broadcom's
 `hybrid-v35_64-nodebug-pcoem-6_30_223_271.tar.gz` (SHA‑256 `5f79774d…144be`),
 Arch Linux's `broadcom-wl-dkms` patches 001–023 (commit `281691a`), and
-`patches/0001-bcm4360-fixes.patch`.
+this project's changes (`patches/0001-bcm4360-fixes.patch` in the history up
+to 1.1.0).
 
 ## License and credits
 

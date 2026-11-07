@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Generic helpers of the driver (bcmutils.c): the lookup of the board
  * variables and of numbers and lists of numbers in them, the number parser

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * AC-PHY of the BCM4360: setting the channel. wlc_phy_chanspec_set and the
  * channel function sub_0a7089 (wlc_phy_chanspec_set_acphy), with its small

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The services of open/include/bcm4360/phy_env.h and hw.h (hybrid/phy.c with
  * the open functions in place of Broadcom's). The PHY holds `struct

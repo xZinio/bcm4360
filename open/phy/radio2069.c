@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The 2069 radio behind the AC-PHY of the BCM4360: power, preferred values,
  * RC calibrations, channel tuning.

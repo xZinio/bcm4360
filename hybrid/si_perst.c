@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: the PCIe bridge functions of Broadcom's core (nicpci.c and
  * the si_pci* functions of siutils.c) by the open code of

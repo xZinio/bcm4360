@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Up and down of the 802.11 core (wlc_bmac.c): the one-time preparation of
  * the chip after power-up, the steps that bracket wlc_bmac_init at every up

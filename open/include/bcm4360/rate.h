@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * Rate sets: the helpers of Broadcom's wlc_rate.c that build and narrow the
  * sets of rates the driver may use (default set of a PHY type, filter by

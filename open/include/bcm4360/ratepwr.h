@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * The per-rate transmit power container: power values (signed bytes, quarter
  * dBm, -128 = rate disabled) for every rate of one channel bandwidth, with

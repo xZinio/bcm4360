@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * AC-PHY of the BCM4360: the calibrations. The calibration scheduler and phase
  * machine (wlc_phy_cals_acphy), the tone / sample player, the transmit IQ/LO

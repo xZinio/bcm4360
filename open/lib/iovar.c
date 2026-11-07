@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The iovar dispatcher (Broadcom's wlc_iovar_op, wlc.c): finds a named driver
  * variable in the iovar tables of the driver's modules and hands the get or

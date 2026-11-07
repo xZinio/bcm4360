@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The microcode host flags of the 802.11 core (wlc_bmac.c): five 16-bit words
  * that tell the microcode how to behave. The driver keeps a copy per band and

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * The core's private state (docs/re/07-open-driver.md, milestone 1; task
  * docs/re/tasks/core-env.md).

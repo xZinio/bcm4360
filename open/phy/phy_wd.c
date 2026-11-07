@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The PHY watchdog of the BCM4360 (wlc_phy_watchdog), called once a second by
  * the MAC, and the periodic pieces only it calls that were not in open/ yet:

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * Integer types. In the kernel these come from <linux/types.h>; the test
  * build for the emulator is freestanding and defines them here.

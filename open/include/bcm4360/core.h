@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * The core of the open driver (docs/re/07-open-driver.md): what Broadcom's
  * upper layer did to the hardware, without the upper layer. It joins the

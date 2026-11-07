@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * What the MAC layer needs from its environment besides the registers of the
  * 802.11 core: the backplane (the core's wrapper, the crystal, GPIOs, other

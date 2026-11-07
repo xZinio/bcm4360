@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: up and down of the MAC core in Broadcom's core (wlc_bmac.c:
  * the one-time preparation after power-up, the steps before and after

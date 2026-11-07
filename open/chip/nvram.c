@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The global NVRAM (Broadcom's nvram_ro.c): board variables read from a text
  * file "nvram.txt" of the host, kept as a list of blocks of NUL-separated

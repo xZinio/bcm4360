@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The DMA engine of one FIFO of the 802.11 core, 64-bit descriptors: attach
  * and probe, ring allocation, the channel state machine (init, reset,

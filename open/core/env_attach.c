@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The services of open/include/bcm4360/bmac_attach.h, bmac_led.h and dma.h
  * (hybrid/mac_attach.c, mac_led.c, dma.c with the open functions in place of

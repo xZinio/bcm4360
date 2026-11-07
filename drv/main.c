@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * bcm4360_open: PCI device, interrupts, module (docs/re/07-open-driver.md).
  */

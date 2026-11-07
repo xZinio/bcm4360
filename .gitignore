@@ -1,4 +1,4 @@
-# Broadcom's proprietary core and its license: fetched at install time, never committed
+# Broadcom's core (lib/): fetched at install time, never committed
 /lib/
 
 # reverse-engineering scratch (disassembly/decompilation of Broadcom's core,

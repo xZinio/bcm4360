@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The per-rate transmit power offsets of the transmit chains: what the
  * driver does after every computation of the PHY's transmit power targets.

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: Broadcom's regulatory database interpreter (wlc_clm.c) by the
  * open code of open/lib/clm.c (docs/re/spec/clm.md). The database stays

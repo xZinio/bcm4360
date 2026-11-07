@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * AC-PHY of the BCM4360: the board- and calibration-dependent set-up around
  * the receive front end. The leaf functions that the channel function and the

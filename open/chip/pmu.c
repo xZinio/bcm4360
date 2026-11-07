@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Power management unit (PMU) and clocks of the BCM4360.
  *

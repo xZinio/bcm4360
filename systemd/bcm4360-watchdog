@@ -1,6 +1,4 @@
 #!/bin/sh
-# SPDX-License-Identifier: ISC
-#
 # Installed by the bcm4360 driver (scripts/install.sh), run every 30 s by
 # bcm4360-watchdog.timer. Last resort for states of Broadcom's firmware that
 # the driver cannot get out of by itself. Two kinds:

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Attach and detach of the hardware MAC layer (docs/re/spec/bmac-attach.md;
  * the DMA parameters of bmac-data.md P54, the FIFO size table and the

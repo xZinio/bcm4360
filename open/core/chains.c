@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Changes of the transmit and receive chains (docs/re/spec/coverage.md part 2,
  * G5): wlc_stf_txchain_set with its completion, wlc_stf_rxchain_set, the

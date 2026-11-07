@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * Generic helpers: board variables, number parsing, bit count, CRC-8.
  *

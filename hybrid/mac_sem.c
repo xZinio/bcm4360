@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: Broadcom's offload semaphore (tcm_sem_enter / tcm_sem_exit,
  * wlc_offloads.c), taken around every access of an object memory of the MAC,

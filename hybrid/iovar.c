@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hybrid build: Broadcom's iovar dispatcher (wlc_iovar_op, wlc.c) by the open
  * code of open/lib/iovar.c (docs/re/spec/iovar.md). Switch open_iovar, read

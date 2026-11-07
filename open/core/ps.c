@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Station power save (docs/re/spec/ps-keys.md, section 1) for a platform that
  * sends the null data frames and parses the TIM itself (mac80211's

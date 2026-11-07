@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * Hardware keys (docs/re/spec/ps-keys.md, section 2): the key table in
  * shared memory, the security index block, the binding of a pairwise key to

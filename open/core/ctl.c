@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The control policies of Broadcom's upper layer, for the open core:
  *   G2  LEDs (wlc_led.c): which pin shows what, blink while frames pass

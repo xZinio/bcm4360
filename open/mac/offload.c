@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The semaphore that the driver shares with the offload firmware of the
  * on-chip ARM (Broadcom's tcm_sem_enter / tcm_sem_exit, wlc_offloads.c),

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * The entry points of the PHY that docs/re/spec/acphy-api.md adds to the
  * interface of phy.h: with them the open PHY answers all 79 functions through

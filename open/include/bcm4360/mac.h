@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * The MAC core's control state and the control primitives built on it: the
  * software copy of the MAC control register with its overrides, the microcode

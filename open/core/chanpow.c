@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: ISC
 /*
  * The regulatory transmit power limits of a channel: country at attach, the
  * regulatory database lookup, the per-rate container handed to the PHY

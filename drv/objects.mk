@@ -1,8 +1,6 @@
-# SPDX-License-Identifier: ISC
-#
 # Objects of bcm4360_open, the open mac80211 driver (docs/re/07-open-driver.md):
 # the Linux side (drv/), the core (open/core/) and the open layers below it,
-# on Broadcom's ISC-licensed OS layer (src/shared/linux_osl.c). No object of
+# on Broadcom's OS layer (src/shared/linux_osl.c). No object of
 # Broadcom's is linked. Included by the Makefile.
 
 open-drv-objs := drv/main.o drv/mac80211.o drv/fw.o drv/timer.o \
