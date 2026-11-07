@@ -87,6 +87,13 @@ void bcm4360_plat_trace(void *plat, const char *step)
 	bcm4360_trace(step);
 }
 
+void bcm4360_plat_note(void *plat, const char *what, u32 val)
+{
+	struct bcm4360_dev *dev = plat;
+
+	dev_warn_ratelimited(&dev->pdev->dev, "%s: 0x%08x\n", what, val);
+}
+
 const void *bcm4360_plat_clm(void *plat)
 {
 	return bcm4360_fw_clm(plat);
@@ -176,9 +183,15 @@ static int bcm4360_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		return err;
 	pci_set_master(pdev);
 	bcm4360_pci_retry_timeout(pdev);
-	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-	if (err)
-		err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	/*
+	 * 32-bit DMA only. The DMA layer passes 32-bit bus addresses (osl_dma_map
+	 * returns unsigned int; the descriptors' high word is a constant), as
+	 * Broadcom's code does: its glue never raises the mask from the PCI
+	 * default of 32 bits. With a 64-bit mask, buffers above 4 GB lost their
+	 * high bits and the card wrote received frames into other memory
+	 * (2026-11-06: machine frozen; 11-07: DMA errors, nothing received).
+	 */
+	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 	if (err)
 		return err;
 	bcm4360_trace("probe: map BAR0");

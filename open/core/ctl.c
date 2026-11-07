@@ -354,6 +354,7 @@ static void radio_timer_fn(void *arg)
 		return;
 	CORE_MAC_CALL(c, gone = bcm4360_bmac_deviceremoved(m));
 	if (gone) {
+		bcm4360_plat_note(c->plat, "fatal: device gone (radio timer)", 0);
 		bcm4360_plat_fatal(c->plat);
 		return;
 	}

@@ -66,6 +66,7 @@ struct core_frames {
 	/* interrupts (frames.md 2) */
 	bool resched;		/* the last deferred run left work: re-read the status first */
 	u32 txphyerr;		/* count of MI_PHYTXERR */
+	u32 noted;		/* interrupt statuses logged since the last up (first 8) */
 
 	/* receive (frames.md 1) */
 	u32 rx_filter;		/* BCM4360_FILTER_* (set by bcm4360_core_set_filter) */

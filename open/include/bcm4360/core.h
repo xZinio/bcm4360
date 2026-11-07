@@ -288,6 +288,8 @@ void bcm4360_plat_tx_wake(void *plat, u8 fifo);
 void bcm4360_plat_fatal(void *plat);
 /* a step of bring-up or teardown, for the platform's trace (card debugging) */
 void bcm4360_plat_trace(void *plat, const char *step);
+/* an event worth logging always (the reason of a fatal error), with a value */
+void bcm4360_plat_note(void *plat, const char *what, u32 val);
 /* Broadcom's regulatory database as clm_init() takes it (its clm_header,
  * spec clm.md), loaded from the firmware file; NULL if there is none. It
  * stays valid until bcm4360_core_detach() has returned. */

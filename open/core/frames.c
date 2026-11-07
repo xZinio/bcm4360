@@ -120,6 +120,7 @@ static bool dpc_bits(struct bcm4360_core *c, u32 s, u32 bound)
 		if (more)
 			FIELD(hw, HW_INTSTATUS, u32) |= MI_TFS;
 		if (fatal) {
+			bcm4360_plat_note(c->plat, "fatal: transmit status", s);
 			bcm4360_plat_fatal(c->plat);
 			return false;
 		}
@@ -139,8 +140,10 @@ static bool dpc_bits(struct bcm4360_core *c, u32 s, u32 bound)
 	/* MI_CCA, MI_TBTT, MI_DTIM_TBTT, MI_TO: no user here */
 	if (s & MI_BT_PRED)
 		core_btc_predictor(c);		/* coverage.md G3 */
-	if (s & MI_GP0)
+	if (s & MI_GP0) {
+		bcm4360_plat_note(c->plat, "fatal: MI_GP0 (microcode), macintstatus", s);
 		bcm4360_plat_fatal(c->plat);
+	}
 	/* coverage.md G4 (wlc_rfd_intr): D11(0x158) bit 16 at once; a change goes to the
 	 * platform (rfkill), which drops the association, and the next watchdog takes the
 	 * core down */
@@ -169,10 +172,15 @@ bool bcm4360_core_dpc(struct bcm4360_core *c, u32 budget)
 			FIELD(hw, HW_INTSTATUS, u32) |= t;
 	}
 	if (core_deviceremoved(c)) {
+		bcm4360_plat_note(c->plat, "fatal: device gone (dpc)", 0);
 		bcm4360_plat_fatal(c->plat);	/* the glue's wl_down */
 		return false;
 	}
 	s = FIELD(hw, HW_INTSTATUS, u32);
+	if (c->fr.noted < 8) {		/* card debugging: what the first interrupts are */
+		c->fr.noted++;
+		bcm4360_plat_note(c->plat, "interrupt: macintstatus", s);
+	}
 	FIELD(hw, HW_INTSTATUS, u32) = 0;
 	if (!dpc_bits(c, s, bound)) {
 		c->fr.resched = false;

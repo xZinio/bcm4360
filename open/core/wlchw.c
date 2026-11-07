@@ -956,8 +956,11 @@ static bool bmac_fifoerrors(struct bcm4360_core *c)
 	for (i = 0; i < CORE_NFIFO; i++) {
 		u32 v = d11_read32(c->hw, D11_FIFO_INTSTATUS(i));
 
-		if (v & 0xdc00)
+		if (v & 0xdc00) {
+			bcm4360_plat_note(c->plat, "fatal: DMA error, fifo", i);
+			bcm4360_plat_note(c->plat, "fatal: DMA error, fifo intstatus", v);
 			return true;
+		}
 	}
 	return false;
 }
@@ -1032,6 +1035,7 @@ void core_w_watchdog(struct bcm4360_core *c)
 		return;
 	CORE_MAC_CALL(c, gone = bcm4360_bmac_deviceremoved(m));
 	if (gone) {
+		bcm4360_plat_note(c->plat, "fatal: device gone (watchdog)", 0);
 		bcm4360_plat_fatal(c->plat);
 		return;
 	}
