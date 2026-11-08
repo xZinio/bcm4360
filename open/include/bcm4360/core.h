@@ -191,6 +191,10 @@ void bcm4360_core_intrson(struct bcm4360_core *c);
 int bcm4360_core_tx(struct bcm4360_core *c, void *pkt, const struct bcm4360_txparams *p);
 /* headroom the core needs in front of a frame to transmit */
 u32 bcm4360_core_tx_headroom(struct bcm4360_core *c);
+/* received frames dropped by the core, by reason (since the last up): too short for the
+ * receive header, longer than its buffer, PHY error, FCS error, too short a frame, A-MSDU */
+#define BCM4360_RX_DROP_REASONS	6
+void bcm4360_core_rx_stats(struct bcm4360_core *c, u32 *frames, u32 *drop);
 
 /* A-MPDU transmit sessions (docs/re/spec/ampdu.md 1, 3.1). The hardware needs nothing
  * for a session: these set what the core puts into the headers of the session's MPDUs.

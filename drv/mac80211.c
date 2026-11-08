@@ -276,6 +276,11 @@ MODULE_PARM_DESC(allow_tx, "transmit frames (1, default) or drop them all (0: re
 static bool powersave;
 module_param(powersave, bool, 0444);
 MODULE_PARM_DESC(powersave, "offer 802.11 power save to mac80211 (default 0: not card-tested yet)");
+/* 0: no Block Ack sessions, so no A-MPDUs either way (card debugging) */
+static bool ampdu = true;
+module_param(ampdu, bool, 0444);
+MODULE_PARM_DESC(ampdu, "A-MPDU aggregation, transmit and receive (1, default)");
+
 static bool nohwcrypt;
 module_param(nohwcrypt, bool, 0444);
 MODULE_PARM_DESC(nohwcrypt, "all encryption in software (1) instead of the core's engine (0, default)");
@@ -592,6 +597,14 @@ static void bcm4360_stop(struct ieee80211_hw *ieee, bool suspend)
 
 	bcm4360_plat_trace(dev, "stop");
 	spin_lock_bh(&dev->lock);
+	{
+		u32 frames, d[BCM4360_RX_DROP_REASONS];
+
+		bcm4360_core_rx_stats(dev->core, &frames, d);
+		dev_info(&dev->pdev->dev, "received %u frames; dropped: header %u, longer than the "
+			 "buffer %u, PHY error %u, FCS %u, too short %u, A-MSDU %u\n",
+			 frames, d[0], d[1], d[2], d[3], d[4], d[5]);
+	}
 	WRITE_ONCE(dev->up, false);
 	bcm4360_core_intrsoff(dev->core);
 	spin_unlock_bh(&dev->lock);
@@ -1044,7 +1057,8 @@ int bcm4360_mac80211_register(struct bcm4360_dev *dev)
 		ieee80211_hw_set(ieee, SUPPORTS_PS);
 		ieee80211_hw_set(ieee, PS_NULLFUNC_STACK);
 	}
-	ieee80211_hw_set(ieee, AMPDU_AGGREGATION);	/* ampdu.md: the microcode builds the A-MPDUs */
+	if (ampdu)
+		ieee80211_hw_set(ieee, AMPDU_AGGREGATION);	/* ampdu.md: the microcode builds the A-MPDUs */
 	ieee->sta_data_size = sizeof(struct bcm4360_sta);
 	ieee->queues = IEEE80211_NUM_ACS;
 	ieee->max_rates = 4;

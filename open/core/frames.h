@@ -73,6 +73,7 @@ struct core_frames {
 	bool rate_valid;	/* the rate of the last A-MPDU's first MPDU (1.5) */
 	u8  rate_enc, rate_rate, rate_nss, rate_bw, rate_flags;
 	u32 rx_frames, rx_dropped;
+	u32 rx_drop[BCM4360_RX_DROP_REASONS];	/* by reason, for card debugging */
 
 	/* transmit (frames.md 3) */
 	u16 txid;		/* the driver-wide frame id counter (3.4) */

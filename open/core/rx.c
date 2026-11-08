@@ -201,8 +201,10 @@ static bool rx_one(struct bcm4360_core *c, void *p, u32 lo, u32 hi)
 	const u8 *plcp;
 	bool ampdu;
 
-	if (len < RXH_LEN)
+	if (len < RXH_LEN) {
+		fr->rx_drop[0]++;
 		return false;
+	}
 	n = rd16(d, RXH_FRAMESIZE);
 	st1 = rd16(d, RXH_STATUS1);
 	st2 = rd16(d, RXH_STATUS2);
@@ -218,16 +220,26 @@ static bool rx_one(struct bcm4360_core *c, void *p, u32 lo, u32 hi)
 
 	/* 1.4: the checks before the upper layer */
 	pad = (st1 & ST1_PAD) ? 2 : 0;
-	if (len < RXH_LEN + pad + PLCP_LEN || n + RXH_LEN > len)
+	if (len < RXH_LEN + pad + PLCP_LEN || n + RXH_LEN > len) {
+		fr->rx_drop[1]++;
 		return false;
-	if (phy0 & PHY0_BAD)
+	}
+	if (phy0 & PHY0_BAD) {
+		fr->rx_drop[2]++;
 		return false;
-	if ((st1 & ST1_FCSERR) && !(fr->rx_filter & BCM4360_FILTER_FCSFAIL))
+	}
+	if ((st1 & ST1_FCSERR) && !(fr->rx_filter & BCM4360_FILTER_FCSFAIL)) {
+		fr->rx_drop[3]++;
 		return false;
-	if (n < pad + MIN_AFTER_PAD)
+	}
+	if (n < pad + MIN_AFTER_PAD) {
+		fr->rx_drop[4]++;
 		return false;
-	if (st2 & ST2_AMSDU)
+	}
+	if (st2 & ST2_AMSDU) {
+		fr->rx_drop[5]++;
 		return false;		/* TODO: A-MSDU sub-frames are not joined (reception off) */
+	}
 
 	/* 1.8 */
 	plcp = d + RXH_LEN + pad;
@@ -302,4 +314,13 @@ bool core_rx_run(struct bcm4360_core *c, u32 bound)
 		}
 	}
 	return taken >= bound;
+}
+
+void bcm4360_core_rx_stats(struct bcm4360_core *c, u32 *frames, u32 *drop)
+{
+	u32 i;
+
+	*frames = c->fr.rx_frames;
+	for (i = 0; i < BCM4360_RX_DROP_REASONS; i++)
+		drop[i] = c->fr.rx_drop[i];
 }
