@@ -453,6 +453,18 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 		memcpy(&rs, skb->cb, sizeof(rs));
 		if (rs.flags & BCM4360_RX_AMPDU)
 			dev->rx_n_ampdu++;
+		/*
+		 * The microcode's decryption flags count only for a key the driver gave it
+		 * (rs.key: its key table entry). With no key loaded it still marked 42 % of
+		 * the received frames decrypted (2026-11-08, nohwcrypt=1): mac80211 then
+		 * skipped its own decryption, the frames stayed encrypted and were lost, and
+		 * downloads ran at 0.5 Mbit/s. Without our key, mac80211 decrypts.
+		 */
+		if ((rs.flags & (BCM4360_RX_DECRYPTED | BCM4360_RX_DECRYPT_ERR)) &&
+		    (rs.key >= BCM4360_NKEYS || !READ_ONCE(dev->hwkey[rs.key]))) {
+			rs.flags &= ~(BCM4360_RX_DECRYPTED | BCM4360_RX_DECRYPT_ERR);
+			dev->rx_n_nokey++;
+		}
 		if (rs.flags & BCM4360_RX_DECRYPT_ERR) {	/* ps-keys.md 2.5 step 4: garbage */
 			dev->rx_n_decrypt_err++;
 			dev_kfree_skb(skb);
@@ -613,9 +625,10 @@ static void bcm4360_stop(struct ieee80211_hw *ieee, bool suspend)
 			 "buffer %u, bad PHY status %u, FCS %u, too short %u, A-MSDU %u\n",
 			 frames, d[0], d[1], d[2], d[3], d[4], d[5]);
 		dev_info(&dev->pdev->dev, "to mac80211: %u passed, %u in A-MPDUs; microcode said "
-			 "decrypted %u, decryption bad %u (dropped); unknown rate %u (dropped)\n",
+			 "decrypted %u, decryption bad %u (dropped), either without our key %u "
+			 "(left to mac80211); unknown rate %u (dropped)\n",
 			 dev->rx_n_passed, dev->rx_n_ampdu, dev->rx_n_decrypted,
-			 dev->rx_n_decrypt_err, dev->rx_n_badrate);
+			 dev->rx_n_decrypt_err, dev->rx_n_nokey, dev->rx_n_badrate);
 	}
 	WRITE_ONCE(dev->up, false);
 	bcm4360_core_intrsoff(dev->core);

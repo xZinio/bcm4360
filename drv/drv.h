@@ -81,6 +81,7 @@ struct bcm4360_dev {
 	 * every stop): marked decrypted, marked decryption failed (dropped), dropped for
 	 * an unknown rate, part of an A-MPDU, passed to mac80211 */
 	u32 rx_n_decrypted, rx_n_decrypt_err, rx_n_badrate, rx_n_ampdu, rx_n_passed;
+	u32 rx_n_nokey;		/* decryption flags for an entry without a key: cleared */
 };
 
 static inline struct bcm4360_dev *bcm4360_dev_of(struct bcm4360_hw *hw)
