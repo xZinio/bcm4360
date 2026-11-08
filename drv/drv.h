@@ -77,6 +77,10 @@ struct bcm4360_dev {
 
 	struct ieee80211_supported_band band_2g;
 	struct ieee80211_supported_band band_5g;
+	/* received frames by what the microcode said about them (card debugging, logged at
+	 * every stop): marked decrypted, marked decryption failed (dropped), dropped for
+	 * an unknown rate, part of an A-MPDU, passed to mac80211 */
+	u32 rx_n_decrypted, rx_n_decrypt_err, rx_n_badrate, rx_n_ampdu, rx_n_passed;
 };
 
 static inline struct bcm4360_dev *bcm4360_dev_of(struct bcm4360_hw *hw)

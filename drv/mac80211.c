@@ -451,16 +451,23 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 		struct bcm4360_rxstatus rs;
 
 		memcpy(&rs, skb->cb, sizeof(rs));
+		if (rs.flags & BCM4360_RX_AMPDU)
+			dev->rx_n_ampdu++;
 		if (rs.flags & BCM4360_RX_DECRYPT_ERR) {	/* ps-keys.md 2.5 step 4: garbage */
+			dev->rx_n_decrypt_err++;
 			dev_kfree_skb(skb);
 			continue;
 		}
-		if (rs.flags & BCM4360_RX_DECRYPTED)
+		if (rs.flags & BCM4360_RX_DECRYPTED) {
+			dev->rx_n_decrypted++;
 			bcm4360_tkip_rx_next(dev, skb, rs.key);
+		}
 		if (!bcm4360_rx_status(dev, &rs, IEEE80211_SKB_RXCB(skb))) {
+			dev->rx_n_badrate++;
 			dev_kfree_skb(skb);
 			continue;
 		}
+		dev->rx_n_passed++;
 		{
 			struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
 
@@ -605,6 +612,10 @@ static void bcm4360_stop(struct ieee80211_hw *ieee, bool suspend)
 		dev_info(&dev->pdev->dev, "received %u frames; dropped: header %u, longer than the "
 			 "buffer %u, bad PHY status %u, FCS %u, too short %u, A-MSDU %u\n",
 			 frames, d[0], d[1], d[2], d[3], d[4], d[5]);
+		dev_info(&dev->pdev->dev, "to mac80211: %u passed, %u in A-MPDUs; microcode said "
+			 "decrypted %u, decryption bad %u (dropped); unknown rate %u (dropped)\n",
+			 dev->rx_n_passed, dev->rx_n_ampdu, dev->rx_n_decrypted,
+			 dev->rx_n_decrypt_err, dev->rx_n_badrate);
 	}
 	WRITE_ONCE(dev->up, false);
 	bcm4360_core_intrsoff(dev->core);
