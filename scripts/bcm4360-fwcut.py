@@ -41,7 +41,7 @@ MAGIC = b'B4360FW1'
 NAME_LEN = 48
 ALIGN = 16                      # of every entry's data in the file
 
-# hybrid/fwdata.h: name, size in bytes (tools/re/fwcheck.py compares the two)
+# hybrid/fwdata.h: name, size in bytes
 FWDATA = [
     ('acphy_est_pwr_lut_core0_rev0', 256),
     ('acphy_est_pwr_lut_core1_rev0', 256),
@@ -331,8 +331,7 @@ def main(argv):
     os.chmod(tmp, 0o644)
     os.replace(tmp, argv[2])
     db = dict(ents)
-    print('%s: %d entries, %d bytes; CLM database %d bytes, %d pointers '
-          '(Broadcom\'s data: not for redistribution)'
+    print('%s: %d entries, %d bytes; CLM database %d bytes, %d pointers'
           % (argv[2], len(ents), len(out), len(db[CLM_ENTRY]), len(db[CLM_ENTRY + '.reloc']) // 4))
     return 0
 

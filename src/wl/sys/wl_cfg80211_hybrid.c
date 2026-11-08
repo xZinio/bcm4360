@@ -625,7 +625,7 @@ wl_cfg80211_scan(struct wiphy *wiphy,
 		goto scan_out;
 	}
 
-	/* (re)start the timeout; mod_delayed_work() is GPL-only */
+	/* (re)start the timeout; mod_delayed_work() is not available to this module */
 	cancel_delayed_work(&wl->scan_timeout);
 	schedule_delayed_work(&wl->scan_timeout, msecs_to_jiffies(WL_SCAN_TIMEOUT_MS));
 	return 0;

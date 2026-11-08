@@ -157,7 +157,6 @@ static void wl_report_radio_state(wl_info_t *wl);
 
 MODULE_DESCRIPTION("Broadcom BCM4360 802.11ac driver (open cfg80211 glue, Broadcom hybrid core)");
 MODULE_VERSION(BCM4360_DRV_VERSION);
-/* The linked Broadcom core (lib/wlc_hybrid.o_shipped) is proprietary. */
 MODULE_LICENSE("MIXED/Proprietary");
 
 /*
@@ -935,7 +934,7 @@ wl_module_init(void)
 	int error = -ENODEV;
 
 	printk(KERN_NOTICE KBUILD_MODNAME ": BCM4360 driver " BCM4360_DRV_VERSION
-		", linking Broadcom's proprietary 802.11 core " EPI_VERSION_STR
+		", linking Broadcom's 802.11 core " EPI_VERSION_STR
 		" (built 2015, predates current kernel hardening)\n");
 
 #ifdef BCMDBG
@@ -3479,7 +3478,7 @@ static const struct file_operations wl_fops = {
 /*
  * bcm4360: /proc/bcm4360_snap<unit> (root only), the read-only snapshot of the
  * card's PHY registers, radio registers, PHY tables and shared memory
- * (hybrid/snap.c; scripts/phy-snap.py). A write is a request, text with one
+ * (hybrid/snap.c). A write is a request, text with one
  * item per line, at most 64 KiB; its items are read at once, each with the
  * driver's lock held, and the following reads return the result: 16-bit words
  * in the order of the request. A failed item fails the whole write: -EAGAIN

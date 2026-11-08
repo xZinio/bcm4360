@@ -6,7 +6,7 @@
 
 #include "drv.h"
 
-/* Broadcom's OS layer (src/shared/linux_osl.c, ISC): the open code runs on it
+/* Broadcom's OS layer (src/shared/linux_osl.c): the open code runs on it
  * in the hybrid module, and so it does here */
 void *osl_attach(void *pdev, unsigned int bustype, bool pkttag);
 void osl_detach(void *osh);
@@ -336,7 +336,6 @@ module_pci_driver(bcm4360_driver);
 
 MODULE_DESCRIPTION("Broadcom BCM4360 802.11ac, open driver (mac80211)");
 MODULE_AUTHOR("bcm4360 project");
-/* everything here is ISC; Broadcom's data comes as a firmware file */
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_VERSION(BCM4360_DRV_VERSION);
 MODULE_FIRMWARE(BCM4360_FW_NAME);

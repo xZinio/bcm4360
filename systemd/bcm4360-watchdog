@@ -26,7 +26,7 @@
 # and reloads at most once every 10 minutes.
 #
 # BCM4360_WD_TEST=1 replaces the observations and the actions with the
-# BCM4360_WD_* variables below and a message (scripts/test-watchdog.sh).
+# BCM4360_WD_* variables below and a message (for tests).
 set -u
 
 window=150	# seconds without a connection before reloading

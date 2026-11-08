@@ -1,9 +1,15 @@
 # bcm4360: Wi‑Fi driver for the Broadcom BCM4360
 
 A Linux driver for the Broadcom **BCM4360** 802.11ac Wi‑Fi chip, found in the
-2013–2017 MacBook Air. It started as Broadcom's `wl` driver, repaired for
-current kernels, and is being replaced piece by piece with open code. It
-installs through DKMS, so it is rebuilt automatically for every new kernel.
+2013–2017 MacBook Air. It comes in two drivers, installed together through
+DKMS and rebuilt automatically for every new kernel:
+
+- **`bcm4360`** started as Broadcom's `wl` driver, repaired for current
+  kernels; open code has replaced most of Broadcom's code inside it. It is
+  the default.
+- **`bcm4360_open`** (since 1.2.0) contains none of Broadcom's code. It loads
+  only Broadcom's microcode and data tables, cut out of Broadcom's download at
+  install time. It is an install option, and `bcm4360` is its fallback.
 
 ## What's new
 
@@ -141,7 +147,7 @@ journalctl -k -b | grep bcm4360      # no WARNING or Call Trace
 ### Update
 
 ```sh
-cd bcm4360 && git pull && sudo sh scripts/install.sh
+cd bcm4360 && git pull && sudo sh scripts/install.sh     # add --open for bcm4360_open
 ```
 
 Then reboot, or switch with the command from step 4.
@@ -152,8 +158,9 @@ Then reboot, or switch with the command from step 4.
 sudo sh scripts/uninstall.sh && sudo reboot
 ```
 
-This removes the driver, the blocklist, the watchdog and the fallback
-service. Your distribution's `wl` driver, if installed, takes over again.
+This removes both drivers, the blocklists, the firmware file, the watchdog
+and the fallback service. Your distribution's `wl` driver, if installed,
+takes over again.
 
 ## If Wi‑Fi stops working
 
@@ -168,6 +175,10 @@ echo "options bcm4360 open_phy=0" | sudo tee /etc/modprobe.d/bcm4360-local.conf
 sudo rmmod bcm4360; sudo modprobe wl; sudo systemctl restart wpa_supplicant
 ```
 
+With `bcm4360_open`, go back to `bcm4360` right away with
+`sudo rmmod bcm4360_open; sudo modprobe bcm4360`, and for good with
+`sudo rm /etc/modprobe.d/bcm4360-open.conf` and a reboot.
+
 Don't use `modprobe -r` to reload the driver. It also unloads `cfg80211`,
 and wpa_supplicant then can't use Wi‑Fi until it is restarted.
 
@@ -181,19 +192,30 @@ and take effect after a reboot.
 | `prefer_5ghz` | 15 | Bonus in dB for 5 GHz access points when joining; 0 picks by signal only. Can also be changed at runtime in `/sys/module/bcm4360/parameters/`. |
 | `open_phy`, `open_mac`, `open_dma`, `open_pmu`, `open_si`, `open_srom`, `open_nvram`, `open_clm`, `open_chan`, `open_ppr`, `open_rate`, `open_stf`, `open_stf_policy`, `open_cca`, `open_iovar`, `open_access`, `open_utils` | 1 | One switch per open layer; 0 runs Broadcom's code for that layer. `modinfo bcm4360` describes each. |
 
+`bcm4360_open` (`options bcm4360_open ...`):
+
+| Parameter | Default | What it does |
+|---|---|---|
+| `nohwcrypt` | 0 | 1: all encryption in software (mac80211) instead of the chip's engine. |
+| `ampdu` | 1 | 0: no A-MPDU aggregation. |
+| `powersave` | 0 | 1: offer 802.11 power save (not tested on the card yet). |
+| `mpc` | 0 | 1: power the radio down while idle (not tested on the card yet). |
+| `trace` | 0 | Log every bring-up step and wait this many ms after it, to find where a card hangs. |
+
 ## Known limitations
 
-- **Broadcom's code is still linked in**, so the kernel is marked as tainted,
-  and logs one `Unpatched return thunk` warning per boot. The stock `wl` does
-  the same.
+- **`bcm4360` links Broadcom's 2015 core.** The kernel logs one `Unpatched
+  return thunk` warning per boot for it, as for the stock `wl`.
+  `bcm4360_open` doesn't link it.
 - **Client mode only** (and ad‑hoc/IBSS): no access point, monitor mode or
   Wi‑Fi Direct.
 - **Security:** open networks, WPA/WPA2‑Personal and WPA/WPA2‑Enterprise
-  (802.1X, e.g. eduroam). Networks that accept only WPA3, or that require
-  management frame protection, don't work.
-- **Roaming** between access points is done by Broadcom's core.
-  wpa_supplicant picks the access point to join; with a BSSID fixed in the
-  profile, the core does not roam.
+  (802.1X, e.g. eduroam). With `bcm4360`, networks that accept only WPA3,
+  or that require management frame protection, don't work. With
+  `bcm4360_open`, WPA2-Personal is tested; 802.1X and WPA3 are not yet.
+- **Roaming:** with `bcm4360`, Broadcom's core roams; wpa_supplicant picks
+  the access point to join, and with a BSSID fixed in the profile the core
+  does not roam. With `bcm4360_open`, wpa_supplicant and mac80211 roam.
 - **2.4 GHz on busy enterprise networks** (seen on Cisco and Meraki) can stall
   while staying associated. Broadcom's complete `wl` driver does the same on
   those channels. The watchdog reconnects after 30–60 s. To avoid it, keep the
@@ -210,7 +232,7 @@ hybrid/     adapters that let open/ take over functions of Broadcom's code at li
 drv/        bcm4360_open, the open mac80211 driver (with open/core/)
 scripts/    install, uninstall, download of Broadcom's core, firmware data extractor
 systemd/    watchdog and fallback service
-modprobe.d/ blocklist of the other Broadcom drivers
+modprobe.d/ blocklists: the other Broadcom drivers; bcm4360 when bcm4360_open is the driver
 ```
 
 Analysts (AI agents) studied Broadcom's code and wrote specifications that

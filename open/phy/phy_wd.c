@@ -8,7 +8,7 @@
  * noise-sample request is the receive group's (open/phy/phy_rx.c,
  * bcm4360_phy_noise_sample_request).
  *
- * Where the whole-session test (tools/re/hybrid.py) and the specification
+ * Where the whole-session test (emulator) and the specification
  * disagree the code follows the test; docs/re/questions/phy-api-watchdog.md
  * lists those places.
  *

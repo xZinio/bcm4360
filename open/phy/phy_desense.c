@@ -1349,7 +1349,7 @@ void bcm4360_phy_ed_thres_acphy(struct bcm4360_phy *phy, s32 *val, bool set)
  * The measured registers read 0 in the model, so the detector decisions are
  * degenerate (both detectors report no interference); the level still steps
  * from 0 to 1 unconditionally on the first tick. Compared through the watchdog
- * in the whole-session test (tools/re/hybrid.py).
+ * in the whole-session test (emulator).
  */
 void bcm4360_phy_hwaci_engine_acphy(struct bcm4360_phy *phy)
 {

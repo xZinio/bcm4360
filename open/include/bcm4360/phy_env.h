@@ -3,7 +3,7 @@
  * the MAC layer, of the chip layer (backplane, OTP) and timers.
  *
  * The PHY code calls these functions; it does not implement them. In a driver
- * the MAC and chip layers do. In the comparison tests (tools/re/ab.py) they
+ * the MAC and chip layers do. In the comparison tests (emulator) they
  * are replaced by recorders: a call is noted with its arguments at its place
  * between the register accesses and compared with the call the object makes
  * at that place; results are those the object got. So for the tests the

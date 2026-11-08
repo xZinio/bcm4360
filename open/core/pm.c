@@ -1,6 +1,6 @@
 /*
  * System suspend: the part of wl_suspend of Broadcom's glue
- * (src/wl/sys/wl_linux.c, ISC; no offload engine) after its wl_down.
+ * (src/wl/sys/wl_linux.c; no offload engine) after its wl_down.
  * mac80211 has already stopped the device (bcm4360_core_down) when the PCI
  * suspend runs.
  */

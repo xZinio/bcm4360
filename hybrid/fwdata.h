@@ -6,8 +6,7 @@
  * In the hybrid module it is read where it is, in the linked copy of
  * Broadcom's object (hybrid/takeover.txt makes these symbols global). Names
  * and sizes in bytes are those of lib/wlc_hybrid.o_shipped, version
- * 6.30.223.271 (SHA-256 352a6e34...), which scripts/fetch-blob.sh verifies;
- * tools/re/hybrid.py checks them against the object.
+ * 6.30.223.271 (SHA-256 352a6e34...), which scripts/fetch-blob.sh verifies.
  *
  * HYB_FW(name, size)
  */

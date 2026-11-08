@@ -1,5 +1,5 @@
 # Symbols of Broadcom's object (lib/wlc_hybrid.o_shipped) that the hybrid
-# build changes the binding of (scripts/mkhybrid.sh, hybrid/README.md).
+# build changes the binding of (scripts/mkhybrid.sh).
 #
 #   take NAME   the open code takes over the function NAME; the object's own
 #               body stays reachable as bcm4360_blob_NAME

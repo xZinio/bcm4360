@@ -5,7 +5,7 @@
  * it out of this file.
  *
  * The tests leave the accesses of these leaf functions out of the comparison
- * (the list LEAVES in tools/re/phy_scenarios.py), so an empty body is enough
+ * (the emulator's list of leaves), so an empty body is enough
  * for the initialisation and the channel function to reach 0 differences.
  */
 #include <bcm4360/phy.h>

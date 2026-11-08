@@ -263,8 +263,7 @@ static const u8 bcm4360_ac_fifo[IEEE80211_NUM_ACS] = {
 	[IEEE80211_AC_BE] = 1, [IEEE80211_AC_BK] = 0,
 };
 
-/* 0: drop every frame instead of transmitting it (scripts/open-test.sh,
- * stage rx: the first tests on a card receive only) */
+/* 0: drop every frame instead of transmitting it (receive-only tests) */
 static bool allow_tx = true;
 module_param(allow_tx, bool, 0644);
 MODULE_PARM_DESC(allow_tx, "transmit frames (1, default) or drop them all (0: receive-only test)");

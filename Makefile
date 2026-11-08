@@ -12,7 +12,7 @@ ifneq ($(KERNELRELEASE),)
 # ---- Kbuild -----------------------------------------------------------------
 
 # HYBRID=1 (default): open code (hybrid/, open/) takes over parts of
-# Broadcom's core inside the module, see hybrid/README.md.
+# Broadcom's core inside the module.
 # HYBRID=0: Broadcom's core alone, as up to version 1.0.3.
 HYBRID ?= 1
 # BCM4360_MODULES: which modules to build: bcm4360 (Broadcom's core with the

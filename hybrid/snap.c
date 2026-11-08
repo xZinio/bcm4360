@@ -1,12 +1,11 @@
 /*
  * Hybrid build: a read-only snapshot of the card's PHY registers, radio
  * registers, PHY tables and shared memory, to compare Broadcom's PHY and the
- * open one on the card (scripts/phy-snap.py, docs/re/03-tools.md).
+ * open one on the card.
  *
  * Not a takeover: nothing of the object calls it. The glue's file
  * /proc/bcm4360_snap<unit> does, one item at a time, holding the driver's lock
- * (src/wl/sys/wl_linux.c). The same code runs in the emulator
- * (tools/re/hybrid.py snap).
+ * (src/wl/sys/wl_linux.c). The same code runs in the emulator.
  *
  * The reads go straight to the registers of the 802.11 core through the open
  * access layer (open/hw/access.c), whatever the switches: the hardware state is

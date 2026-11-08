@@ -303,7 +303,7 @@ int bcm4360_core_set_chains(struct bcm4360_core *c, u8 txmask, u8 rxmask)
 	return r;
 }
 
-/* blocks of Broadcom's layout, for the tests (frames_check.py): 0 wlc, 1 stf, 2 pub */
+/* blocks of Broadcom's layout, for the tests: 0 wlc, 1 stf, 2 pub */
 void *core_test_block(struct bcm4360_core *c, u32 which)
 {
 	return which == 0 ? c->wlc : which == 1 ? c->stf_state : c->pub;

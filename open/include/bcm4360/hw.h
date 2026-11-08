@@ -5,7 +5,7 @@
  *  - the emulator (BCM4360_EMU): the functions below resolve to the imports
  *    of Broadcom's object (osl_readw() and friends), which the emulator
  *    provides for both programs alike, so that both can be compared;
- *  - the hybrid module (BCM4360_OSL, hybrid/README.md): the open code runs
+ *  - the hybrid module (BCM4360_OSL): the open code runs
  *    inside bcm4360.ko next to Broadcom's object and uses the same OS layer
  *    as the object, src/shared/linux_osl.c, so that it runs exactly as in
  *    the emulator;
@@ -161,7 +161,7 @@ const char *hw_getvar(struct bcm4360_hw *hw, const char *name);
 /*
  * Data of Broadcom that the driver needs and does not contain: tables of the
  * PHY and of the radio, microcode, initial values. A driver loads it like
- * firmware (tools/re/fwcut.py cuts it out of Broadcom's object), in the
+ * firmware (scripts/bcm4360-fwcut.py cuts it out of Broadcom's object), in the
  * tests it is handed over from the memory of the object. `name` is the name
  * the specifications use ("acphy_mcs_tbl_rev0", "chan_tuning_2069rev4");
  * *size: bytes. The layout is the one the specifications describe, numbers

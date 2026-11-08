@@ -1,5 +1,5 @@
 #!/bin/sh
-# Download Broadcom's proprietary 802.11 core from Broadcom, verify it and
+# Download Broadcom's 802.11 core from Broadcom, verify it and
 # unpack it into lib/. It is linked into the module at build time; it is not
 # part of this repository and is used exactly as Broadcom ships it.
 #
@@ -29,7 +29,7 @@ if command -v b2sum >/dev/null 2>&1; then
 	echo "$B2SUM  $tmp/$TARBALL" | b2sum -c -
 fi
 
-tar -xzf "$tmp/$TARBALL" -C "$tmp" lib/wlc_hybrid.o_shipped lib/LICENSE.txt
+tar -xzf "$tmp/$TARBALL" -C "$tmp" lib/wlc_hybrid.o_shipped
 mkdir -p lib
-install -m 0644 "$tmp/lib/wlc_hybrid.o_shipped" "$tmp/lib/LICENSE.txt" lib/
+install -m 0644 "$tmp/lib/wlc_hybrid.o_shipped" lib/
 echo "OK: lib/wlc_hybrid.o_shipped (Broadcom 6.30.223.271)"

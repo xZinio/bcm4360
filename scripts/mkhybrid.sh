@@ -1,6 +1,6 @@
 #!/bin/sh
 # Prepare Broadcom's core for linking with the open code that takes over parts
-# of it ("hybrid" build, see hybrid/README.md).
+# of it ("hybrid" build).
 #
 #   scripts/mkhybrid.sh IN.o OUT.o LIST
 #

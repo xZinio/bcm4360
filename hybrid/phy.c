@@ -66,7 +66,7 @@ void wlapi_bmac_phyclk_fgc(void *physhim, u8 clk);
 void wlapi_bmac_mhf(void *physhim, u8 idx, u16 mask, u16 val, u32 bands);
 void wlapi_bmac_mctrl(void *physhim, u32 mask, u32 val);
 u32 wlapi_bmac_btc_mode_get(void *physhim);
-u8 wlapi_is_eci_coex_enabled(void *physhim);	/* 0 or 1 (tools/re/blackbox.py eci) */
+u8 wlapi_is_eci_coex_enabled(void *physhim);	/* 0 or 1 */
 void wlapi_bmac_ucode_wake_override_phyreg_set(void *physhim);
 void wlapi_bmac_ucode_wake_override_phyreg_clear(void *physhim);
 void wlapi_update_bt_chanspec(void *physhim, u16 chanspec, u8 scan, u8 measure);

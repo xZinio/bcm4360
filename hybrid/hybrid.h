@@ -1,6 +1,6 @@
 /*
  * Hybrid build: open code takes over functions of Broadcom's object inside
- * bcm4360.ko (hybrid/README.md). This header holds what the adapters need to
+ * bcm4360.ko. This header holds what the adapters need to
  * know of the object's side: the layouts of its public structures and the
  * switches that select, per layer, the open code or Broadcom's.
  *
@@ -150,7 +150,7 @@ extern bool bcm4360_open_stf_policy;
 
 /*
  * hybrid/snap.c: the read-only snapshot of the card's PHY, radio, PHY tables
- * and shared memory behind /proc/bcm4360_snap<unit> (scripts/phy-snap.py).
+ * and shared memory behind /proc/bcm4360_snap<unit>.
  * hyb_snap_parse makes items of a request (its text format is in snap.c) and
  * returns their number; hyb_snap_read reads one item into `out` (with the
  * driver's lock held) and returns the number of 16-bit words. Errors are
