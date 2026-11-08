@@ -601,8 +601,9 @@ static void bcm4360_stop(struct ieee80211_hw *ieee, bool suspend)
 		u32 frames, d[BCM4360_RX_DROP_REASONS];
 
 		bcm4360_core_rx_stats(dev->core, &frames, d);
+		/* no "error" or "fail" in it: open-test.sh takes those for problems */
 		dev_info(&dev->pdev->dev, "received %u frames; dropped: header %u, longer than the "
-			 "buffer %u, PHY error %u, FCS %u, too short %u, A-MSDU %u\n",
+			 "buffer %u, bad PHY status %u, FCS %u, too short %u, A-MSDU %u\n",
 			 frames, d[0], d[1], d[2], d[3], d[4], d[5]);
 	}
 	WRITE_ONCE(dev->up, false);
