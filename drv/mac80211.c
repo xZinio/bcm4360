@@ -141,6 +141,21 @@ static int bcm4360_legacy_idx(enum nl80211_band band, u8 rate)
 	return -1;
 }
 
+/* the control channel of a chanspec made by bcm4360_chanspec_of() */
+static u8 bcm4360_ctl_chan(u16 cs)
+{
+	u8 center = cs & 0xff, sb = (cs >> CHSPEC_SB_SHIFT) & 7;
+
+	switch (cs & 0x3800) {
+	case CHSPEC_BW_40:
+		return center - 2 + 4 * sb;
+	case CHSPEC_BW_80:
+		return center - 6 + 4 * sb;
+	default:
+		return center;
+	}
+}
+
 static bool bcm4360_rx_status(struct bcm4360_dev *dev, const struct bcm4360_rxstatus *rs,
 			      struct ieee80211_rx_status *st)
 {
@@ -150,9 +165,16 @@ static bool bcm4360_rx_status(struct bcm4360_dev *dev, const struct bcm4360_rxst
 	int i;
 
 	memset(st, 0, sizeof(*st));
-	/* the control channel: the receive header's chanspec (frames.md) */
+	/*
+	 * The control (primary 20 MHz) channel: mac80211 drops beacons whose
+	 * frequency is not its operating channel's. The low byte of a 40 or 80
+	 * MHz chanspec is the center channel; the sideband bits say which 20 MHz
+	 * channel is the control one (the inverse of bcm4360_chanspec_of()).
+	 * Reporting the center channel lost every beacon on an 80 MHz channel
+	 * (2026-11-08: beacon loss 2 s after the first join on the card).
+	 */
 	if ((rs->chanspec & 0x3800) != CHSPEC_BW_20)
-		ch = dev->chanspec & 0xff;
+		ch = bcm4360_ctl_chan(dev->chanspec);
 	st->band = band;
 	st->freq = ieee80211_channel_to_frequency(ch, band);
 	st->signal = rs->rssi;
