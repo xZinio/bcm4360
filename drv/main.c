@@ -94,6 +94,14 @@ void bcm4360_plat_note(void *plat, const char *what, u32 val)
 	dev_warn_ratelimited(&dev->pdev->dev, "%s: 0x%08x\n", what, val);
 }
 
+void bcm4360_plat_debug(void *plat, const char *what, u32 val)
+{
+	struct bcm4360_dev *dev = plat;
+
+	if (READ_ONCE(trace))
+		dev_info_ratelimited(&dev->pdev->dev, "%s: 0x%08x\n", what, val);
+}
+
 const void *bcm4360_plat_clm(void *plat)
 {
 	return bcm4360_fw_clm(plat);

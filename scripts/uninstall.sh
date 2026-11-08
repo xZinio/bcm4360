@@ -13,7 +13,8 @@ if dkms status -m "$name" -v "$ver" 2>/dev/null | grep -q .; then
 	dkms remove -m "$name" -v "$ver" --all
 fi
 rm -rf "/usr/src/$name-$ver" "/usr/share/licenses/$name"
-rm -f /etc/modprobe.d/bcm4360.conf
+rm -f /etc/modprobe.d/bcm4360.conf /etc/modprobe.d/bcm4360-open.conf
+rm -rf /lib/firmware/bcm4360
 systemctl disable bcm4360-fallback.service 2>/dev/null || true
 systemctl disable --now bcm4360-watchdog.timer 2>/dev/null || true
 rm -f /etc/systemd/system/bcm4360-fallback.service \

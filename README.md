@@ -7,6 +7,24 @@ installs through DKMS, so it is rebuilt automatically for every new kernel.
 
 ## What's new
 
+**1.2.0**
+
+- **A driver without any of Broadcom's code, as an option.** `bcm4360_open`
+  is a mac80211 driver for this chip. It loads only Broadcom's microcode and
+  data tables, cut out of Broadcom's download at install time, as
+  `b43-fwcutter` does for `b43`. Install it with `install.sh --open` (see
+  [Install](#install)). Tested on a MacBookAir7,2:
+  - WPA2 with hardware or software encryption;
+  - reconnects, radio off/on, link down/up, suspend to RAM;
+  - 2.4 and 5 GHz, 80 MHz VHT;
+  - a 20‑minute soak: 0.3 % pings lost, never disconnected, 63–99 Mbit/s
+    down and 62–77 up (the Broadcom‑core driver on the same channel:
+    73–83 / 39–45).
+
+  Not tested yet: 802.1X (eduroam), power save, 40 MHz in 2.4 GHz.
+  `bcm4360` is installed with it and stays the fallback: the watchdog
+  switches to it if `bcm4360_open` cannot keep a connection.
+
 **1.1.1**
 
 - **The access point NetworkManager picks is the one it joins.** The driver
@@ -47,10 +65,8 @@ installs through DKMS, so it is rebuilt automatically for every new kernel.
 
 Still Broadcom's: the upper 802.11 layer (joining networks, scanning,
 aggregation, rate selection, keys) and the chip's microcode and data tables.
-Replacing the upper layer is the next step: `bcm4360_open`, a mac80211
-driver without any of Broadcom's code, is in `drv/` and `open/core/`. It is
-**experimental and not installed**. Its last test on the card froze the
-whole machine during bring‑up, so don't load it.
+`bcm4360_open` (since 1.2.0, `install.sh --open`) replaces all of that
+except the microcode and the data tables.
 
 ## Will it work on my machine?
 
@@ -97,8 +113,18 @@ This builds the module (half a minute), installs it, and blocks the
 other Broadcom drivers that would grab the card (`b43`, `bcma`, `ssb`,
 `brcm*`, `wl`). It also sets up the watchdog and the fallback service.
 
+To use `bcm4360_open`, the driver without Broadcom's code, instead:
+
+```sh
+sudo sh scripts/install.sh --open
+```
+
+It also cuts the microcode and tables out of Broadcom's download into
+`/lib/firmware/bcm4360/`. `bcm4360` is installed with it and stays the
+fallback. To go back, run `install.sh` without `--open` and reboot.
+
 **4. Reboot.** Or switch without rebooting (Wi‑Fi drops for about 10
-seconds):
+seconds; with `--open`: `sudo rmmod bcm4360; sudo modprobe bcm4360_open`):
 
 ```sh
 sudo rmmod bcm4360 2>/dev/null; sudo modprobe bcm4360; sudo systemctl restart wpa_supplicant
@@ -107,7 +133,7 @@ sudo rmmod bcm4360 2>/dev/null; sudo modprobe bcm4360; sudo systemctl restart wp
 **5. Check it:**
 
 ```sh
-cat /sys/module/bcm4360/version      # the version you installed
+cat /sys/module/bcm4360*/version    # the version you installed
 iw dev wlan0 link                    # access point, band, signal
 journalctl -k -b | grep bcm4360      # no WARNING or Call Trace
 ```
@@ -181,7 +207,7 @@ and take effect after a reboot.
 src/        Linux side (cfg80211): Broadcom's wl source with this project's fixes
 open/       open hardware layer: PHY and radio, MAC, DMA, backplane, power, SROM, ...
 hybrid/     adapters that let open/ take over functions of Broadcom's code at link time
-drv/        bcm4360_open, the open mac80211 driver (experimental, with open/core/)
+drv/        bcm4360_open, the open mac80211 driver (with open/core/)
 scripts/    install, uninstall, download of Broadcom's core, firmware data extractor
 systemd/    watchdog and fallback service
 modprobe.d/ blocklist of the other Broadcom drivers

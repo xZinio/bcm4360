@@ -6,7 +6,7 @@
 # unpacking it into lib/. Open code (hybrid/, open/) takes over parts of that
 # core at link time.
 
-BCM4360_VERSION := 1.1.1
+BCM4360_VERSION := 1.2.0
 
 ifneq ($(KERNELRELEASE),)
 # ---- Kbuild -----------------------------------------------------------------

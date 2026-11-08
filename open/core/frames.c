@@ -179,7 +179,7 @@ bool bcm4360_core_dpc(struct bcm4360_core *c, u32 budget)
 	s = FIELD(hw, HW_INTSTATUS, u32);
 	if (c->fr.noted < 8) {		/* card debugging: what the first interrupts are */
 		c->fr.noted++;
-		bcm4360_plat_note(c->plat, "interrupt: macintstatus", s);
+		bcm4360_plat_debug(c->plat, "interrupt: macintstatus", s);
 	}
 	FIELD(hw, HW_INTSTATUS, u32) = 0;
 	if (!dpc_bits(c, s, bound)) {

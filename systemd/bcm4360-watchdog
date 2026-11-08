@@ -15,6 +15,11 @@
 #   again within 5 minutes of that, bcm4360 is reloaded. The gateway is
 #   asked, not the internet, so an outage beyond it changes nothing here.
 #
+# With bcm4360_open (install.sh --open) the last resort is not a reload but
+# the switch to bcm4360, with a reset of the card in between; bcm4360 then
+# stays until the next boot (bcm4360-open.conf keeps it from loading by
+# itself, the watchdog never switches back).
+#
 # It leaves things alone with the radio off, after a deliberate disconnect
 # ("nmcli device disconnect", autoconnect off), right after suspend and in
 # the first minute of a connection, reconnects at most once every 3 minutes
@@ -42,10 +47,16 @@ iface=
 if [ -n "${BCM4360_WD_TEST:-}" ]; then
 	now=$BCM4360_WD_NOW loaded=$BCM4360_WD_LOADED wifi=$BCM4360_WD_WIFI
 	state=$BCM4360_WD_STATE autoconnect=$BCM4360_WD_AUTOCONNECT
+	driver=${BCM4360_WD_DRIVER:-bcm4360}
 else
 	now=$(date +%s)
-	loaded=no wifi= state= autoconnect=
-	if lsmod | grep -q '^bcm4360 '; then
+	loaded=no wifi= state= autoconnect= driver=
+	if lsmod | grep -q '^bcm4360_open '; then
+		driver=bcm4360_open
+	elif lsmod | grep -q '^bcm4360 '; then
+		driver=bcm4360
+	fi
+	if [ -n "$driver" ]; then
 		loaded=yes
 		for d in /sys/class/net/*; do
 			[ -e "$d/phy80211" ] || continue
@@ -76,9 +87,32 @@ probe() {
 	fi
 }
 
+# A secondary bus reset of the card (reset_method "bus") while no driver has
+# it, like a power cycle of the chip: bcm4360_open can leave it in a state
+# that no driver recovers from until then.
+card_reset() {
+	for p in /sys/bus/pci/devices/*; do
+		[ "$(cat "$p/vendor")" = 0x14e4 ] && [ "$(cat "$p/class")" = 0x028000 ] || continue
+		[ -e "$p/driver" ] && continue
+		timeout 30 sh -c "echo 1 > '$p/reset'" || echo "the reset of ${p##*/} failed"
+	done
+}
+
 reload() {
 	put reloaded "$now"
 	rm -f "$dir/down_since" "$dir/stalls"
+	if [ "$driver" = bcm4360_open ]; then
+		echo "$1; switching from bcm4360_open to bcm4360 until the next boot"
+		if [ -n "${BCM4360_WD_TEST:-}" ]; then
+			echo FALLBACK
+			exit 0
+		fi
+		rmmod bcm4360_open
+		card_reset
+		modprobe bcm4360 || { echo "bcm4360 did not load, falling back to wl"; modprobe wl; }
+		systemctl try-restart wpa_supplicant.service
+		exit 0
+	fi
 	echo "$1; reloading bcm4360"
 	if [ -n "${BCM4360_WD_TEST:-}" ]; then
 		echo RELOAD
