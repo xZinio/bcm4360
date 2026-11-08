@@ -516,10 +516,20 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 			else
 				r->count = left;
 		}
-		if (ts.ampdu) {
+		/*
+		 * Only the MPDU that carries the aggregate's status (ampdu_len > 0) is
+		 * reported as IEEE80211_TX_STAT_AMPDU. The others keep only
+		 * IEEE80211_TX_CTL_AMPDU, which rate control skips: minstrel_ht
+		 * averages ampdu_len over every STAT_AMPDU report and divides by that
+		 * average, so reports with ampdu_len 0 drove it to 0 (2026-11-08: divide
+		 * error in minstrel_ht_get_tp_avg, a kernel panic 20 s after a join).
+		 */
+		if (ts.ampdu && ts.ampdu_len) {
 			info->flags |= IEEE80211_TX_STAT_AMPDU;
 			info->status.ampdu_len = ts.ampdu_len;
-			info->status.ampdu_ack_len = ts.ampdu_ack_len;
+			info->status.ampdu_ack_len = min(ts.ampdu_ack_len, ts.ampdu_len);
+		} else if (ts.ampdu) {
+			info->flags |= IEEE80211_TX_CTL_AMPDU;
 		}
 		if (ts.acked && !(info->flags & IEEE80211_TX_CTL_NO_ACK))
 			info->flags |= IEEE80211_TX_STAT_ACK;
