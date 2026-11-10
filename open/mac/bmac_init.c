@@ -375,7 +375,7 @@ static void clk_ctl_wait_0x20000(struct bcm4360_mac *mac)
  * docs/re/spec/bmac-init.md, A13 (sub_064887, wlc_bmac_clkctl_clk), called by
  * B1 steps 1 and 40: force the fast clock of the MAC core (mode 0) or return
  * to the dynamic clock. A file-local copy of the static helper of bmac_clk.c
- * (see docs/re/questions/bmac-coreinit.md).
+ * (see docs/re/tasks/bmac-coreinit.md).
  */
 static void wlc_bmac_clkctl_clk(struct bcm4360_mac *mac, u32 mode)
 {

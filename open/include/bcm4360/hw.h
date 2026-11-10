@@ -88,6 +88,8 @@ void *osl_dma_alloc_consistent(void *osh, unsigned int size, u16 align_bits,
 void osl_dma_free_consistent(void *osh, void *va, unsigned int size, unsigned long pa);
 unsigned int osl_dma_map(void *osh, void *va, unsigned int size, int direction, void *pkt,
 			 void *dmah);
+/* what osl_dma_map() returns when the buffer could not be mapped */
+#define BCM4360_DMA_MAP_FAILED	0xffffffffu
 void osl_dma_unmap(void *osh, unsigned int pa, unsigned int size, int direction);
 
 static inline u8 hw_read8(void *base, u32 off)

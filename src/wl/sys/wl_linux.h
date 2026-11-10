@@ -35,9 +35,6 @@ typedef struct wl_task {
 #define WL_IFTYPE_MON	3 
 
 struct wl_if {
-#ifdef USE_IW
-	wl_iw_t		iw;		
-#endif 
 	struct wl_if *next;
 	struct wl_info *wl;		
 	struct net_device *dev;		
@@ -50,11 +47,6 @@ struct wl_if {
 	uint    stats_id;               
 	struct net_device_stats stats_watchdog[2]; 
 
-#ifdef USE_IW
-	struct iw_statistics wstats_watchdog[2];
-	struct iw_statistics wstats;
-	int             phy_noise;
-#endif 
 };
 
 struct rfkill_stuff {

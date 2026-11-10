@@ -1,0 +1,103 @@
+# Build both drivers against the kernels people run, before an API change
+# reaches a laptop, and run the tests that need neither root nor the card.
+# Kernel trees come from kernel.org (releases.json): mainline, the newest
+# stable, the newest longterm and 6.12 (Debian 13), each with defconfig plus
+# cfg80211 and mac80211, prepared for out-of-tree modules.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1" # weekly: new kernels break the build without a commit here
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tests/references.sh reads the specifications in the history
+      - name: Shell syntax
+        run: |
+          for f in scripts/*.sh tests/*.sh systemd/bcm4360-watchdog systemd/bcm4360-fallback; do
+            sh -n "$f"
+            dash -n "$f"
+          done
+      - name: Watchdog
+        run: |
+          sh tests/watchdog.sh bash
+          sh tests/watchdog.sh dash
+      - name: Version
+        run: |
+          ver=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"$/\1/p' dkms.conf)
+          echo "dkms.conf: $ver"
+          grep -q '^PACKAGE_VERSION="@VERSION@"$' dkms-open.conf
+          # a tagged commit must carry its tag's version
+          for tag in $(git tag --points-at HEAD); do
+            [ "${tag#v}" = "$ver" ] || { echo "tag $tag, but dkms.conf says $ver"; exit 1; }
+          done
+      - name: References to the specifications
+        run: sh tests/references.sh
+      - name: Broadcom's download and the firmware cutter
+        run: |
+          sh scripts/fetch-blob.sh
+          sh tests/fwcut.sh
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { kernel: mainline, open: true }
+          - { kernel: stable, open: true }
+          - { kernel: stable, open: true, llvm: true }
+          - { kernel: longterm, open: true }
+          # Debian 13; bcm4360_open needs the mac80211 of Linux 6.17 or newer
+          - { kernel: "6.12", open: false }
+    name: build (${{ matrix.kernel }}${{ matrix.llvm && ', clang' || '' }})
+    env:
+      LLVM_FLAG: ${{ matrix.llvm && 'LLVM=1' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libelf-dev libssl-dev jq ${{ matrix.llvm && 'clang lld llvm' || '' }}
+      - name: Kernel tree
+        run: |
+          k="${{ matrix.kernel }}"
+          curl -fsSL --retry 3 https://www.kernel.org/releases.json -o releases.json
+          case $k in
+          mainline|stable|longterm)
+            url=$(jq -r --arg m "$k" '[.releases[] | select(.moniker == $m)][0].source' releases.json) ;;
+          *)
+            url=$(jq -r --arg v "$k" \
+              '[.releases[] | select(.version | startswith($v + "."))][0].source // empty' releases.json)
+            [ -n "$url" ] || url="https://cdn.kernel.org/pub/linux/kernel/v${k%%.*}.x/linux-$k.tar.xz" ;;
+          esac
+          echo "kernel source: $url"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/linux.tar" "$url"
+          mkdir -p "$RUNNER_TEMP/linux"
+          tar -xf "$RUNNER_TEMP/linux.tar" -C "$RUNNER_TEMP/linux" --strip-components=1
+          cd "$RUNNER_TEMP/linux"
+          make $LLVM_FLAG x86_64_defconfig
+          scripts/config -e MODULES -e PCI -e CFG80211 -e MAC80211
+          make $LLVM_FLAG olddefconfig
+          make $LLVM_FLAG -j"$(nproc)" modules_prepare
+          echo "KDIR=$RUNNER_TEMP/linux" >> "$GITHUB_ENV"
+      # The Makefile's own targets, which must pick LLVM=1 for a clang-built
+      # tree by themselves. A prepared tree has no Module.symvers: unresolved
+      # symbols are warnings.
+      - name: bcm4360
+        run: |
+          sh scripts/fetch-blob.sh
+          make KDIR="$KDIR" KBUILD_MODPOST_WARN=1 all
+          modinfo -F version ./bcm4360.ko
+      - name: bcm4360_open
+        if: matrix.open
+        run: |
+          make KDIR="$KDIR" KBUILD_MODPOST_WARN=1 open
+          modinfo -F version ./bcm4360_open.ko

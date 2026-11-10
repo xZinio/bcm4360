@@ -68,10 +68,8 @@
 #include <wlc_ethereal.h>
 #include <proto/ieee80211_radiotap.h>
 
-#include <wl_iw.h>
-#ifdef USE_IW
-struct iw_statistics *wl_get_wireless_stats(struct net_device *dev);
-#endif
+/* WIRELESS_EXT */
+#include <linux/wireless.h>
 
 #include <wl_export.h>
 
@@ -108,7 +106,6 @@ static void wl_timer_task(wl_task_t *task);
 static void wl_dpc_rxwork(struct wl_task *task);
 
 static int wl_reg_proc_entry(wl_info_t *wl);
-static void wl_snap_proc_remove(wl_info_t *wl);
 
 static int wl_linux_watchdog(void *ctx);
 static
@@ -501,15 +498,6 @@ wl_if_setup(struct net_device *dev)
 	dev->do_ioctl = wl_ioctl;
 #endif 
 
-#ifdef USE_IW
-#if WIRELESS_EXT < 19
-	dev->get_wireless_stats = wl_get_wireless_stats;
-#endif
-#if WIRELESS_EXT > 12
-	dev->wireless_handlers = (struct iw_handler_def *) &wl_iw_handler_def;
-#endif
-#endif 
-
 #if WIRELESS_EXT >= 19 || LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
 	dev->ethtool_ops = &wl_ethtool_ops;
 #endif
@@ -683,10 +671,6 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 		dev->irq = irq;
 	}
 
-#if defined(USE_IW)
-	WL_ERROR(("Using Wireless Extension\n"));
-#endif
-
 #if defined(USE_CFG80211)
 	parentdev = NULL;
 	if (wl->bcm_bustype == PCI_BUS) {
@@ -718,9 +702,6 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 14)
 #endif 
-#ifdef USE_IW
-	wlif->iw.wlinfo = (void *)wl;
-#endif
 
 #if defined(WL_CONFIG_RFKILL)
 	if (wl_init_rfkill(wl) < 0)
@@ -1043,7 +1024,6 @@ wl_free(wl_info_t *wl)
 		char tmp1[128];
 		sprintf(tmp1, "%s%d", HYBRID_PROC, wl->pub->unit);
 		remove_proc_entry(tmp1, 0);
-		wl_snap_proc_remove(wl);
 		}
 		wlc_detach(wl->wlc);
 		wl->wlc = NULL;
@@ -1513,9 +1493,14 @@ wl_down(wl_info_t *wl)
 
 	if (WL_ALL_PASSIVE_ENAB(wl)) {
 		int i = 0;
+		/* bcm4360: wait for the tasks to finish instead of flushing the
+		 * system workqueue (flush_scheduled_work() is deprecated and warns) */
 		for (i = 0; (atomic_read(&wl->callbacks) > callbacks) && i < 10000; i++) {
-			schedule();
-			flush_scheduled_work();
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)
+			usleep_range(100, 200);
+#else
+			msleep(1);
+#endif
 		}
 	}
 	else
@@ -1667,14 +1652,6 @@ wl_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 
 	WL_TRACE(("wl%d: wl_ioctl: cmd 0x%x\n", wl->pub->unit, cmd));
 
-#ifdef USE_IW
-
-	if ((cmd >= SIOCIWFIRST) && (cmd <= SIOCIWLAST)) {
-
-		return wl_iw_ioctl(dev, ifr, cmd);
-	}
-#endif 
-
 	if (cmd == SIOCETHTOOL)
 		return (wl_ethtool(wl, (void*)ifr->ifr_data, wlif));
 
@@ -1686,13 +1663,28 @@ wl_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 			goto done2;
 	}
 
+	/*
+	 * bcm4360: any local user reaches this ioctl, and the length is theirs.
+	 * The raw interface to Broadcom's core is root's only, checked before
+	 * anything is copied or allocated, and its buffer is one of
+	 * WLC_IOCTL_MAXLEN at most (what Broadcom's wl tool asks for).
+	 */
+	if (!capable(CAP_NET_ADMIN)) {
+		bcmerror = BCME_EPERM;
+		goto done2;
+	}
+
 	if (copy_from_user(&ioc, ifr->ifr_data, sizeof(wl_ioctl_t))) {
 		bcmerror = BCME_BADADDR;
 		goto done2;
 	}
+	if (ioc.len > WLC_IOCTL_MAXLEN) {
+		bcmerror = BCME_BUFTOOLONG;
+		goto done2;
+	}
 
 	if (ioc.buf) {
-		if (!(buf = (void *) MALLOC(wl->osh, MAX(ioc.len, WLC_IOCTL_MAXLEN)))) {
+		if (!(buf = (void *) MALLOC(wl->osh, WLC_IOCTL_MAXLEN))) {
 			bcmerror = BCME_NORESOURCE;
 			goto done2;
 		}
@@ -1704,18 +1696,14 @@ wl_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	}
 
 	WL_LOCK(wl);
-	if (!capable(CAP_NET_ADMIN)) {
-		bcmerror = BCME_EPERM;
-	} else {
-		bcmerror = wlc_ioctl(wl->wlc, ioc.cmd, buf, ioc.len, wlif->wlcif);
-	}
+	bcmerror = wlc_ioctl(wl->wlc, ioc.cmd, buf, ioc.len, wlif->wlcif);
 	WL_UNLOCK(wl);
 
 done1:
 	if (ioc.buf) {
 		if (copy_to_user(ioc.buf, buf, ioc.len))
 			bcmerror = BCME_BADADDR;
-		MFREE(wl->osh, buf, MAX(ioc.len, WLC_IOCTL_MAXLEN));
+		MFREE(wl->osh, buf, WLC_IOCTL_MAXLEN);
 	}
 
 done2:
@@ -1810,83 +1798,6 @@ wl_get_stats(struct net_device *dev)
 	memcpy(stats, stats_watchdog, sizeof(struct net_device_stats));
 	return (stats);
 }
-
-#ifdef USE_IW
-struct iw_statistics *
-wl_get_wireless_stats(struct net_device *dev)
-{
-	int res = 0;
-	wl_info_t *wl;
-	wl_if_t *wlif;
-	struct iw_statistics *wstats = NULL;
-	struct iw_statistics *wstats_watchdog = NULL;
-	int phy_noise, rssi;
-
-	if (!dev)
-		return NULL;
-
-	if ((wl = WL_INFO(dev)) == NULL)
-		return NULL;
-
-	if ((wlif = WL_DEV_IF(dev)) == NULL)
-		return NULL;
-
-	if ((wstats = &wlif->wstats) == NULL)
-		return NULL;
-
-	WL_TRACE(("wl%d: wl_get_wireless_stats\n", wl->pub->unit));
-
-	ASSERT(wlif->stats_id < 2);
-	wstats_watchdog = &wlif->wstats_watchdog[wlif->stats_id];
-
-	phy_noise = wlif->phy_noise;
-#if WIRELESS_EXT > 11
-	wstats->discard.nwid = 0;
-	wstats->discard.code = wstats_watchdog->discard.code;
-	wstats->discard.fragment = wstats_watchdog->discard.fragment;
-	wstats->discard.retries = wstats_watchdog->discard.retries;
-	wstats->discard.misc = wstats_watchdog->discard.misc;
-
-	wstats->miss.beacon = 0;
-#endif 
-
-	if (AP_ENAB(wl->pub))
-		rssi = 0;
-	else {
-		scb_val_t scb;
-		res = wlc_ioctl(wl->wlc, WLC_GET_RSSI, &scb, sizeof(int), wlif->wlcif);
-		if (res) {
-			WL_ERROR(("wl%d: %s: WLC_GET_RSSI failed (%d)\n",
-				wl->pub->unit, __FUNCTION__, res));
-			return NULL;
-		}
-		rssi = scb.val;
-	}
-
-	if (rssi <= WLC_RSSI_NO_SIGNAL)
-		wstats->qual.qual = 0;
-	else if (rssi <= WLC_RSSI_VERY_LOW)
-		wstats->qual.qual = 1;
-	else if (rssi <= WLC_RSSI_LOW)
-		wstats->qual.qual = 2;
-	else if (rssi <= WLC_RSSI_GOOD)
-		wstats->qual.qual = 3;
-	else if (rssi <= WLC_RSSI_VERY_GOOD)
-		wstats->qual.qual = 4;
-	else
-		wstats->qual.qual = 5;
-
-	wstats->qual.level = 0x100 + rssi;
-	wstats->qual.noise = 0x100 + phy_noise;
-#if WIRELESS_EXT > 18
-	wstats->qual.updated |= (IW_QUAL_ALL_UPDATED | IW_QUAL_DBM);
-#else
-	wstats->qual.updated |= 7;
-#endif 
-
-	return wstats;
-}
-#endif 
 
 static int
 wl_set_mac_address(struct net_device *dev, void *addr)
@@ -2206,9 +2117,6 @@ wl_link_down(wl_info_t *wl, char *ifname)
 void
 wl_event(wl_info_t *wl, char *ifname, wlc_event_t *e)
 {
-#ifdef USE_IW
-	wl_iw_event(wl->dev, &(e->event), e->data);
-#endif 
 
 #if defined(USE_CFG80211)
 	wl_cfg80211_event(wl->dev, &(e->event), e->data);
@@ -3297,10 +3205,6 @@ wl_linux_watchdog(void *ctx)
 	uint id;
 	wl_if_t *wlif;
 	wlc_if_stats_t wlcif_stats;
-#ifdef USE_IW
-	struct iw_statistics *wstats = NULL;
-	int phy_noise;
-#endif
 	if (wl == NULL)
 		return -1;
 
@@ -3332,27 +3236,8 @@ wl_linux_watchdog(void *ctx)
 					stats->tx_fifo_errors = 0;
 				}
 
-#ifdef USE_IW
-				wstats = &wlif->wstats_watchdog[id];
-				if (wstats) {
-#if WIRELESS_EXT > 11
-					wstats->discard.nwid = 0;
-					wstats->discard.code = WLCNTVAL(wl->pub->_cnt->rxundec);
-					wstats->discard.fragment = WLCNTVAL(wlcif_stats.rxfragerr);
-					wstats->discard.retries = WLCNTVAL(wlcif_stats.txfail);
-					wstats->discard.misc = WLCNTVAL(wl->pub->_cnt->rxrunt) +
-						WLCNTVAL(wl->pub->_cnt->rxgiant);
-					wstats->miss.beacon = 0;
-#endif 
-				}
-#endif 
-
 				wlif->stats_id = id;
 			}
-#ifdef USE_IW
-			if (!wlc_get(wl->wlc, WLC_GET_PHY_NOISE, &phy_noise))
-				wlif->phy_noise = phy_noise;
-#endif 
 
 		}
 	}
@@ -3474,171 +3359,10 @@ static const struct file_operations wl_fops = {
 #endif
 #endif
 
-#if defined(BCM4360_HYBRID) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
-/*
- * bcm4360: /proc/bcm4360_snap<unit> (root only), the read-only snapshot of the
- * card's PHY registers, radio registers, PHY tables and shared memory
- * (hybrid/snap.c). A write is a request, text with one
- * item per line, at most 64 KiB; its items are read at once, each with the
- * driver's lock held, and the following reads return the result: 16-bit words
- * in the order of the request. A failed item fails the whole write: -EAGAIN
- * while the core is down or without its clock, -ENODEV when it cannot be
- * reached, -EINVAL for a malformed request, -E2BIG for too much.
- */
-#include <linux/vmalloc.h>
-#include <linux/mutex.h>
-
-/* hybrid/hybrid.h; its own header does not mix with Broadcom's types */
-struct hyb_snap_item {
-	unsigned char space, width;
-	unsigned short id;
-	unsigned int start, count;
-};
-extern int hyb_snap_parse(const char *req, unsigned int len, struct hyb_snap_item *items,
-	unsigned int max);
-extern unsigned int hyb_snap_words(const struct hyb_snap_item *it);
-extern int hyb_snap_read(void *wlc, const struct hyb_snap_item *it, unsigned short *out,
-	unsigned int max);
-
-#define WL_SNAP_PROC		"bcm4360_snap"
-#define WL_SNAP_REQ_MAX		(64 * 1024)
-#define WL_SNAP_ITEMS		4096
-#define WL_SNAP_WORDS		(512 * 1024)
-
-static DEFINE_MUTEX(wl_snap_mutex);
-static unsigned short *wl_snap_out;	/* the result of the last request */
-static size_t wl_snap_bytes;
-
-static int
-wl_snap_errno(int r)
-{
-	switch (-r) {
-	case 2: return -EAGAIN;		/* HYB_SNAP_EAGAIN */
-	case 3: return -ENODEV;		/* HYB_SNAP_ENODEV */
-	case 4: return -E2BIG;		/* HYB_SNAP_ENOSPC */
-	default: return -EINVAL;	/* HYB_SNAP_EINVAL */
-	}
-}
-
-static ssize_t
-wl_snap_write(struct file *filp, const char __user *buff, size_t length, loff_t *offp)
-{
-	wl_info_t *wl = PDE_DATA(file_inode(filp));
-	struct hyb_snap_item *items = NULL;
-	unsigned short *out = NULL;
-	size_t total = 0, words = 0;
-	char *req = NULL;
-	ssize_t ret;
-	int n, i, r;
-
-	if (length == 0 || length > WL_SNAP_REQ_MAX)
-		return -EINVAL;
-	req = vmalloc(length);
-	items = vmalloc(sizeof(*items) * WL_SNAP_ITEMS);
-	if (!req || !items) {
-		ret = -ENOMEM;
-		goto done;
-	}
-	if (copy_from_user(req, buff, length)) {
-		ret = -EFAULT;
-		goto done;
-	}
-	n = hyb_snap_parse(req, length, items, WL_SNAP_ITEMS);
-	if (n < 0) {
-		ret = wl_snap_errno(n);
-		goto done;
-	}
-	for (i = 0; i < n; i++)
-		total += hyb_snap_words(&items[i]);
-	if (total > WL_SNAP_WORDS) {
-		ret = -E2BIG;
-		goto done;
-	}
-	out = vmalloc(total * sizeof(*out) + sizeof(*out));
-	if (!out) {
-		ret = -ENOMEM;
-		goto done;
-	}
-	for (i = 0; i < n; i++) {
-		WL_LOCK(wl);
-		r = wl->wlc ? hyb_snap_read(wl->wlc, &items[i], out + words, total - words) : -3;
-		WL_UNLOCK(wl);
-		if (r < 0) {
-			ret = wl_snap_errno(r);
-			goto done;
-		}
-		words += r;
-	}
-	mutex_lock(&wl_snap_mutex);
-	vfree(wl_snap_out);
-	wl_snap_out = out;
-	wl_snap_bytes = words * sizeof(*out);
-	mutex_unlock(&wl_snap_mutex);
-	out = NULL;
-	ret = length;
-done:
-	vfree(req);
-	vfree(items);
-	vfree(out);
-	return ret;
-}
-
-static ssize_t
-wl_snap_read(struct file *filp, char __user *buffer, size_t length, loff_t *offp)
-{
-	ssize_t ret = 0;
-
-	mutex_lock(&wl_snap_mutex);
-	if (wl_snap_out && *offp >= 0 && *offp < wl_snap_bytes) {
-		ret = min_t(size_t, length, wl_snap_bytes - *offp);
-		if (copy_to_user(buffer, (char *)wl_snap_out + *offp, ret))
-			ret = -EFAULT;
-		else
-			*offp += ret;
-	}
-	mutex_unlock(&wl_snap_mutex);
-	return ret;
-}
-
-static struct proc_ops wl_snap_fops = {
-	.proc_read	= wl_snap_read,
-	.proc_write	= wl_snap_write,
-};
-
-static void
-wl_snap_proc_add(wl_info_t *wl)
-{
-	char tmp[32];
-
-	snprintf(tmp, sizeof(tmp), "%s%d", WL_SNAP_PROC, wl->pub->unit);
-	if (!proc_create_data(tmp, 0600, NULL, &wl_snap_fops, wl)) {
-		WL_ERROR(("%s: proc_create_data %s failed\n", __FUNCTION__, tmp));
-	}
-}
-
-static void
-wl_snap_proc_remove(wl_info_t *wl)
-{
-	char tmp[32];
-
-	snprintf(tmp, sizeof(tmp), "%s%d", WL_SNAP_PROC, wl->pub->unit);
-	remove_proc_entry(tmp, NULL);
-	mutex_lock(&wl_snap_mutex);
-	vfree(wl_snap_out);
-	wl_snap_out = NULL;
-	wl_snap_bytes = 0;
-	mutex_unlock(&wl_snap_mutex);
-}
-#else
-static void wl_snap_proc_add(wl_info_t *wl) { }
-static void wl_snap_proc_remove(wl_info_t *wl) { }
-#endif
-
 static int
 wl_reg_proc_entry(wl_info_t *wl)
 {
 	char tmp[32];
-	wl_snap_proc_add(wl);
 	sprintf(tmp, "%s%d", HYBRID_PROC, wl->pub->unit);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0)
 	if ((wl->proc_entry = create_proc_entry(tmp, 0644, NULL)) == NULL) {

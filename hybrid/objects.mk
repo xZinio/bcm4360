@@ -1,7 +1,7 @@
 # Objects of the hybrid build: the adapters in hybrid/ and the open code they
 # use. Included by the Makefile.
 
-hybrid-objs := hybrid/card.o hybrid/snap.o \
+hybrid-objs := hybrid/card.o \
                hybrid/pmu.o open/chip/pmu.o \
                hybrid/access.o open/hw/access.o \
                hybrid/mac.o open/mac/bmac_ctrl.o open/mac/bmac_mhf.o \

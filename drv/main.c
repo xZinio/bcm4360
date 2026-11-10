@@ -47,6 +47,13 @@ void bcm4360_plat_txstatus(void *plat, void *pkt, const struct bcm4360_txstatus 
 	__skb_queue_tail(&dev->txsq, skb);
 }
 
+void bcm4360_plat_txdrop(void *plat, void *pkt)
+{
+	struct bcm4360_dev *dev = plat;
+
+	__skb_queue_tail(&dev->txdropq, (struct sk_buff *)pkt);
+}
+
 void bcm4360_plat_tx_wake(void *plat, u8 fifo)
 {
 	struct bcm4360_dev *dev = plat;
@@ -54,11 +61,13 @@ void bcm4360_plat_tx_wake(void *plat, u8 fifo)
 	ieee80211_wake_queues(dev->ieee);
 }
 
+/* called with the lock held, as every call into the core */
 void bcm4360_plat_fatal(void *plat)
 {
 	struct bcm4360_dev *dev = plat;
 
-	schedule_work(&dev->restart);
+	if (!dev->dead)
+		schedule_work(&dev->restart);
 }
 
 /*
@@ -146,8 +155,12 @@ static void bcm4360_restart_work(struct work_struct *work)
 {
 	struct bcm4360_dev *dev = container_of(work, struct bcm4360_dev, restart);
 
-	dev_warn(&dev->pdev->dev, "hardware error: restarting\n");
 	spin_lock_bh(&dev->lock);
+	if (dev->dead) {		/* bcm4360_remove() is under way */
+		spin_unlock_bh(&dev->lock);
+		return;
+	}
+	dev_warn(&dev->pdev->dev, "hardware error: restarting\n");
 	if (dev->up) {
 		WRITE_ONCE(dev->up, false);
 		bcm4360_core_intrsoff(dev->core);
@@ -216,6 +229,7 @@ static int bcm4360_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	spin_lock_init(&dev->lock);
 	skb_queue_head_init(&dev->rxq);
 	skb_queue_head_init(&dev->txsq);
+	skb_queue_head_init(&dev->txdropq);
 	INIT_WORK(&dev->restart, bcm4360_restart_work);
 	SET_IEEE80211_DEV(ieee, &pdev->dev);
 	pci_set_drvdata(pdev, dev);
@@ -280,10 +294,25 @@ static void bcm4360_remove(struct pci_dev *pdev)
 	struct bcm4360_dev *dev = pci_get_drvdata(pdev);
 
 	bcm4360_trace("remove");
+	/*
+	 * No restart from here on, before mac80211 lets go of the device: a
+	 * restart that ran after ieee80211_unregister_hw() would queue mac80211's
+	 * restart work on memory that is freed below. Set in the lock, as every
+	 * call of bcm4360_plat_fatal() holds it: one that saw dead clear has
+	 * queued the work already, and cancel_work_sync() takes it out or waits
+	 * for it.
+	 */
+	spin_lock_bh(&dev->lock);
+	dev->dead = true;
+	spin_unlock_bh(&dev->lock);
+	cancel_work_sync(&dev->restart);
 	bcm4360_mac80211_unregister(dev);
 	free_irq(pdev->irq, dev);
-	cancel_work_sync(&dev->restart);
 	bcm4360_core_detach(dev->core);
+	/* .stop handed everything to mac80211; nothing is expected here */
+	skb_queue_purge(&dev->rxq);
+	skb_queue_purge(&dev->txsq);
+	skb_queue_purge(&dev->txdropq);
 	bcm4360_fw_release(dev);
 	osl_detach(dev->osh);
 	ieee80211_free_hw(dev->ieee);

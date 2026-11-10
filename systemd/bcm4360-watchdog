@@ -1,7 +1,7 @@
 #!/bin/sh
-# Installed by the bcm4360 driver (scripts/install.sh), run every 30 s by
-# bcm4360-watchdog.timer. Last resort for states of Broadcom's firmware that
-# the driver cannot get out of by itself. Two kinds:
+# Installed by the bcm4360 driver (scripts/install.sh) and run by
+# bcm4360-watchdog.service, which checks every 30 s. Last resort for states of
+# the card that the driver cannot get out of by itself:
 #
 # - No connection: Wi-Fi stops seeing or joining any network. Once it has
 #   been without a connection for 150 s after having had one in the last
@@ -9,65 +9,106 @@
 # - A stall: still associated, but no data gets through (the access point
 #   and the card stop talking, e.g. 2.4 GHz on busy Cisco/Meraki networks).
 #   NetworkManager sees nothing wrong, so it is found by asking the default
-#   gateway on the Wi-Fi interface (ARP, then ping) on every run. After two
-#   unanswered runs in a row (30-60 s of stall) the connection is brought up
+#   gateway on the Wi-Fi interface (ARP, then ping) on every check. After two
+#   unanswered checks in a row (30-60 s of stall) the connection is brought up
 #   again, which makes wpa_supplicant pick an AP afresh. If the link stalls
 #   again within 5 minutes of that, bcm4360 is reloaded. The gateway is
 #   asked, not the internet, so an outage beyond it changes nothing here.
+# - bcm4360_open never gets going (install.sh --open): no connection in the
+#   5 minutes since it was loaded, and either it has no Wi-Fi interface (its
+#   probe failed, e.g. without the firmware file), or its interface sees no
+#   access point at all, or it sees a network that NetworkManager joins by
+#   itself. Seeing only unknown networks is no reason: nothing happens then.
 #
-# With bcm4360_open (install.sh --open) the last resort is not a reload but
-# the switch to bcm4360, with a reset of the card in between; bcm4360 then
-# stays until the next boot (bcm4360-open.conf keeps it from loading by
-# itself, the watchdog never switches back).
+# With bcm4360_open the last resort is not a reload but the switch to
+# bcm4360, with a reset of the card in between; bcm4360 then stays until the
+# next boot (bcm4360-open.conf keeps it from loading by itself, the watchdog
+# never switches back).
 #
-# It leaves things alone with the radio off, after a deliberate disconnect
-# ("nmcli device disconnect", autoconnect off), right after suspend and in
-# the first minute of a connection, reconnects at most once every 3 minutes
-# and reloads at most once every 10 minutes.
+# Only the card's own interface is judged (the one bcm4360 or bcm4360_open
+# drives), never another Wi-Fi device such as a USB dongle. It leaves things
+# alone with the radio off, after a deliberate disconnect ("nmcli device
+# disconnect", autoconnect off), right after suspend and in the first minute
+# of a connection, reconnects at most once every 3 minutes and reloads at most
+# once every 10 minutes.
+#
+#   bcm4360-watchdog          one check
+#   bcm4360-watchdog --loop   a check every 30 s (the service)
 #
 # BCM4360_WD_TEST=1 replaces the observations and the actions with the
-# BCM4360_WD_* variables below and a message (for tests).
+# BCM4360_WD_* variables below and a message (tests/watchdog.sh).
 set -u
 
+interval=30	# seconds between two checks
 window=150	# seconds without a connection before reloading
 recent=1800	# ... provided there was one within this many seconds
 cooldown=600	# seconds between reloads
-max_gap=120	# a longer gap between two runs means a suspend: start over
+max_gap=120	# a longer gap between two checks means a suspend: start over
 settle=60	# seconds of a (new) connection before the gateway is asked
-stall_runs=2	# unanswered runs in a row that make a stall
+stall_runs=2	# unanswered checks in a row that make a stall
 reconnect_gap=180	# seconds between reconnects
 escalate=300	# a stall within this many seconds of a reconnect: reload
+first_join=300	# seconds bcm4360_open has for its first connection
 
 dir=${BCM4360_WD_DIR:-/run/bcm4360-watchdog}
 mkdir -p "$dir"
 get() { cat "$dir/$1" 2>/dev/null; }
 put() { echo "$2" >"$dir/$1"; }
 
-iface=
-if [ -n "${BCM4360_WD_TEST:-}" ]; then
-	now=$BCM4360_WD_NOW loaded=$BCM4360_WD_LOADED wifi=$BCM4360_WD_WIFI
-	state=$BCM4360_WD_STATE autoconnect=$BCM4360_WD_AUTOCONNECT
-	driver=${BCM4360_WD_DRIVER:-bcm4360}
-else
+# What the check goes by: now, loaded, driver, iface (the card's Wi-Fi
+# interface; empty without one), wifi, state, autoconnect (NetworkManager's
+# view of it).
+observe() {
+	iface= wifi= state= autoconnect=
+	if [ -n "${BCM4360_WD_TEST:-}" ]; then
+		now=$BCM4360_WD_NOW loaded=$BCM4360_WD_LOADED wifi=$BCM4360_WD_WIFI
+		state=$BCM4360_WD_STATE autoconnect=$BCM4360_WD_AUTOCONNECT
+		driver=${BCM4360_WD_DRIVER:-bcm4360}
+		iface=${BCM4360_WD_IFACE-wlan0}
+		return 0
+	fi
 	now=$(date +%s)
-	loaded=no wifi= state= autoconnect= driver=
+	loaded=no driver=
 	if lsmod | grep -q '^bcm4360_open '; then
 		driver=bcm4360_open
 	elif lsmod | grep -q '^bcm4360 '; then
 		driver=bcm4360
 	fi
-	if [ -n "$driver" ]; then
-		loaded=yes
-		for d in /sys/class/net/*; do
-			[ -e "$d/phy80211" ] || continue
-			iface=${d##*/}
-			wifi=$(nmcli -g WIFI general 2>/dev/null)
-			state=$(nmcli -g GENERAL.STATE device show "$iface" 2>/dev/null)
-			autoconnect=$(nmcli -g GENERAL.AUTOCONNECT device show "$iface" 2>/dev/null)
-			break
-		done
+	[ -n "$driver" ] || return 0
+	loaded=yes
+	for d in /sys/class/net/*; do
+		[ -e "$d/phy80211" ] || continue
+		drv=$(readlink "$d/device/driver" 2>/dev/null) || continue
+		[ "${drv##*/}" = "$driver" ] || continue
+		iface=${d##*/}
+		break
+	done
+	[ -n "$iface" ] || return 0
+	wifi=$(nmcli -g WIFI general 2>/dev/null)
+	state=$(nmcli -g GENERAL.STATE device show "$iface" 2>/dev/null)
+	autoconnect=$(nmcli -g GENERAL.AUTOCONNECT device show "$iface" 2>/dev/null)
+}
+
+# What the interface sees: aps (access points, by BSSID) and known ("yes" if
+# one of them is a network NetworkManager joins by itself).
+scan() {
+	if [ -n "${BCM4360_WD_TEST:-}" ]; then
+		aps=${BCM4360_WD_APS:-1} known=${BCM4360_WD_KNOWN:-no}
+		return 0
 	fi
-fi
+	aps=$(nmcli -t -f BSSID device wifi list ifname "$iface" --rescan no 2>/dev/null |
+		grep -c .)
+	ssids=$(nmcli -t -f SSID device wifi list ifname "$iface" --rescan no 2>/dev/null)
+	known=no
+	for uuid in $(nmcli -g UUID,TYPE,AUTOCONNECT connection show 2>/dev/null |
+		awk -F: '$2 == "802-11-wireless" && $3 == "yes" { print $1 }'); do
+		ssid=$(nmcli -g 802-11-wireless.ssid connection show uuid "$uuid" 2>/dev/null)
+		if [ -n "$ssid" ] && printf '%s\n' "$ssids" | grep -qxF -- "$ssid"; then
+			known=yes
+			break
+		fi
+	done
+}
 
 # Does the default gateway on the Wi-Fi interface answer? "ok" also when
 # there is none to ask (nothing to judge by).
@@ -89,10 +130,14 @@ probe() {
 
 # A secondary bus reset of the card (reset_method "bus") while no driver has
 # it, like a power cycle of the chip: bcm4360_open can leave it in a state
-# that no driver recovers from until then.
+# that no driver recovers from until then. Only the IDs the drivers take.
 card_reset() {
 	for p in /sys/bus/pci/devices/*; do
-		[ "$(cat "$p/vendor")" = 0x14e4 ] && [ "$(cat "$p/class")" = 0x028000 ] || continue
+		[ "$(cat "$p/vendor")" = 0x14e4 ] || continue
+		case $(cat "$p/device") in
+		0x4360|0x43a0|0x43a1|0x43a2) ;;
+		*) continue ;;
+		esac
 		[ -e "$p/driver" ] && continue
 		timeout 30 sh -c "echo 1 > '$p/reset'" || echo "the reset of ${p##*/} failed"
 	done
@@ -130,74 +175,127 @@ reload() {
 	exit 0
 }
 
-last_run=$(get last_run)
-put last_run "$now"
-if [ -z "$last_run" ] || [ $((now - last_run)) -gt "$max_gap" ]; then
-	rm -f "$dir/down_since" "$dir/up_since" "$dir/stalls"
-fi
+# bcm4360_open, loaded `since` and $1 seconds ago, has not connected yet
+first_join_check() {
+	if [ -z "$iface" ]; then
+		reload "bcm4360_open has had no Wi-Fi interface for $1 s since it was loaded (the kernel log says why)"
+	fi
+	[ "$wifi" = enabled ] && [ "$autoconnect" = yes ] || return 0
+	scan
+	if [ "$aps" -eq 0 ]; then
+		reload "bcm4360_open has seen no access point in the $1 s since it was loaded"
+	elif [ "$known" = yes ]; then
+		reload "bcm4360_open has not connected in the $1 s since it was loaded, with a saved network in range"
+	fi
+}
 
-if [ "$loaded" != yes ] || [ "$wifi" != enabled ] || [ "$autoconnect" != yes ]; then
-	rm -f "$dir/down_since" "$dir/up_since" "$dir/stalls"
-	exit 0
-fi
+# One check. Its exit ends only the check: --loop runs it in a subshell.
+check() {
+	observe
+	last_run=$(get last_run)
+	put last_run "$now"
+	if [ -z "$last_run" ] || [ $((now - last_run)) -gt "$max_gap" ]; then
+		rm -f "$dir/down_since" "$dir/up_since" "$dir/stalls" "$dir/open_since"
+	fi
 
-case $state in
-100*)
-	put connected "$now"
-	rm -f "$dir/down_since"
-	up=$(get up_since)
-	[ -n "$up" ] || { put up_since "$now"; up=$now; }
-	reconnected=$(get reconnected) reloaded=$(get reloaded)
-	if [ $((now - up)) -lt "$settle" ] ||
-		{ [ -n "$reconnected" ] && [ $((now - reconnected)) -lt "$settle" ]; } ||
-		{ [ -n "$reloaded" ] && [ $((now - reloaded)) -lt "$settle" ]; }; then
-		rm -f "$dir/stalls"
-		exit 0
-	fi
-	result=$(probe)
-	if [ "$result" = ok ]; then
-		rm -f "$dir/stalls"
-		exit 0
-	fi
-	stalls=$(($(get stalls || echo 0) + 1))
-	put stalls "$stalls"
-	[ "$stalls" -ge "$stall_runs" ] || exit 0
-
-	what="associated, but the gateway ${result#fail } has not answered for $stalls runs"
-	if [ -n "$reconnected" ] && [ $((now - reconnected)) -lt "$escalate" ]; then
-		if [ -z "$reloaded" ] || [ $((now - reloaded)) -ge "$cooldown" ]; then
-			reload "$what, again within $((now - reconnected)) s of a reconnect"
-		fi
-	fi
-	[ -z "$reconnected" ] || [ $((now - reconnected)) -ge "$reconnect_gap" ] || exit 0
-	put reconnected "$now"
-	rm -f "$dir/stalls"
-	echo "$what; reconnecting"
-	if [ -n "${BCM4360_WD_TEST:-}" ]; then
-		echo RECONNECT
-		exit 0
-	fi
-	uuid=$(nmcli -g UUID,DEVICE connection show --active 2>/dev/null |
-		awk -F: -v i="$iface" '$2 == i {print $1; exit}')
-	if [ -n "$uuid" ]; then
-		nmcli -w 60 connection up uuid "$uuid" ifname "$iface"
+	if [ "$driver" = bcm4360_open ]; then
+		since=$(get open_since)
+		[ -n "$since" ] || { put open_since "$now"; since=$now; }
+		connected=$(get connected)
+		case $state in
+		100*) ;;
+		*)
+			if { [ -z "$connected" ] || [ "$connected" -lt "$since" ]; } &&
+				[ $((now - since)) -ge "$first_join" ]; then
+				first_join_check $((now - since))
+			fi
+			;;
+		esac
 	else
-		nmcli -w 60 device connect "$iface"
+		rm -f "$dir/open_since"
 	fi
-	exit 0
+
+	if [ "$loaded" != yes ] || [ "$wifi" != enabled ] || [ "$autoconnect" != yes ]; then
+		rm -f "$dir/down_since" "$dir/up_since" "$dir/stalls"
+		exit 0
+	fi
+
+	case $state in
+	100*)
+		put connected "$now"
+		rm -f "$dir/down_since"
+		up=$(get up_since)
+		[ -n "$up" ] || { put up_since "$now"; up=$now; }
+		reconnected=$(get reconnected) reloaded=$(get reloaded)
+		if [ $((now - up)) -lt "$settle" ] ||
+			{ [ -n "$reconnected" ] && [ $((now - reconnected)) -lt "$settle" ]; } ||
+			{ [ -n "$reloaded" ] && [ $((now - reloaded)) -lt "$settle" ]; }; then
+			rm -f "$dir/stalls"
+			exit 0
+		fi
+		result=$(probe)
+		if [ "$result" = ok ]; then
+			rm -f "$dir/stalls"
+			exit 0
+		fi
+		stalls=$(($(get stalls || echo 0) + 1))
+		put stalls "$stalls"
+		[ "$stalls" -ge "$stall_runs" ] || exit 0
+
+		what="associated, but the gateway ${result#fail } has not answered for $stalls checks"
+		if [ -n "$reconnected" ] && [ $((now - reconnected)) -lt "$escalate" ]; then
+			if [ -z "$reloaded" ] || [ $((now - reloaded)) -ge "$cooldown" ]; then
+				reload "$what, again within $((now - reconnected)) s of a reconnect"
+			fi
+		fi
+		[ -z "$reconnected" ] || [ $((now - reconnected)) -ge "$reconnect_gap" ] || exit 0
+		put reconnected "$now"
+		rm -f "$dir/stalls"
+		echo "$what; reconnecting"
+		if [ -n "${BCM4360_WD_TEST:-}" ]; then
+			echo RECONNECT
+			exit 0
+		fi
+		uuid=$(nmcli -g UUID,DEVICE connection show --active 2>/dev/null |
+			awk -F: -v i="$iface" '$2 == i {print $1; exit}')
+		if [ -n "$uuid" ]; then
+			nmcli -w 60 connection up uuid "$uuid" ifname "$iface"
+		else
+			nmcli -w 60 device connect "$iface"
+		fi
+		exit 0
+		;;
+	esac
+
+	rm -f "$dir/up_since" "$dir/stalls"
+	connected=$(get connected)
+	[ -n "$connected" ] && [ $((now - connected)) -le "$recent" ] || exit 0
+	down=$(get down_since)
+	if [ -z "$down" ]; then
+		put down_since "$now"
+		exit 0
+	fi
+	[ $((now - down)) -ge "$window" ] || exit 0
+	reloaded=$(get reloaded)
+	[ -z "$reloaded" ] || [ $((now - reloaded)) -ge "$cooldown" ] || exit 0
+
+	reload "no Wi-Fi connection for $((now - down)) s (state: $state)"
+}
+
+case ${1:-} in
+--loop)
+	# one long-running service instead of a timer: systemd logs only what
+	# the checks say, not three lines for every start of a unit
+	while :; do
+		(check)
+		sleep "$interval"
+	done
+	;;
+"")
+	check
+	;;
+*)
+	echo "usage: bcm4360-watchdog [--loop]" >&2
+	exit 2
 	;;
 esac
-
-rm -f "$dir/up_since" "$dir/stalls"
-connected=$(get connected)
-[ -n "$connected" ] && [ $((now - connected)) -le "$recent" ] || exit 0
-down=$(get down_since)
-if [ -z "$down" ]; then
-	put down_since "$now"
-	exit 0
-fi
-[ $((now - down)) -ge "$window" ] || exit 0
-reloaded=$(get reloaded)
-[ -z "$reloaded" ] || [ $((now - reloaded)) -ge "$cooldown" ] || exit 0
-
-reload "no Wi-Fi connection for $((now - down)) s (state: $state)"

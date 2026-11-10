@@ -370,15 +370,32 @@ int bcm4360_core_tx(struct bcm4360_core *c, void *pkt, const struct bcm4360_txpa
 	h[1] = h[2] = h[3] = 0;
 	core_ampdu_header(c, h, h + TX_PREFIX_LEN, f, p);	/* ampdu.md 1.4-1.6 */
 	c->fr.txid++;
-	if (bcm4360_dma_txfast(di, pkt, true))
-		return -1;			/* the engine freed the packet */
-	tx_pending(c, p->fifo, 1);		/* frames.md 3.8: the FIFO's pending count */
+	/* frames.md 3.8: the FIFO's pending count. A post that fails has given the
+	 * packet to core_tx_drop() already, so it is taken either way (0 or 1). */
+	if (!bcm4360_dma_txfast(di, pkt, true))
+		tx_pending(c, p->fifo, 1);
 	avail = ((struct bcm4360_dma_pub *)di)->txavail;
 	if (avail < TX_STOP_BELOW) {
 		c->fr.stopped[p->fifo] = true;
 		return 1;
 	}
 	return 0;
+}
+
+/*
+ * Not in the specification: a frame that leaves without a status of the air
+ * (the ring reclaimed at down, a status that does not match it, a post that
+ * failed) goes back to the platform as it gave it to us, which tells its
+ * owner (bcm4360_plat_txdrop). Also the transmit engines' way to free one
+ * (bcm4360_dma_txfree_set, env_attach.c).
+ */
+void core_tx_drop(void *ctx, void *pkt)
+{
+	struct bcm4360_core *c = ctx;
+
+	osl_pktpull(c->osh, pkt, TX_HEADROOM);
+	c->fr.tx_dropped++;
+	bcm4360_plat_txdrop(c->plat, pkt);
 }
 
 /* frames.md 4.3 step 10: the packet leaves as the platform gave it to us */
@@ -414,7 +431,7 @@ static bool tx_status_ampdu(struct bcm4360_core *c, struct bcm4360_dma *di, u32 
 	bool fb = ((w2 >> 16) & 0xff) != 0;
 
 	if (ncons > AMPDU_MAX_STATUS) {
-		osl_pktfree(c->osh, pkt, true);
+		core_tx_drop(c, pkt);
 		return true;
 	}
 	pkts[0] = pkt;
@@ -425,7 +442,7 @@ static bool tx_status_ampdu(struct bcm4360_core *c, struct bcm4360_dma *di, u32 
 	}
 	if (i < ncons) {
 		while (i--)
-			osl_pktfree(c->osh, pkts[i], true);
+			core_tx_drop(c, pkts[i]);
 		return true;
 	}
 	a->nstatus++;
@@ -433,7 +450,7 @@ static bool tx_status_ampdu(struct bcm4360_core *c, struct bcm4360_dma *di, u32 
 		/* ampdu.md 2.3 step 2: the receiver was asleep, nothing was sent: post them again */
 		for (i = 0; i < ncons; i++) {
 			if (bcm4360_dma_txfast(di, pkts[i], true)) {
-				a->nholes++;	/* no room: the engine freed it; lost */
+				a->nholes++;	/* no room: the engine dropped it (core_tx_drop) */
 				tx_pending(c, fifo, -1);
 			} else {
 				a->nreposts++;
@@ -484,7 +501,7 @@ static bool tx_status_one(struct bcm4360_core *c, u32 w0, u32 w1, u32 w2, u32 w3
 	d = osl_pktdata(c->osh, pkt);
 	if ((d[TX_PREFIX_LEN + TXH_FRAMEID] | (u16)d[TX_PREFIX_LEN + TXH_FRAMEID + 1] << 8) !=
 	    (w0 >> 16) || !ncons) {
-		osl_pktfree(c->osh, pkt, true);
+		core_tx_drop(c, pkt);
 		return true;
 	}
 	if (d[TX_PREFIX_LEN + TXH_CTL_LOW] & 0x40)

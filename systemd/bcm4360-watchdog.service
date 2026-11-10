@@ -1,11 +1,13 @@
-# Installed by the bcm4360 driver (scripts/install.sh); started by
-# bcm4360-watchdog.timer. See /usr/local/lib/bcm4360/bcm4360-watchdog.
+# Installed by the bcm4360 driver (scripts/install.sh).
+# See /usr/local/lib/bcm4360/bcm4360-watchdog.
 [Unit]
-Description=Reload bcm4360 if Wi-Fi keeps failing to join
+Description=Recover bcm4360 Wi-Fi that keeps failing
 After=NetworkManager.service
 
 [Service]
-Type=oneshot
-ExecStart=/usr/local/lib/bcm4360/bcm4360-watchdog
-# a reconnect waits up to 60 s for NetworkManager, a reload for modprobe
-TimeoutStartSec=150
+ExecStart=/usr/local/lib/bcm4360/bcm4360-watchdog --loop
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

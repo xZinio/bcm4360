@@ -13,6 +13,36 @@ DKMS and rebuilt automatically for every new kernel:
 
 ## What's new
 
+**1.2.2**
+
+- **`bcm4360` no longer depends on `bcm4360_open` building.** The two
+  drivers are separate DKMS packages, and `bcm4360_open` is built only with
+  `install.sh --open`. Before, a kernel whose mac80211 `bcm4360_open` does not
+  support (anything before 6.17, e.g. Debian 13's 6.12) stopped the default
+  driver from installing as well. If `bcm4360_open` does not build for a new
+  kernel, `bcm4360` loads in its place at boot.
+- **A fallback for `bcm4360_open` from the start.** If it does not connect
+  within 5 minutes of loading (no interface because its probe failed, no
+  access point seen, or a saved network in range but no connection), the
+  watchdog switches to `bcm4360`. Before, it acted only after a connection.
+- **The watchdog judges the card, not a USB dongle**, and runs as one service
+  instead of a timer that logged three lines every 30 s.
+- **`install.sh` changes nothing until everything is ready.** It checks the
+  tools, verifies Broadcom's object in `lib/` again, cuts the firmware data
+  and builds both drivers for the running kernel first. `uninstall.sh`
+  removes every installed version, not only the checkout's.
+- **Fixes in the drivers:** `bcm4360_open` reports an unknown signal as
+  unknown instead of 0 dBm (the signal in `iw` and NetworkManager drifted
+  towards 0 dBm under traffic), reports every frame to mac80211 with a
+  status (also those it drops), survives a card that returns garbage DMA
+  indices, and no longer races a hardware restart against unloading.
+  `bcm4360`'s private ioctl checks for root before it allocates anything,
+  and its buffer is capped.
+- `make` and `make open` work on kernels built with clang. The blocklist is
+  down to the two modules that can take the card (`bcma`, `wl`). Broadcom's
+  download falls back to a copy at the Internet Archive (the checksums still
+  decide).
+
 **1.2.0**
 
 - **A driver without any of Broadcom's code, as an option.** `bcm4360_open`
@@ -95,12 +125,13 @@ code does not support CET.
 (2.9 MB, checksum‑verified) from broadcom.com. If Wi‑Fi doesn't work yet, use
 USB tethering from a phone or an Ethernet adapter.
 
-**2. Install the build tools** (kernel headers, compiler, DKMS, curl):
+**2. Install the build tools** (kernel headers, compiler, DKMS, curl, and
+Python 3 for `--open`):
 
 ```sh
-sudo pacman -S --needed base-devel linux-headers dkms curl git           # Arch
-sudo apt install build-essential linux-headers-$(uname -r) dkms curl git # Debian, Ubuntu
-sudo dnf install kernel-devel make gcc dkms curl git                     # Fedora
+sudo pacman -S --needed base-devel linux-headers dkms curl git python            # Arch
+sudo apt install build-essential linux-headers-$(uname -r) dkms curl git python3 # Debian, Ubuntu
+sudo dnf install kernel-devel make gcc dkms curl git python3                     # Fedora
 ```
 
 Recommended: also install your distribution's `wl` driver (`broadcom-wl-dkms`
@@ -115,9 +146,10 @@ cd bcm4360
 sudo sh scripts/install.sh
 ```
 
-This builds the module (half a minute), installs it, and blocks the
-other Broadcom drivers that would grab the card (`b43`, `bcma`, `ssb`,
-`brcm*`, `wl`). It also sets up the watchdog and the fallback service.
+This builds the module (half a minute) for the running kernel, installs it,
+and blocks the modules that would grab the card (`bcma`, and Broadcom's
+`wl`). It also sets up the watchdog and the fallback service. Nothing is
+installed if the build fails.
 
 To use `bcm4360_open`, the driver without Broadcom's code, instead:
 
@@ -126,8 +158,9 @@ sudo sh scripts/install.sh --open
 ```
 
 It also cuts the microcode and tables out of Broadcom's download into
-`/lib/firmware/bcm4360/`. `bcm4360` is installed with it and stays the
-fallback. To go back, run `install.sh` without `--open` and reboot.
+`/lib/firmware/bcm4360/`. `bcm4360_open` needs Linux 6.17 or newer.
+`bcm4360` is installed with it and stays the fallback. To go back, run
+`install.sh` without `--open` and reboot.
 
 **4. Reboot.** Or switch without rebooting (Wi‑Fi drops for about 10
 seconds; with `--open`: `sudo rmmod bcm4360; sudo modprobe bcm4360_open`):
@@ -158,9 +191,9 @@ Then reboot, or switch with the command from step 4.
 sudo sh scripts/uninstall.sh && sudo reboot
 ```
 
-This removes both drivers, the blocklists, the firmware file, the watchdog
-and the fallback service. Your distribution's `wl` driver, if installed,
-takes over again.
+This removes both drivers (every version DKMS has of them), the blocklists,
+the firmware file, the watchdog and the fallback service. Your
+distribution's `wl` driver, if installed, takes over again.
 
 ## If Wi‑Fi stops working
 
@@ -175,8 +208,10 @@ echo "options bcm4360 open_phy=0" | sudo tee /etc/modprobe.d/bcm4360-local.conf
 sudo rmmod bcm4360; sudo modprobe wl; sudo systemctl restart wpa_supplicant
 ```
 
-With `bcm4360_open`, go back to `bcm4360` right away with
-`sudo rmmod bcm4360_open; sudo modprobe bcm4360`, and for good with
+With `bcm4360_open`, the watchdog switches to `bcm4360` by itself when
+`bcm4360_open` does not connect within 5 minutes or loses its connection
+(`journalctl -u bcm4360-watchdog` says why). Go back to `bcm4360` right away
+with `sudo rmmod bcm4360_open; sudo modprobe bcm4360`, and for good with
 `sudo rm /etc/modprobe.d/bcm4360-open.conf` and a reboot.
 
 Don't use `modprobe -r` to reload the driver. It also unloads `cfg80211`,
@@ -220,8 +255,8 @@ and take effect after a reboot.
   while staying associated. Broadcom's complete `wl` driver does the same on
   those channels. The watchdog reconnects after 30–60 s. To avoid it, keep the
   profile on 5 GHz: `nmcli con modify NAME 802-11-wireless.band a`.
-- The blocklist also blocks `bcma` and `ssb`. Don't install on a machine that
-  needs them for another Broadcom device.
+- The blocklist also blocks `bcma`. Don't install on a machine that needs it
+  for another Broadcom device.
 
 ## How it is made
 
@@ -233,7 +268,11 @@ drv/        bcm4360_open, the open mac80211 driver (with open/core/)
 scripts/    install, uninstall, download of Broadcom's core, firmware data extractor
 systemd/    watchdog and fallback service
 modprobe.d/ blocklists: the other Broadcom drivers; bcm4360 when bcm4360_open is the driver
+tests/      tests that need neither root nor the card (make check; CI runs them too)
 ```
+
+`dkms.conf` builds `bcm4360`, `dkms-open.conf` `bcm4360_open` (DKMS package
+`bcm4360-open`). The version is set in `dkms.conf` only.
 
 Analysts (AI agents) studied Broadcom's code and wrote specifications that
 describe its behaviour, never its code. The open code was written from those
@@ -241,7 +280,9 @@ specifications alone, by agents that never saw Broadcom's code. Every open
 layer then had to do exactly what Broadcom's does in an emulator, compared
 register access by register access, before it was tested on the card. The
 specifications, the emulator and the test scripts are in this repository's
-history (up to 1.1.0 and commit `6a58d4e`).
+history (up to 1.1.0 and commit `6a58d4e`). The comments cite the
+specifications by path (`docs/re/spec/frames.md`, or just `frames.md 3.2`);
+read them there, e.g. `git show 6a58d4e:docs/re/spec/frames.md`.
 
 `src/` can be rebuilt from public sources: Broadcom's
 `hybrid-v35_64-nodebug-pcoem-6_30_223_271.tar.gz` (SHA‑256 `5f79774d…144be`),

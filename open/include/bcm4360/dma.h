@@ -111,4 +111,13 @@ void bcm4360_dma_param_set(struct bcm4360_dma *di, u16 id, u16 value);	/* 0x170 
 bool bcm4360_dma_glom_enable(struct bcm4360_dma *di, u32 enable);		/* 0x178 */
 u32 bcm4360_dma_activerxbuf(struct bcm4360_dma *di);			/* 0x180 */
 
+/*
+ * Not in the table: who frees a transmit packet the engine gives up on (the
+ * reclaim, a post that failed). Unset, the OS layer does, as in Broadcom's
+ * engine (osl_pktfree with send); bcm4360_open sets it so that every frame of
+ * mac80211's gets back to mac80211.
+ */
+void bcm4360_dma_txfree_set(struct bcm4360_dma *di, void (*fn)(void *ctx, void *pkt),
+			    void *ctx);
+
 #endif

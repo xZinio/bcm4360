@@ -203,6 +203,9 @@ struct bcm4360_dma {
 	u32 rs0_cd_mask;
 	u16 rs0cd;
 	u16 xs0cd;
+	/* bcm4360_dma_txfree_set(); NULL: osl_pktfree */
+	void (*txfree)(void *ctx, void *pkt);
+	void *txfree_ctx;
 };
 
 _Static_assert(__builtin_offsetof(struct bcm4360_dma, pub) == 0,
@@ -228,6 +231,35 @@ static inline u16 ring_active(u32 in, u32 out, u32 n)
 static inline u16 dma_index(u32 value, u32 mask, u32 base)
 {
 	return (u16)((((value & mask) - base) & mask) >> DESC_SHIFT);
+}
+
+/*
+ * An index the engine reported (a status register) is trusted only within
+ * the ring of n entries and on the stretch from `from` up to `to`, the
+ * descriptors that were posted. A card that returns garbage (0xffffffff once
+ * it is gone from the bus) would otherwise send the walks over the ring that
+ * end at that index around it forever, under the driver's spinlock, or make
+ * them unmap descriptors that were never posted.
+ */
+static inline bool ring_index_ok(u32 idx, u32 from, u32 to, u32 n)
+{
+	return idx < n && ring_active(from, idx, n) <= ring_active(from, to, n);
+}
+
+/* a transmit packet the engine gives up on (bcm4360_dma_txfree_set) */
+static void dma_txfree(struct bcm4360_dma *di, void *p)
+{
+	if (di->txfree)
+		di->txfree(di->txfree_ctx, p);
+	else
+		osl_pktfree(di->osh, p, true);
+}
+
+void bcm4360_dma_txfree_set(struct bcm4360_dma *di, void (*fn)(void *ctx, void *pkt),
+			    void *ctx)
+{
+	di->txfree = fn;
+	di->txfree_ctx = ctx;
 }
 
 /* docs/re/spec/bmac-data.md, D2: state field of status 0 */
@@ -787,6 +819,25 @@ bool bcm4360_dma_txsuspendedidle(struct bcm4360_dma *di)
 	return dma_state(hw_read32(di->txregs, DMA64_STATUS0)) == STATE_IDLE;
 }
 
+/*
+ * Not in the specification: the descriptors txfast wrote, from txout up to
+ * `end`, for a packet it does not post after all, unmapped again (Broadcom's
+ * engine leaves them mapped)
+ */
+static void dma_txunpost(struct bcm4360_dma *di, u16 end)
+{
+	volatile struct dma64_desc *d;
+	u16 i;
+
+	for (i = di->txout; i != end; i = ring_next(i, di->ntxd)) {
+		d = &di->txd[i];
+		osl_dma_unmap(di->osh, d->addrlow - di->dataoffsetlow, d->ctrl2 & D64_CTRL2_BC_MASK,
+			      DMA_TX);
+		d->addrlow = DESC_RECLAIMED;
+		d->addrhigh = DESC_RECLAIMED;
+	}
+}
+
 /* docs/re/spec/bmac-data.md, P23 dma64_txfast (slot 0x040) */
 s32 bcm4360_dma_txfast(struct bcm4360_dma *di, void *p0, bool commit)
 {
@@ -808,6 +859,8 @@ s32 bcm4360_dma_txfast(struct bcm4360_dma *di, void *p0, bool commit)
 			continue;
 
 		pa = osl_dma_map(di->osh, data, len, DMA_TX, p, NULL);
+		if (pa == BCM4360_DMA_MAP_FAILED)
+			goto mapfail;
 
 		flags = p == p0 ? D64_CTRL1_SOF : 0;
 		if (!next)
@@ -837,9 +890,19 @@ s32 bcm4360_dma_txfast(struct bcm4360_dma *di, void *p0, bool commit)
 
 outoftxd:
 	/* step 4 */
-	osl_pktfree(di->osh, p0, true);
+	dma_txunpost(di, out);
+	dma_txfree(di, p0);
 	di->pub.txnobuf++;
 	di->pub.txavail = 0;
+	return -1;
+
+mapfail:
+	/* not in the specification: no bus address for a buffer (bounce buffers
+	 * or IOMMU space used up). The ring stays as it was; the packet is
+	 * dropped as without a free descriptor. */
+	dma_txunpost(di, out);
+	dma_txfree(di, p0);
+	di->pub.txnobuf++;
 	return -1;
 }
 
@@ -857,6 +920,10 @@ s32 bcm4360_dma_txunframed(struct bcm4360_dma *di, void *buf, u32 len, bool comm
 		return 0;
 
 	pa = osl_dma_map(di->osh, buf, len, DMA_TX, NULL, NULL);
+	if (pa == BCM4360_DMA_MAP_FAILED) {	/* not in the specification: as without room */
+		di->pub.txnobuf++;
+		return -1;
+	}
 	flags = D64_CTRL1_SOF | D64_CTRL1_EOF | D64_CTRL1_IOC;
 	if (di->txout == di->ntxd - 1)
 		flags |= D64_CTRL1_EOT;
@@ -879,11 +946,15 @@ void *bcm4360_dma_getpos(struct bcm4360_dma *di, bool direction_tx)
 	if (direction_tx) {
 		idx = dma_index(hw_read32(di->txregs, DMA64_STATUS0), di->xs0_cd_mask,
 				di->xmtptrbase);
+		if (!ring_index_ok(idx, di->txin, di->txout, di->ntxd))
+			return NULL;
 		p = di->txp[idx];
 		return ring_active(di->txin, di->txout, di->ntxd) ? p : NULL;
 	}
 
 	idx = dma_index(hw_read32(di->rxregs, DMA64_STATUS0), di->rs0_cd_mask, di->rcvptrbase);
+	if (!ring_index_ok(idx, di->rxin, di->rxout, di->nrxd))
+		return NULL;
 	p = di->rxp[idx];
 	return ring_active(di->rxin, di->rxout, di->nrxd) ? p : NULL;
 }
@@ -904,22 +975,28 @@ void bcm4360_dma_txreclaim(struct bcm4360_dma *di, s32 range)
 
 	while ((p = bcm4360_dma_getnexttxp(di, range))) {
 		if (!(di->pub.dmactrlflags & DMA_CTRL_TX_KEEP))
-			osl_pktfree(di->osh, p, true);
+			dma_txfree(di, p);
 	}
 }
 
 /*
  * docs/re/spec/bmac-data.md, P25 step 2: the end of the transmit reclaim for
- * a range other than "all"
+ * a range other than "all". Not in the specification: the register is also
+ * read again when the cached index is off the posted descriptors (behind
+ * txin after a reclaim of all or a rotate), and an index off them that the
+ * register returns ends the reclaim at txin: nothing is reclaimed
+ * (ring_index_ok).
  */
 static u16 dma64_txreclaim_end(struct bcm4360_dma *di, s32 range)
 {
 	u16 end = di->xs0cd;
 	u32 ad;
 
-	if (di->txin == di->xs0cd) {
+	if (di->txin == di->xs0cd || !ring_index_ok(di->xs0cd, di->txin, di->txout, di->ntxd)) {
 		end = dma_index(hw_read32(di->txregs, DMA64_STATUS0), di->xs0_cd_mask,
 				di->xmtptrbase);
+		if (!ring_index_ok(end, di->txin, di->txout, di->ntxd))
+			return di->txin;
 		di->xs0cd = end;
 	}
 
@@ -927,8 +1004,11 @@ static u16 dma64_txreclaim_end(struct bcm4360_dma *di, s32 range)
 		ad = hw_read32(di->txregs, DMA64_STATUS1);
 		ad = ((((ad & di->xs1_ad_mask) - di->xmtptrbase) & di->xs0_cd_mask) &
 		      INDEX_MASK16) >> DESC_SHIFT;
-		if (ad != end)
+		if (ad != end) {
+			if (!ring_index_ok(ad, di->txin, di->txout, di->ntxd))
+				return di->txin;
 			end = ring_prev(ad, di->ntxd);
+		}
 	}
 	return end;
 }
@@ -952,8 +1032,9 @@ void *bcm4360_dma_getnexttxp(struct bcm4360_dma *di, s32 range)
 	else
 		end = dma64_txreclaim_end(di, range);
 
-	/* step 3 */
-	if (start == 0 && end > di->txout)
+	/* step 3; and the loop below ends only at an end within the ring, so
+	 * one off the posted descriptors is refused too (ring_index_ok) */
+	if ((start == 0 && end > di->txout) || !ring_index_ok(end, start, di->txout, di->ntxd))
 		return NULL;
 
 	/* step 4 */
@@ -986,6 +1067,8 @@ void *bcm4360_dma_peeknexttxp(struct bcm4360_dma *di)
 		return NULL;
 
 	end = dma_index(hw_read32(di->txregs, DMA64_STATUS0), di->xs0_cd_mask, di->xmtptrbase);
+	if (!ring_index_ok(end, di->txin, di->txout, di->ntxd))
+		return NULL;
 	di->xs0cd = end;
 
 	for (i = di->txin; i != end; i = ring_next(i, di->ntxd))
@@ -1015,13 +1098,16 @@ s32 bcm4360_dma_peekntxp(struct bcm4360_dma *di, s32 *n, void **pkts, s32 range)
 		xs0 = hw_read32(di->txregs, DMA64_STATUS0);
 		xs1 = hw_read32(di->txregs, DMA64_STATUS1);
 		cd = dma_index(xs0, di->xs0_cd_mask, di->xmtptrbase);
+		if (!ring_index_ok(cd, di->txin, di->txout, di->ntxd))
+			return -1;
 		di->xs0cd = cd;
 		ad = (u16)((((xs1 & di->xs1_ad_mask) - di->xmtptrbase) & di->xs0_cd_mask) >>
 			   DESC_SHIFT);
 		end = ad == cd ? cd : ring_prev(ad, di->ntxd);
 	}
 
-	if (di->txin == 0 && end > di->txout)
+	if ((di->txin == 0 && end > di->txout) ||
+	    !ring_index_ok(end, di->txin, di->txout, di->ntxd))
 		return -1;
 
 	for (i = di->txin; i != end; i = ring_next(i, di->ntxd)) {
@@ -1065,7 +1151,7 @@ void bcm4360_dma_txrotate(struct bcm4360_dma *di)
 	ad = (u16)((((hw_read32(di->txregs, DMA64_STATUS1) & di->xs1_ad_mask) -
 		     di->xmtptrbase) & di->xs1_ad_mask) >> DESC_SHIFT);
 	rot = (ad - di->txin) & (di->ntxd - 1);
-	if (rot >= di->ntxd - nactive)
+	if (ad >= di->ntxd || rot >= di->ntxd - nactive)	/* ad: ring_index_ok */
 		return;
 
 	/* step 2: from the last pending descriptor down to txin */
@@ -1251,6 +1337,13 @@ bool bcm4360_dma_rxfill(struct bcm4360_dma *di)
 
 		pa = osl_dma_map(di->osh, osl_pktdata(di->osh, p), di->rxbufsize, DMA_RX, p,
 				 NULL);
+		if (pa == BCM4360_DMA_MAP_FAILED) {
+			/* not in the specification: as without a buffer */
+			osl_pktfree(di->osh, p, false);
+			ret = i == 0 && bcm4360_dma_rxidle(di);
+			di->pub.rxnobuf++;
+			break;
+		}
 		di->rxp[out] = p;
 
 		flags = out == di->nrxd - 1 ? D64_CTRL1_EOT : 0;
@@ -1287,10 +1380,14 @@ void *bcm4360_dma_getnextrxp(struct bcm4360_dma *di, bool forceall)
 	if (i == di->rxout)
 		return NULL;
 
-	/* step 2 */
-	if (i == di->rs0cd) {
-		di->rs0cd = dma_index(hw_read32(di->rxregs, DMA64_STATUS0), di->rs0_cd_mask,
-				      di->rcvptrbase);
+	/* step 2. Not in the specification: the register is also read when the
+	 * cached index is off the posted buffers, and an index off them that it
+	 * returns counts as no progress (ring_index_ok) */
+	if (i == di->rs0cd || !ring_index_ok(di->rs0cd, i, di->rxout, di->nrxd)) {
+		u16 cd = dma_index(hw_read32(di->rxregs, DMA64_STATUS0), di->rs0_cd_mask,
+				   di->rcvptrbase);
+
+		di->rs0cd = ring_index_ok(cd, i, di->rxout, di->nrxd) ? cd : i;
 		if (i == di->rs0cd && !forceall)
 			return NULL;
 	}
@@ -1317,6 +1414,8 @@ void *bcm4360_dma_peeknextrxp(struct bcm4360_dma *di)
 		return NULL;
 
 	end = dma_index(hw_read32(di->rxregs, DMA64_STATUS0), di->rs0_cd_mask, di->rcvptrbase);
+	if (!ring_index_ok(end, di->rxin, di->rxout, di->nrxd))
+		return NULL;
 	di->rs0cd = end;
 
 	for (i = di->rxin; i != end; i = ring_next(i, di->nrxd))

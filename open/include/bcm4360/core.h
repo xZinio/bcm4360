@@ -187,7 +187,8 @@ void bcm4360_core_intrson(struct bcm4360_core *c);
  * header; the core prepends its transmit header in the headroom). 0: taken;
  * 1: taken, and the FIFO is full now (the platform stops its queues until
  * bcm4360_plat_tx_wake()); -1: not taken (down, or no room), the platform
- * frees it. */
+ * frees it. A frame that was taken comes back exactly once: with its status
+ * (bcm4360_plat_txstatus) or without (bcm4360_plat_txdrop). */
 int bcm4360_core_tx(struct bcm4360_core *c, void *pkt, const struct bcm4360_txparams *p);
 /* headroom the core needs in front of a frame to transmit */
 u32 bcm4360_core_tx_headroom(struct bcm4360_core *c);
@@ -287,6 +288,9 @@ void bcm4360_core_set_rssi(struct bcm4360_core *c, s8 dbm);
 void bcm4360_plat_rfkill(void *plat, bool hw_disabled);
 void bcm4360_plat_rx(void *plat, void *pkt, const struct bcm4360_rxstatus *rs);
 void bcm4360_plat_txstatus(void *plat, void *pkt, const struct bcm4360_txstatus *ts);
+/* a frame that was taken but leaves without a status of the air (the core went
+ * down, its status was lost, it could not be posted): the platform drops it */
+void bcm4360_plat_txdrop(void *plat, void *pkt);
 void bcm4360_plat_tx_wake(void *plat, u8 fifo);
 /* a fatal error of the hardware: the platform restarts the device */
 void bcm4360_plat_fatal(void *plat);

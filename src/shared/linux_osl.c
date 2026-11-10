@@ -658,10 +658,28 @@ osl_dma_map(osl_t *osh, void *va, uint size, int direction, void *p, hnddma_seg_
 	}
 #endif 
 
+	/* bcm4360: a failed mapping is returned as 0xffffffff (BCM4360_DMA_MAP_FAILED
+	 * of the open code; DMA_MAPPING_ERROR cut to the 32 bits returned here), on
+	 * every kernel, so that the DMA engine can refuse it */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0)
-	return (dma_map_single(&((struct pci_dev *)osh->pdev)->dev, va, size, dir));
+	{
+		struct device *dev = &((struct pci_dev *)osh->pdev)->dev;
+		dma_addr_t pa = dma_map_single(dev, va, size, dir);
+
+		if (dma_mapping_error(dev, pa))
+			return 0xffffffff;
+		return (uint)pa;
+	}
 #else
-	return (pci_map_single(osh->pdev, va, size, dir));
+	{
+		dma_addr_t pa = pci_map_single(osh->pdev, va, size, dir);
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
+		if (pci_dma_mapping_error(osh->pdev, pa))
+			return 0xffffffff;
+#endif
+		return (uint)pa;
+	}
 #endif
 }
 

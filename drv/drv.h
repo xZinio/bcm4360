@@ -55,9 +55,11 @@ struct bcm4360_dev {
 	/* serialises every call into the core but bcm4360_core_isr() */
 	spinlock_t lock;
 	/* frames and transmit status the core reported while the lock was
-	 * held, handed to mac80211 after it is released */
+	 * held, handed to mac80211 after it is released; txdropq: frames the core
+	 * gave back without a status (bcm4360_plat_txdrop) */
 	struct sk_buff_head rxq;
 	struct sk_buff_head txsq;
+	struct sk_buff_head txdropq;
 
 	struct ieee80211_vif *vif;	/* the one interface (station) */
 	u32 peer_map;		/* A-MPDU peer indices in use (mac80211.c) */
@@ -68,11 +70,12 @@ struct bcm4360_dev {
 	bool up;
 	u16 chanspec;
 	struct work_struct restart;
+	bool dead;		/* set (in the lock) before the device goes: no restart any more */
 	/* rfkill (mac80211.c): the core reports the hardware switch from a timer, in the lock;
 	 * the work calls cfg80211, which may sleep */
 	struct work_struct rfkill_work;
 	bool rfkill_hw;
-	bool rfkill_dead;	/* set before unregistering: the work does nothing more */
+	bool rfkill_dead;	/* set (in the lock) before unregistering: no work any more */
 	u8 bssid[ETH_ALEN];	/* the BSS being joined or joined, for the receive-signal tracking */
 
 	struct ieee80211_supported_band band_2g;

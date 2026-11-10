@@ -79,8 +79,8 @@ struct core_frames {
 	u16 txid;		/* the driver-wide frame id counter (3.4) */
 	bool stopped[FR_NFIFO];	/* the platform's queues are stopped (tx returned 1) */
 
-	/* transmit status (frames.md 4) */
-	u32 tx_status, tx_fatal;
+	/* transmit status (frames.md 4); frames given back without one (core_tx_drop) */
+	u32 tx_status, tx_fatal, tx_dropped;
 
 	/* A-MPDU transmit (ampdu.md; ampdu.c) */
 	struct core_ampdu ampdu;
@@ -89,6 +89,9 @@ struct core_frames {
 /* interrupts (frames.c) */
 bool core_rx_run(struct bcm4360_core *c, u32 bound);
 bool core_txstatus_run(struct bcm4360_core *c, u32 bound, bool *fatal);
+/* a frame of the platform's that leaves the core without a status of the air
+ * (tx.c): the transmit engines' way to free one (bcm4360_dma_txfree_set) */
+void core_tx_drop(void *ctx, void *pkt);
 
 
 /* A-MPDU (ampdu.c) */

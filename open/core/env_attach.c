@@ -267,10 +267,15 @@ void *bcm4360_attach_env_dma_attach(void *osh, const char *name, void *sih, void
 {
 	struct bcm4360_core *c = core_of_sih(sih);
 	struct bcm4360_dma_bus bus;
+	struct bcm4360_dma *di;
 
 	dma_bus(c, &bus);
-	return bcm4360_dma_attach(osh, name, &bus, txregs, rxregs, ntxd, nrxd, rxbufsize,
-				  rxextheadroom, nrxpost, rxoffset, &c->msg_level);
+	di =bcm4360_dma_attach(osh, name, &bus, txregs, rxregs, ntxd, nrxd, rxbufsize,
+				rxextheadroom, nrxpost, rxoffset, &c->msg_level);
+	/* every transmit frame is the platform's: back to it, never freed here */
+	if (di)
+		bcm4360_dma_txfree_set(di, core_tx_drop, c);
+	return di;
 }
 
 void bcm4360_attach_env_dma_detach(void *di) { bcm4360_dma_detach(di); }

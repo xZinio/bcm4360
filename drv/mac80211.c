@@ -177,7 +177,15 @@ static bool bcm4360_rx_status(struct bcm4360_dev *dev, const struct bcm4360_rxst
 		ch = bcm4360_ctl_chan(dev->chanspec);
 	st->band = band;
 	st->freq = ieee80211_channel_to_frequency(ch, band);
-	st->signal = rs->rssi;
+	/*
+	 * 0: the PHY status was not valid, and the core has no RSSI (phy_rx.c),
+	 * as for every MPDU of an A-MPDU but one. Reported as 0 dBm it pulled the
+	 * signal that iw and NetworkManager show towards 0 under traffic.
+	 */
+	if (rs->rssi)
+		st->signal = rs->rssi;
+	else
+		st->flag |= RX_FLAG_NO_SIGNAL_VAL;
 	for (i = 0; i < 3; i++) {
 		if (rs->chain_rssi[i]) {
 			st->chains |= BIT(i);
@@ -329,12 +337,23 @@ static int bcm4360_sta_remove(struct ieee80211_hw *ieee, struct ieee80211_vif *v
 	return 0;
 }
 
+/* frames the core gave back without a status (bcm4360_plat_txdrop): mac80211
+ * reports them dropped to whoever waits for their status; without the lock */
+static void bcm4360_txdrop(struct bcm4360_dev *dev, struct sk_buff_head *q)
+{
+	struct sk_buff *skb;
+
+	while ((skb = __skb_dequeue(q)))
+		ieee80211_free_txskb(dev->ieee, skb);
+}
+
 static void bcm4360_tx(struct ieee80211_hw *ieee, struct ieee80211_tx_control *control,
 		       struct sk_buff *skb)
 {
 	struct bcm4360_dev *dev = ieee->priv;
 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
 	struct bcm4360_txparams p;
+	struct sk_buff_head drops;
 	enum nl80211_band band = info->band;
 	int i, err;
 
@@ -383,15 +402,19 @@ static void bcm4360_tx(struct ieee80211_hw *ieee, struct ieee80211_tx_control *c
 			ieee80211_get_tkip_p1k(key, skb, p.tkip_p1k);
 	}
 
+	__skb_queue_head_init(&drops);
 	spin_lock_bh(&dev->lock);
 	err = dev->up ? bcm4360_core_tx(dev->core, skb, &p) : -1;
 	if (dev->up)
 		bcm4360_core_led_activity(dev->core);		/* G2 */
 	if (err > 0)
 		ieee80211_stop_queues(ieee);	/* taken, and the FIFO is full now */
+	/* taken but not posted (the core gave it back): reported now, not at the next interrupt */
+	skb_queue_splice_init(&dev->txdropq, &drops);
 	spin_unlock_bh(&dev->lock);
 	if (err < 0)
-		ieee80211_free_txskb(ieee, skb);
+		ieee80211_free_txskb(ieee, skb);	/* not taken: still ours */
+	bcm4360_txdrop(dev, &drops);
 }
 
 /*
@@ -431,7 +454,7 @@ static void bcm4360_tkip_rx_next(struct bcm4360_dev *dev, struct sk_buff *skb, u
  * mac80211; called without the lock */
 void bcm4360_deliver(struct bcm4360_dev *dev)
 {
-	struct sk_buff_head rxq, txsq;
+	struct sk_buff_head rxq, txsq, txdropq;
 	struct sk_buff *skb;
 	u16 agg_left = 0, agg_seq = 0;	/* MPDUs of the aggregate still to come; last sequence number */
 	bool agg_nack = false;
@@ -441,10 +464,13 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 
 	__skb_queue_head_init(&rxq);
 	__skb_queue_head_init(&txsq);
+	__skb_queue_head_init(&txdropq);
 	spin_lock_bh(&dev->lock);
 	skb_queue_splice_init(&dev->rxq, &rxq);
 	skb_queue_splice_init(&dev->txsq, &txsq);
+	skb_queue_splice_init(&dev->txdropq, &txdropq);
 	spin_unlock_bh(&dev->lock);
+	bcm4360_txdrop(dev, &txdropq);
 
 	while ((skb = __skb_dequeue(&rxq))) {
 		struct bcm4360_rxstatus rs;
@@ -484,7 +510,7 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 
 			/* the coexistence policy wants the associated AP's signal (coverage.md G3) */
 			if (skb->len >= 24 && ieee80211_is_beacon(hdr->frame_control) &&
-			    ether_addr_equal(hdr->addr3, dev->bssid)) {
+			    ether_addr_equal(hdr->addr3, dev->bssid) && rs.rssi) {
 				rssi = rs.rssi;
 				got_rssi = true;
 			}
@@ -619,7 +645,7 @@ static void bcm4360_stop(struct ieee80211_hw *ieee, bool suspend)
 		u32 frames, d[BCM4360_RX_DROP_REASONS];
 
 		bcm4360_core_rx_stats(dev->core, &frames, d);
-		/* no "error" or "fail" in it: open-test.sh takes those for problems */
+		/* no "error" or "fail" in it: log scanners take those for problems */
 		dev_info(&dev->pdev->dev, "received %u frames; dropped: header %u, longer than the "
 			 "buffer %u, bad PHY status %u, FCS %u, too short %u, A-MSDU %u\n",
 			 frames, d[0], d[1], d[2], d[3], d[4], d[5]);
@@ -1097,8 +1123,11 @@ int bcm4360_mac80211_register(struct bcm4360_dev *dev)
 
 void bcm4360_mac80211_unregister(struct bcm4360_dev *dev)
 {
-	/* no rfkill report after the wiphy is gone */
+	/* no rfkill report after the wiphy is gone; set in the lock, which the core's timers
+	 * hold when they call bcm4360_plat_rfkill(), so no work is queued after the cancel */
+	spin_lock_bh(&dev->lock);
 	WRITE_ONCE(dev->rfkill_dead, true);
+	spin_unlock_bh(&dev->lock);
 	cancel_work_sync(&dev->rfkill_work);
 	ieee80211_unregister_hw(dev->ieee);
 	bcm4360_free_bands(dev);

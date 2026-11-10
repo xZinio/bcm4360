@@ -5,3 +5,6 @@ Makefile        text eol=lf
 *.mk            text eol=lf
 dkms.conf       text eol=lf
 hybrid/*.txt    text eol=lf
+dkms-open.conf  text eol=lf
+systemd/*       text eol=lf
+tests/*.sh      text eol=lf

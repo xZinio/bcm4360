@@ -1,0 +1,25 @@
+#!/bin/sh
+# Installed by the bcm4360 driver (scripts/install.sh); run once at boot by
+# bcm4360-fallback.service.
+#
+# bcm4360.conf blacklists Broadcom's stock wl so that bcm4360 gets the card;
+# with install.sh --open, bcm4360-open.conf blacklists bcm4360 so that
+# bcm4360_open gets it. If the driver meant to take the card is not built for
+# the running kernel (its DKMS build failed after a kernel update), nothing
+# would drive the card at all: load the next one instead, bcm4360 for
+# bcm4360_open, wl for bcm4360. An explicit modprobe is not stopped by a
+# blacklist.
+set -u
+
+k=$(uname -r)
+if [ -e /etc/modprobe.d/bcm4360-open.conf ]; then
+	modinfo bcm4360_open >/dev/null 2>&1 && exit 0
+	if modinfo bcm4360 >/dev/null 2>&1; then
+		echo "bcm4360_open is not available for kernel $k, loading bcm4360 instead"
+		exec modprobe bcm4360
+	fi
+elif modinfo bcm4360 >/dev/null 2>&1; then
+	exit 0
+fi
+echo "bcm4360 is not available for kernel $k, loading wl instead"
+exec modprobe wl
