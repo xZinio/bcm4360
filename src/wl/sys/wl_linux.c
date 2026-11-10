@@ -466,9 +466,11 @@ static const struct net_device_ops wl_netdev_ops =
 #else
 	.ndo_set_multicast_list = wl_set_multicast_list,
 #endif
-	.ndo_do_ioctl = wl_ioctl,
+	/* bcm4360: ndo_do_ioctl only before 5.15 (see above); 7.4 removed it */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
 	.ndo_siocdevprivate = wl_siocdevprivate,
+#else
+	.ndo_do_ioctl = wl_ioctl,
 #endif
 };
 
@@ -476,9 +478,11 @@ static const struct net_device_ops wl_netdev_monitor_ops =
 {
 	.ndo_start_xmit = wl_monitor_start,
 	.ndo_get_stats = wl_get_stats,
-	.ndo_do_ioctl = wl_ioctl,
+	/* bcm4360: ndo_do_ioctl only before 5.15 (see above); 7.4 removed it */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
 	.ndo_siocdevprivate = wl_siocdevprivate,
+#else
+	.ndo_do_ioctl = wl_ioctl,
 #endif
 };
 #endif 

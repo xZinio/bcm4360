@@ -16,7 +16,7 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # tests/references.sh reads the specifications in the history
       - name: Shell syntax
@@ -61,7 +61,7 @@ jobs:
     env:
       LLVM_FLAG: ${{ matrix.llvm && 'LLVM=1' || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Tools
         run: |
           sudo apt-get update
@@ -84,7 +84,9 @@ jobs:
           tar -xf "$RUNNER_TEMP/linux.tar" -C "$RUNNER_TEMP/linux" --strip-components=1
           cd "$RUNNER_TEMP/linux"
           make $LLVM_FLAG x86_64_defconfig
-          scripts/config -e MODULES -e PCI -e CFG80211 -e MAC80211
+          # no CONFIG_WERROR, as in distribution kernels: with it, every
+          # warning of Broadcom's code in src/ fails the build
+          scripts/config -e MODULES -e PCI -e CFG80211 -e MAC80211 -d WERROR
           make $LLVM_FLAG olddefconfig
           make $LLVM_FLAG -j"$(nproc)" modules_prepare
           echo "KDIR=$RUNNER_TEMP/linux" >> "$GITHUB_ENV"
