@@ -106,6 +106,7 @@ uninstall:
 # the tests that need neither root nor the card (also run by CI)
 check:
 	sh tests/watchdog.sh
+	sh tests/amsdu.sh
 
 .PHONY: all open fetch clean install uninstall check
 endif

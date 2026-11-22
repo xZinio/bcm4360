@@ -63,6 +63,10 @@ struct hyb_card {
 	const struct hyb_si_pub *sih;	/* NULL: slot free */
 	void *osh;			/* Broadcom's OS handle of the card */
 	struct bcm4360_hw hw;
+	/* Receive-buffer sequence, serialized by this card's driver lock. */
+	const void *amsdu_owner;
+	u8 amsdu_last_idx;
+	bool amsdu_last_valid;
 };
 
 /* hybrid/card.c: the card of a backplane handle of the object, or NULL */

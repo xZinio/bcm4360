@@ -225,6 +225,7 @@ and take effect after a reboot.
 | Parameter | Default | What it does |
 |---|---|---|
 | `prefer_5ghz` | 15 | Bonus in dB for 5 GHz access points when joining; 0 picks by signal only. Can also be changed at runtime in `/sys/module/bcm4360/parameters/`. |
+| `amsdu_guard` | 1 | Drops incomplete hardware-split A-MSDUs whose receive-buffer sequence has a gap. `amsdu_broken_chains` in `/sys/module/bcm4360/parameters/` counts these drops. |
 | `open_phy`, `open_mac`, `open_dma`, `open_pmu`, `open_si`, `open_srom`, `open_nvram`, `open_clm`, `open_chan`, `open_ppr`, `open_rate`, `open_stf`, `open_stf_policy`, `open_cca`, `open_iovar`, `open_access`, `open_utils` | 1 | One switch per open layer; 0 runs Broadcom's code for that layer. `modinfo bcm4360` describes each. |
 
 `bcm4360_open` (`options bcm4360_open ...`):
