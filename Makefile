@@ -67,7 +67,15 @@ clean-files := lib/wlc_hybrid_open.o
 # objtool cannot process Broadcom's prebuilt 2015 object and its errors are
 # fatal since Linux 6.15, so it is skipped for the final link of the module,
 # the same way distributions package this core (e.g. Arch's broadcom-wl-dkms).
-bcm4360.o: override objtool-enabled =
+# Keep this override private, and process each C object even on kernels which
+# normally delay objtool until the final link (e.g. CONFIG_KLP_BUILD). Without
+# their .return_sites the kernel cannot patch their __x86_return_thunk jumps.
+# Only the final link contains the prebuilt core that objtool cannot handle.
+# A combined build shares some C objects with bcm4360_open. Process its other
+# C objects here too, and skip its final objtool pass to avoid processing the
+# shared objects twice. An open-only build still uses normal Kbuild defaults.
+$(addprefix $(obj)/,bcm4360.o bcm4360_open.o): private override objtool-enabled =
+$(addprefix $(obj)/,$(bcm4360-objs) $(bcm4360_open-objs)): private override objtool-enabled = y
 endif
 
 else
