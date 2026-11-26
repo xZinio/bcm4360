@@ -455,6 +455,7 @@ static void bcm4360_tkip_rx_next(struct bcm4360_dev *dev, struct sk_buff *skb, u
 void bcm4360_deliver(struct bcm4360_dev *dev)
 {
 	struct sk_buff_head rxq, txsq, txdropq;
+	struct ieee80211_vif *vif;
 	struct sk_buff *skb;
 	u16 agg_left = 0, agg_seq = 0;	/* MPDUs of the aggregate still to come; last sequence number */
 	bool agg_nack = false;
@@ -605,9 +606,11 @@ void bcm4360_deliver(struct bcm4360_dev *dev)
 		if (ts.acked && !(info->flags & IEEE80211_TX_CTL_NO_ACK))
 			info->flags |= IEEE80211_TX_STAT_ACK;
 		ieee80211_tx_status_ni(dev->ieee, skb);
-		if (bar && READ_ONCE(dev->vif)) {
+		/* read once: .remove_interface may clear it between a check and a use */
+		vif = READ_ONCE(dev->vif);
+		if (bar && vif) {
 			local_bh_disable();
-			ieee80211_send_bar(READ_ONCE(dev->vif), agg_ra, agg_tid,
+			ieee80211_send_bar(vif, agg_ra, agg_tid,
 					   (agg_seq + 1) & (IEEE80211_SN_MODULO - 1));
 			local_bh_enable();
 		}
@@ -673,7 +676,7 @@ static int bcm4360_add_interface(struct ieee80211_hw *ieee, struct ieee80211_vif
 		return -EBUSY;
 	if (vif->type != NL80211_IFTYPE_STATION)
 		return -EOPNOTSUPP;
-	dev->vif = vif;
+	WRITE_ONCE(dev->vif, vif);	/* bcm4360_deliver() reads it without the lock */
 	spin_lock_bh(&dev->lock);
 	bcm4360_core_set_macaddr(dev->core, vif->addr);
 	spin_unlock_bh(&dev->lock);
@@ -684,7 +687,7 @@ static void bcm4360_remove_interface(struct ieee80211_hw *ieee, struct ieee80211
 {
 	struct bcm4360_dev *dev = ieee->priv;
 
-	dev->vif = NULL;
+	WRITE_ONCE(dev->vif, NULL);
 }
 
 static int bcm4360_config(struct ieee80211_hw *ieee, int radio_idx, u32 changed)
