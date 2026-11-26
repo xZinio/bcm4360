@@ -59,6 +59,8 @@ jobs:
           - { kernel: longterm, open: true }
           # Debian 13; bcm4360_open needs the mac80211 of Linux 6.17 or newer
           - { kernel: "6.12", open: false }
+          # clang LTO before 6.13: Kbuild hands objtool an object's LLVM bitcode
+          - { kernel: "6.12", open: false, llvm: true }
     name: build (${{ matrix.kernel }}${{ matrix.llvm && ', clang ThinLTO' || '' }})
     env:
       LLVM_FLAG: ${{ matrix.llvm && 'LLVM=1' || '' }}
