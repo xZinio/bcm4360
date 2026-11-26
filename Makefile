@@ -67,15 +67,32 @@ clean-files := lib/wlc_hybrid_open.o
 # objtool cannot process Broadcom's prebuilt 2015 object and its errors are
 # fatal since Linux 6.15, so it is skipped for the final link of the module,
 # the same way distributions package this core (e.g. Arch's broadcom-wl-dkms).
-# Keep this override private, and process each C object even on kernels which
-# normally delay objtool until the final link (e.g. CONFIG_KLP_BUILD). Without
-# their .return_sites the kernel cannot patch their __x86_return_thunk jumps.
-# Only the final link contains the prebuilt core that objtool cannot handle.
-# A combined build shares some C objects with bcm4360_open. Process its other
-# C objects here too, and skip its final objtool pass to avoid processing the
-# shared objects twice. An open-only build still uses normal Kbuild defaults.
-$(addprefix $(obj)/,bcm4360.o bcm4360_open.o): private override objtool-enabled =
-$(addprefix $(obj)/,$(bcm4360-objs) $(bcm4360_open-objs)): private override objtool-enabled = y
+# $(obj)/: kernels before 6.13 name the target by its absolute path. private:
+# the C objects don't inherit the override.
+$(obj)/bcm4360.o: private override objtool-enabled =
+
+# Kernels which delay objtool until the final link (IBT, clang LTO,
+# CONFIG_KLP_BUILD) would then never run it over the C objects. Without their
+# .return_sites the kernel cannot patch their __x86_return_thunk jumps, and
+# every return goes through its warning thunk. So objtool runs over each C
+# object, where it can:
+bcm4360-objtool := $(CONFIG_OBJTOOL)
+# - not in a build together with bcm4360_open (DKMS builds them apart): objtool
+#   --link over one object would seal functions whose address another object
+#   takes (core_tx_drop, taken in env_attach.c), and bcm4360_open would fault
+#   on IBT CPUs. bcm4360_open's final link processes the objects they share.
+ifneq ($(filter bcm4360_open,$(BCM4360_MODULES)),)
+bcm4360-objtool :=
+endif
+# - not with clang LTO before 6.13, where Kbuild would hand objtool LLVM bitcode
+ifdef CONFIG_LTO_CLANG
+ifeq ($(shell [ $$(($(VERSION) * 100 + $(PATCHLEVEL))) -lt 613 ] && echo y),y)
+bcm4360-objtool :=
+endif
+endif
+ifdef bcm4360-objtool
+$(addprefix $(obj)/,$(bcm4360-objs)): private override objtool-enabled = y
+endif
 endif
 
 else
