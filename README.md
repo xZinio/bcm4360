@@ -239,8 +239,10 @@ and take effect after a reboot.
 
 ## Known limitations
 
-- **`bcm4360` links Broadcom's 2015 core.** The kernel logs one `Unpatched
-  return thunk` warning per boot for it, as for the stock `wl`.
+- **`bcm4360` links Broadcom's 2015 core**, which predates current kernel
+  hardening. The C code built from source retains its return-thunk metadata,
+  except on kernels before 6.13 built with clang LTO: there the kernel logs
+  one `Unpatched return thunk` warning per boot for it, as for the stock `wl`.
   `bcm4360_open` doesn't link it.
 - **Client mode only** (and ad‑hoc/IBSS): no access point, monitor mode or
   Wi‑Fi Direct.
