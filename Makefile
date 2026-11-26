@@ -135,6 +135,7 @@ check:
 	sh tests/references.sh
 	@if [ -f lib/wlc_hybrid.o_shipped ]; then sh tests/fwcut.sh; \
 	else echo "fwcut: skipped, lib/wlc_hybrid.o_shipped is missing (make fetch)"; fi
+	sh tests/amsdu.sh
 
 .PHONY: all open fetch clean install uninstall check
 endif

@@ -599,3 +599,7 @@ take wlc_bmac_led_set
 take wlc_bmac_blink_sync
 take wlc_bmac_led_blink_event
 take wlc_bmac_led_blink
+
+# --- A-MSDU receive (hybrid/amsdu.c, switch amsdu_guard): a guard in front of the
+# object's reassembly of hardware-split A-MSDUs; the object's own body runs after it.
+take wlc_recvamsdu

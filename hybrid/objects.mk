@@ -28,7 +28,8 @@ hybrid-objs := hybrid/card.o \
                hybrid/si_perst.o open/chip/si_pcie.o \
                hybrid/rate.o open/lib/rate.o \
                hybrid/cca.o open/lib/cca.o \
-               hybrid/stf.o open/lib/stf.o
+               hybrid/stf.o open/lib/stf.o \
+               hybrid/amsdu.o
 
 # Being written, one variable hybrid-new*-objs per layer: not yet in the
 # module.
