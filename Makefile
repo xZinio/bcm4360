@@ -65,33 +65,31 @@ LDFLAGS_bcm4360.o := $(core)
 clean-files := lib/wlc_hybrid_open.o
 
 # objtool cannot process Broadcom's prebuilt 2015 object and its errors are
-# fatal since Linux 6.15, so it is skipped for the final link of the module,
-# the same way distributions package this core (e.g. Arch's broadcom-wl-dkms).
+# fatal since Linux 6.15, so it never runs over the module's final link, the
+# same way distributions package this core (e.g. Arch's broadcom-wl-dkms).
 # $(obj)/: kernels before 6.13 name the target by its absolute path. private:
 # the C objects don't inherit the override.
 $(obj)/bcm4360.o: private override objtool-enabled =
 
-# Kernels which delay objtool until the final link (IBT, clang LTO,
-# CONFIG_KLP_BUILD) would then never run it over the C objects. Without their
-# .return_sites the kernel cannot patch their __x86_return_thunk jumps, and
-# every return goes through its warning thunk. So objtool runs over each C
-# object, where it can:
-bcm4360-objtool := $(CONFIG_OBJTOOL)
-# - not in a build together with bcm4360_open (DKMS builds them apart): objtool
-#   --link over one object would seal functions whose address another object
-#   takes (core_tx_drop, taken in env_attach.c), and bcm4360_open would fault
-#   on IBT CPUs. bcm4360_open's final link processes the objects they share.
-ifneq ($(filter bcm4360_open,$(BCM4360_MODULES)),)
-bcm4360-objtool :=
-endif
-# - not with clang LTO before 6.13, where Kbuild would hand objtool LLVM bitcode
-ifdef CONFIG_LTO_CLANG
-ifeq ($(shell [ $$(($(VERSION) * 100 + $(PATCHLEVEL))) -lt 613 ] && echo y),y)
-bcm4360-objtool :=
-endif
-endif
-ifdef bcm4360-objtool
-$(addprefix $(obj)/,$(bcm4360-objs)): private override objtool-enabled = y
+# Kernels which delay objtool until a module's link (IBT, clang LTO,
+# CONFIG_KLP_BUILD) would then never run it over the C code: without its
+# .return_sites the kernel cannot patch its __x86_return_thunk jumps, and every
+# return goes through its warning thunk. So the C objects are linked into
+# bcm4360-c.o first, and objtool runs over that as over the link of any other
+# module: it sees all the C code at once (which functions are called through
+# pointers), clang LTO's bitcode is ELF after that link, and objects shared
+# with bcm4360_open stay as they are. The module then links bcm4360-c.o with
+# Broadcom's core. Other kernels run objtool over each C object, as usual.
+ifdef CONFIG_OBJTOOL
+quiet_cmd_ld_bcm4360_c = LD [M]  $@
+      cmd_ld_bcm4360_c = $(LD) $(ld_flags) -r -o $@ $(real-prereqs) $(cmd_objtool)
+$(obj)/bcm4360-c.o: $(addprefix $(obj)/,$(bcm4360-objs)) FORCE
+	$(call if_changed,ld_bcm4360_c)
+$(obj)/bcm4360-c.o: private override objtool-enabled = $(delay-objtool)
+$(obj)/bcm4360-c.o: private override part-of-module := y
+targets += bcm4360-c.o
+$(obj)/bcm4360.o: $(obj)/bcm4360-c.o
+$(obj)/bcm4360.o: private override cmd_ld_multi_m = $(LD) $(ld_flags) -r -o $@ $(obj)/bcm4360-c.o
 endif
 endif
 
