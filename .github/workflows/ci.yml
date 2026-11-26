@@ -2,7 +2,9 @@
 # reaches a laptop, and run the tests that need neither root nor the card.
 # Kernel trees come from kernel.org (releases.json): mainline, the newest
 # stable, the newest longterm and 6.12 (Debian 13), each with defconfig plus
-# cfg80211 and mac80211, prepared for out-of-tree modules.
+# cfg80211 and mac80211, prepared for out-of-tree modules. The clang build
+# uses ThinLTO, as the distributions that build their kernels with clang do
+# (CachyOS, XanMod).
 name: CI
 
 on:
@@ -57,9 +59,12 @@ jobs:
           - { kernel: longterm, open: true }
           # Debian 13; bcm4360_open needs the mac80211 of Linux 6.17 or newer
           - { kernel: "6.12", open: false }
-    name: build (${{ matrix.kernel }}${{ matrix.llvm && ', clang' || '' }})
+    name: build (${{ matrix.kernel }}${{ matrix.llvm && ', clang ThinLTO' || '' }})
     env:
       LLVM_FLAG: ${{ matrix.llvm && 'LLVM=1' || '' }}
+    defaults:
+      run:
+        shell: bash # with pipefail: make's status survives "| tee"
     steps:
       - uses: actions/checkout@v5
       - name: Tools
@@ -84,10 +89,14 @@ jobs:
           tar -xf "$RUNNER_TEMP/linux.tar" -C "$RUNNER_TEMP/linux" --strip-components=1
           cd "$RUNNER_TEMP/linux"
           make $LLVM_FLAG x86_64_defconfig
-          # no CONFIG_WERROR, as in distribution kernels: with it, every
-          # warning of Broadcom's code in src/ fails the build
+          # no CONFIG_WERROR, as in distribution kernels: a warning does not
+          # fail the build (the step "Compiler warnings" reports it)
           scripts/config -e MODULES -e PCI -e CFG80211 -e MAC80211 -d WERROR
+          # ThinLTO: the objects are LLVM bitcode until the module link,
+          # which also links Broadcom's core into bcm4360
+          [ -z "$LLVM_FLAG" ] || scripts/config -d LTO_NONE -e LTO_CLANG_THIN
           make $LLVM_FLAG olddefconfig
+          [ -z "$LLVM_FLAG" ] || grep -qx 'CONFIG_LTO_CLANG_THIN=y' .config
           make $LLVM_FLAG -j"$(nproc)" modules_prepare
           echo "KDIR=$RUNNER_TEMP/linux" >> "$GITHUB_ENV"
       # The Makefile's own targets, which must pick LLVM=1 for a clang-built
@@ -96,10 +105,22 @@ jobs:
       - name: bcm4360
         run: |
           sh scripts/fetch-blob.sh
-          make KDIR="$KDIR" KBUILD_MODPOST_WARN=1 all
+          make KDIR="$KDIR" KBUILD_MODPOST_WARN=1 all 2>&1 | tee -a build.log
           modinfo -F version ./bcm4360.ko
       - name: bcm4360_open
         if: matrix.open
         run: |
-          make KDIR="$KDIR" KBUILD_MODPOST_WARN=1 open
+          make KDIR="$KDIR" KBUILD_MODPOST_WARN=1 open 2>&1 | tee -a build.log
           modinfo -F version ./bcm4360_open.ko
+      # None are expected. Each becomes an annotation of the run (and of the
+      # line, in a pull request) without failing it; paths are made relative
+      # to the checkout, as kernels before 6.13 print them absolute.
+      - name: Compiler warnings
+        if: always()
+        run: |
+          touch build.log
+          sed -e "s|^$GITHUB_WORKSPACE/||" -e 's|^\(\./\)*||' -e 's/%/%25/g' build.log |
+            sed -n -E -e 's/^([^ :]+):([0-9]+):([0-9]+): warning: (.*)$/::warning file=\1,line=\2,col=\3::\4/p' \
+              -e 's/^([^ :]+\.o): warning: (.*)$/::warning file=\1::\2/p' |
+            sort -u | tee warnings.txt
+          echo "compiler warnings: $(wc -l < warnings.txt)"
