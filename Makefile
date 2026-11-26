@@ -111,9 +111,13 @@ install:
 uninstall:
 	sh scripts/uninstall.sh
 
-# the tests that need neither root nor the card (also run by CI)
+# the tests that need neither root nor the card (also run by CI); the
+# firmware cutter's needs Broadcom's object in lib/ (make fetch)
 check:
 	sh tests/watchdog.sh
+	sh tests/references.sh
+	@if [ -f lib/wlc_hybrid.o_shipped ]; then sh tests/fwcut.sh; \
+	else echo "fwcut: skipped, lib/wlc_hybrid.o_shipped is missing (make fetch)"; fi
 
 .PHONY: all open fetch clean install uninstall check
 endif

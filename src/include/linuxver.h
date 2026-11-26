@@ -125,8 +125,8 @@ typedef irqreturn_t(*FN_ISR) (int irq, void *dev_id, struct pt_regs *ptregs);
 #endif	
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 5, 67)
-#define MOD_INC_USE_COUNT
-#define MOD_DEC_USE_COUNT
+#define MOD_INC_USE_COUNT	do {} while (0)
+#define MOD_DEC_USE_COUNT	do {} while (0)
 #endif 
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)

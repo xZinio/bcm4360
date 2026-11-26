@@ -169,7 +169,7 @@ static void bcm4360_restart_work(struct work_struct *work)
 		spin_lock_bh(&dev->lock);
 		bcm4360_core_down(dev->core);
 	}
-	dev->vif = NULL;
+	WRITE_ONCE(dev->vif, NULL);
 	dev->peer_map = 0;
 	memset(dev->hwkey, 0, sizeof(dev->hwkey));
 	dev->wpa_seen = false;
