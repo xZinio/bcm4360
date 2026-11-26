@@ -30,6 +30,9 @@ typedef struct wl_task {
 	void *context;
 } wl_task_t;
 
+/* the task of a work function's work item */
+#define WL_TASK(w)	container_of(w, wl_task_t, work)
+
 #define WL_IFTYPE_BSS	1 
 #define WL_IFTYPE_WDS	2 
 #define WL_IFTYPE_MON	3 
