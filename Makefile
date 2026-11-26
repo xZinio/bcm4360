@@ -67,7 +67,8 @@ clean-files := lib/wlc_hybrid_open.o
 # objtool cannot process Broadcom's prebuilt 2015 object and its errors are
 # fatal since Linux 6.15, so it is skipped for the final link of the module,
 # the same way distributions package this core (e.g. Arch's broadcom-wl-dkms).
-bcm4360.o: override objtool-enabled =
+# $(obj)/: kernels before 6.13 name the target by its absolute path.
+$(obj)/bcm4360.o: override objtool-enabled =
 endif
 
 else
@@ -103,9 +104,13 @@ install:
 uninstall:
 	sh scripts/uninstall.sh
 
-# the tests that need neither root nor the card (also run by CI)
+# the tests that need neither root nor the card (also run by CI); the
+# firmware cutter's needs Broadcom's object in lib/ (make fetch)
 check:
 	sh tests/watchdog.sh
+	sh tests/references.sh
+	@if [ -f lib/wlc_hybrid.o_shipped ]; then sh tests/fwcut.sh; \
+	else echo "fwcut: skipped, lib/wlc_hybrid.o_shipped is missing (make fetch)"; fi
 	sh tests/amsdu.sh
 
 .PHONY: all open fetch clean install uninstall check

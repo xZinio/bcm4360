@@ -39,6 +39,15 @@ need dkms "install your distribution's dkms package"
 need make "install your distribution's build tools"
 [ "$open" -eq 0 ] || need python3 "install.sh --open needs it to cut the firmware data"
 [ -d "$kdir" ] || { echo "install.sh: no headers for kernel $kver in $kdir" >&2; exit 1; }
+# the kernels bcm4360_open builds for, as DKMS knows them (dkms-open.conf)
+if [ "$open" -eq 1 ]; then
+	kernels=$(sed -n 's/^BUILD_EXCLUSIVE_KERNEL="\(.*\)"$/\1/p' dkms-open.conf)
+	if ! printf '%s\n' "$kver" | grep -Eq -- "$kernels"; then
+		echo "install.sh: bcm4360_open needs Linux 6.17 or newer, this is $kver;" \
+			"nothing was changed (install.sh without --open installs bcm4360)" >&2
+		exit 1
+	fi
+fi
 
 # Broadcom's core: an object already in lib/ is checked again; a wrong one
 # is fetched anew

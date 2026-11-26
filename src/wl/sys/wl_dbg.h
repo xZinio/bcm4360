@@ -18,7 +18,7 @@ extern char* wlc_dbg_get_hw_timestamp(void);
 	                            printf(wlc_dbg_get_hw_timestamp()); }\
 	                        } while (0)
 #else
-#define WL_TIMESTAMP()
+#define WL_TIMESTAMP()		do { } while (0)
 #endif 
 
 #if 0 && (VERSION_MAJOR > 9)
@@ -39,18 +39,18 @@ extern int osl_printf(const char *fmt, ...);
 
 #else	
 
-#define WL_NONE(args)
+#define WL_NONE(args)		do { } while (0)
 
 #ifdef BCMDBG_ERR
 #define	WL_ERROR(args)		WL_PRINT(args)
 #else
-#define	WL_ERROR(args)
+#define	WL_ERROR(args)		do { } while (0)
 #endif 
-#define	WL_TRACE(args)
-#define WL_APSTA_UPDN(args)
-#define WL_APSTA_RX(args)
-#define WL_WSEC(args)
-#define WL_WSEC_DUMP(args)
+#define	WL_TRACE(args)		do { } while (0)
+#define WL_APSTA_UPDN(args)	do { } while (0)
+#define WL_APSTA_RX(args)	do { } while (0)
+#define WL_WSEC(args)		do { } while (0)
+#define WL_WSEC_DUMP(args)	do { } while (0)
 #define WL_PCIE(args)		do {if (wl_msg_level2 & WL_PCIE_VAL) WL_PRINT(args);} while (0)
 #define WL_PCIE_ON()		(wl_msg_level2 & WL_PCIE_VAL)
 #endif 
