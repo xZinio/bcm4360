@@ -67,7 +67,8 @@ clean-files := lib/wlc_hybrid_open.o
 # objtool cannot process Broadcom's prebuilt 2015 object and its errors are
 # fatal since Linux 6.15, so it is skipped for the final link of the module,
 # the same way distributions package this core (e.g. Arch's broadcom-wl-dkms).
-bcm4360.o: override objtool-enabled =
+# $(obj)/: kernels before 6.13 name the target by its absolute path.
+$(obj)/bcm4360.o: override objtool-enabled =
 endif
 
 else
