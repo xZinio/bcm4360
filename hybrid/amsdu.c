@@ -62,7 +62,14 @@ static int amsdu_broken_chains_get(char *buf, const struct kernel_param *kp)
 	return param_get_uint(buf, &value);
 }
 
+/* read only: parse_args() calls .set for a value given at load time unchecked */
+static int amsdu_broken_chains_set(const char *val, const struct kernel_param *kp)
+{
+	return -EPERM;
+}
+
 static const struct kernel_param_ops broken_chains_ops = {
+	.set = amsdu_broken_chains_set,
 	.get = amsdu_broken_chains_get,
 };
 
